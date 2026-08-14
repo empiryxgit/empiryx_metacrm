@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Users — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <h1 class="page-title">Users</h1>
+    <p class="page-sub">Create a user and assign a role — a temporary password is shown once, for you to relay to them.</p>
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New user</h2>
+      <form id="createForm">
+        <div class="grid-2">
+          <div>
+            <label for="fullName">Full name</label>
+            <input id="fullName" required />
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input id="email" type="email" required />
+          </div>
+        </div>
+        <label for="roleId">Role</label>
+        <select id="roleId" required></select>
+        <button class="btn" type="submit" style="margin-top:14px">Create user</button>
+      </form>
+      <div id="tempPasswordBox" style="display:none; margin-top:14px">
+        <div class="banner success">
+          User created. Share this temporary password with them — it won't be shown again.
+        </div>
+        <code class="token" id="tempPassword"></code>
+      </div>
+    </div>
+
+    <h2 class="section-title">All users</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, roles = [];
+
+  function fmt(iso){ return iso ? new Date(iso).toLocaleString() : "Never"; }
+
+  async function loadRoles() {
+    const { roles: r } = await App.apiJson("/api/admin/roles");
+    roles = r;
+    document.getElementById("roleId").innerHTML = roles.map(r => `<option value="${r.id}">${App.escapeHtml(r.name)}</option>`).join("");
+  }
+
+  async function loadUsers() {
+    const { users } = await App.apiJson("/api/admin/users");
+    const rows = document.getElementById("rows");
+    rows.innerHTML = users.map(u => `
+      <tr>
+        <td>${App.escapeHtml(u.fullName)}</td>
+        <td>${App.escapeHtml(u.email)}</td>
+        <td>
+          <select data-role="${u.id}">
+            ${roles.map(r => `<option value="${r.id}" ${r.id === u.roleId ? "selected" : ""}>${App.escapeHtml(r.name)}</option>`).join("")}
+          </select>
+        </td>
+        <td><span class="pill ${u.status}">${u.status}</span></td>
+        <td>${fmt(u.lastLoginAt)}</td>
+        <td>
+          <button class="btn secondary" data-toggle="${u.id}" data-status="${u.status === "active" ? "disabled" : "active"}">
+            ${u.status === "active" ? "Disable" : "Enable"}
+          </button>
+        </td>
+      </tr>
+    `).join("") || '<tr><td colspan="6" class="empty">No users yet.</td></tr>';
+
+    rows.querySelectorAll("[data-role]").forEach(sel => {
+      sel.addEventListener("change", async () => {
+        try {
+          await App.apiJson(`/api/admin/users/${sel.dataset.role}`, { method: "PATCH", body: { roleId: sel.value } });
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+          loadUsers();
+        }
+      });
+    });
+    rows.querySelectorAll("[data-toggle]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        try {
+          await App.apiJson(`/api/admin/users/${btn.dataset.toggle}`, { method: "PATCH", body: { status: btn.dataset.status } });
+          loadUsers();
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        }
+      });
+    });
+  }
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { temporaryPassword } = await App.apiJson("/api/admin/users", {
+        method: "POST",
+        body: {
+          fullName: document.getElementById("fullName").value.trim(),
+          email: document.getElementById("email").value.trim(),
+          roleId: document.getElementById("roleId").value,
+        },
+      });
+      document.getElementById("tempPasswordBox").style.display = "block";
+      document.getElementById("tempPassword").textContent = temporaryPassword;
+      document.getElementById("createForm").reset();
+      loadUsers();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/admin/users.html");
+    if (!App.hasPermission(me, "users.manage")) {
+      document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
+      return;
+    }
+    document.getElementById("createCard").style.display = "block";
+    await loadRoles();
+    await loadUsers();
+  })();
+</script>
+</body>
+</html>

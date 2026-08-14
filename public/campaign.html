@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Campaign — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <h1 class="page-title" id="campaignName">Loading…</h1>
+    <p class="page-sub" id="campaignSub"></p>
+    <div id="banner"></div>
+
+    <h2 class="section-title">Meta webhook integration</h2>
+    <div class="card">
+      <div id="webhookExisting" style="display:none">
+        <div class="banner info" id="statusBanner"></div>
+        <label>Callback URL — paste this into Meta App Dashboard → Webhooks</label>
+        <code class="token" id="webhookUrl"></code>
+        <label>Verify Token — use this for the handshake</label>
+        <code class="token" id="verifyToken"></code>
+        <p class="hint" id="webhookInstructions"></p>
+        <div class="grid-2" style="margin-top:14px">
+          <div><label>App secret</label><code class="token" id="secretMasked"></code></div>
+          <div><label>Access token</label><code class="token" id="tokenMasked"></code></div>
+        </div>
+      </div>
+
+      <h2 class="section-title" style="margin-top:18px" id="formHeading">Add webhook</h2>
+      <form id="webhookForm">
+        <label for="appSecret">Meta App Secret</label>
+        <input id="appSecret" type="password" required placeholder="From Meta App Dashboard → Settings → Basic" />
+
+        <label for="accessToken">Page / System User Access Token</label>
+        <input id="accessToken" type="password" required placeholder="Long-lived token with leads_retrieval permission" />
+
+        <label for="pageId">Facebook Page ID</label>
+        <input id="pageId" placeholder="e.g. 123456789012345" />
+
+        <label for="formIds">Lead form IDs (comma-separated)</label>
+        <input id="formIds" placeholder="e.g. 111222333, 444555666" />
+        <div class="hint">Used by the periodic reconciliation sweep to double-check nothing was missed.</div>
+
+        <button class="btn" type="submit" style="margin-top:14px" id="saveBtn">Save webhook configuration</button>
+      </form>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const campaignId = params.get("id");
+  let me;
+
+  function statusLabel(status) {
+    return { pending: "Waiting for Meta to verify this URL", verified: "Verified — receiving events", active: "Active", error: "Configuration error" }[status] || status;
+  }
+
+  async function load() {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/campaigns.html");
+
+    if (!campaignId) {
+      document.getElementById("campaignName").textContent = "No campaign selected";
+      return;
+    }
+
+    const { campaign } = await App.apiJson(`/api/campaigns/${campaignId}`);
+    document.getElementById("campaignName").textContent = campaign.name;
+    document.getElementById("campaignSub").textContent = `${campaign.platform} · ${campaign.status}`;
+
+    if (!App.hasPermission(me, "webhooks.manage")) {
+      document.getElementById("webhookForm").style.display = "none";
+    }
+
+    const { webhook } = await App.apiJson(`/api/campaigns/${campaignId}/webhook`);
+    if (webhook) {
+      document.getElementById("webhookExisting").style.display = "block";
+      document.getElementById("statusBanner").textContent = statusLabel(webhook.status);
+      document.getElementById("webhookUrl").textContent = webhook.webhookUrl;
+      document.getElementById("verifyToken").textContent = webhook.verifyToken;
+      document.getElementById("secretMasked").textContent = webhook.appSecretMasked;
+      document.getElementById("tokenMasked").textContent = webhook.accessTokenMasked;
+      document.getElementById("formHeading").textContent = "Update credentials";
+      document.getElementById("saveBtn").textContent = "Update webhook configuration";
+      document.getElementById("pageId").value = webhook.pageId || "";
+      document.getElementById("formIds").value = (webhook.formIds || []).join(", ");
+    }
+  }
+
+  document.getElementById("webhookForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { webhook, instructions } = await App.apiJson(`/api/campaigns/${campaignId}/webhook`, {
+        method: "POST",
+        body: {
+          appSecret: document.getElementById("appSecret").value,
+          accessToken: document.getElementById("accessToken").value,
+          pageId: document.getElementById("pageId").value.trim(),
+          formIds: document.getElementById("formIds").value.split(",").map(s => s.trim()).filter(Boolean),
+        },
+      });
+      banner.innerHTML = `<div class="banner success">Saved. ${App.escapeHtml(instructions)}</div>`;
+      document.getElementById("appSecret").value = "";
+      document.getElementById("accessToken").value = "";
+      load();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

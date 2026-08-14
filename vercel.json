@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/webhooks/meta/[slug].ts": { "maxDuration": 15 },
+    "api/internal/process-lead.ts": { "maxDuration": 30 },
+    "api/internal/reconciliation.ts": { "maxDuration": 60 },
+    "api/internal/dead-letter.ts": { "maxDuration": 15 },
+    "api/monitoring/metrics.ts": { "maxDuration": 15 },
+    "api/leads/index.ts": { "maxDuration": 15 },
+    "api/leads/[leadId]/stage.ts": { "maxDuration": 10 },
+    "api/pipeline/index.ts": { "maxDuration": 15 },
+    "api/campaigns/**/*.ts": { "maxDuration": 15 },
+    "api/admin/**/*.ts": { "maxDuration": 15 },
+    "api/auth/**/*.ts": { "maxDuration": 10 },
+    "api/onboarding/**/*.ts": { "maxDuration": 10 },
+    "api/health.ts": { "maxDuration": 10 }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/reconciliation",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

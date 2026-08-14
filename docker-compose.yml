@@ -1,0 +1,66 @@
+# LOCAL DEVELOPMENT ONLY. Production runs on Vercel (serverless functions) +
+# Neon (Postgres) + Upstash (Redis + QStash) - there is no "production
+# docker-compose" for this architecture, because nothing in production is a
+# long-running container. This file exists purely so you can develop and
+# test the whole pipeline offline, with the same code paths, before pushing
+# to a preview deployment.
+#
+#   docker compose up -d       # start Postgres + the Redis HTTP shim
+#   npm run db:migrate         # apply the schema
+#   npx @upstash/qstash-cli dev  # in a second terminal - local QStash emulator
+#   npm run dev                 # in a third terminal - vercel dev on :3000
+#
+# See README.md "Local development" for the full walkthrough, including how
+# to tunnel :3000 so Meta's webhook and the QStash dev server can reach it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meta-leads-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: meta_leads
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d meta_leads"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Exposes a local Redis instance over Upstash's REST/HTTP protocol, so
+  # @upstash/redis works identically against this container and against the
+  # real Upstash service - no code branching needed for local dev.
+  # https://github.com/hiett/serverless-redis-http
+  redis:
+    image: redis:7-alpine
+    container_name: meta-leads-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-http:
+    image: hiett/serverless-redis-http:latest
+    container_name: meta-leads-redis-http
+    restart: unless-stopped
+    ports:
+      - "8079:80"
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: local-dev-token
+      SRH_CONNECTION_STRING: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    driver: local

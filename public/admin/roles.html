@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Roles — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <h1 class="page-title">Roles</h1>
+    <p class="page-sub">Fully custom roles — pick exactly which permissions each one grants.</p>
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New role</h2>
+      <form id="createForm">
+        <label for="roleName">Name</label>
+        <input id="roleName" required placeholder="e.g. Campaign Manager" />
+        <label for="roleDesc">Description (optional)</label>
+        <input id="roleDesc" placeholder="What this role is for" />
+        <div id="permCatalog"></div>
+        <button class="btn" type="submit" style="margin-top:14px">Create role</button>
+      </form>
+    </div>
+
+    <h2 class="section-title">All roles</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Description</th><th>Permissions</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, catalog = [];
+
+  async function loadCatalog() {
+    const { permissions } = await App.apiJson("/api/permissions");
+    catalog = permissions;
+    const byCategory = {};
+    permissions.forEach(p => { (byCategory[p.category] ||= []).push(p); });
+
+    document.getElementById("permCatalog").innerHTML = Object.entries(byCategory).map(([cat, perms]) => `
+      <div class="perm-group">
+        <div class="cat">${App.escapeHtml(cat)}</div>
+        ${perms.map(p => `
+          <div class="checkbox-row">
+            <input type="checkbox" value="${p.code}" id="perm-${p.code}" />
+            <label for="perm-${p.code}">${App.escapeHtml(p.label)}</label>
+          </div>
+        `).join("")}
+      </div>
+    `).join("");
+  }
+
+  async function loadRoles() {
+    const { roles } = await App.apiJson("/api/admin/roles");
+    const rows = document.getElementById("rows");
+    rows.innerHTML = roles.map(r => `
+      <tr>
+        <td><strong>${App.escapeHtml(r.name)}</strong>${r.isSystem ? ' <span class="pill active">system</span>' : ""}</td>
+        <td>${App.escapeHtml(r.description || "—")}</td>
+        <td>${(r.permissions || []).length} permission(s)</td>
+        <td>${r.isSystem ? "" : `<button class="btn secondary" data-delete="${r.id}">Delete</button>`}</td>
+      </tr>
+    `).join("") || '<tr><td colspan="4" class="empty">No roles yet.</td></tr>';
+
+    rows.querySelectorAll("[data-delete]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this role?")) return;
+        try {
+          await App.apiJson(`/api/admin/roles/${btn.dataset.delete}`, { method: "DELETE" });
+          loadRoles();
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        }
+      });
+    });
+  }
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    const permissions = catalog.map(p => p.code).filter(code => document.getElementById(`perm-${code}`).checked);
+    try {
+      await App.apiJson("/api/admin/roles", {
+        method: "POST",
+        body: {
+          name: document.getElementById("roleName").value.trim(),
+          description: document.getElementById("roleDesc").value.trim(),
+          permissions,
+        },
+      });
+      document.getElementById("createForm").reset();
+      loadRoles();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/admin/roles.html");
+    if (!App.hasPermission(me, "users.manage") && !App.hasPermission(me, "roles.manage")) {
+      document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
+      return;
+    }
+    if (App.hasPermission(me, "roles.manage")) document.getElementById("createCard").style.display = "block";
+    await loadCatalog();
+    await loadRoles();
+  })();
+</script>
+</body>
+</html>

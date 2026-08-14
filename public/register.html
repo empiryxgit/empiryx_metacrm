@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Create your account — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="auth-shell">
+    <div class="auth-card">
+      <h1>Create your account</h1>
+      <p class="sub">Sets up your company workspace — you'll be the Owner.</p>
+      <div id="banner"></div>
+      <form id="form">
+        <label for="companyName">Company name</label>
+        <input id="companyName" required autocomplete="organization" />
+
+        <label for="fullName">Your full name</label>
+        <input id="fullName" required autocomplete="name" />
+
+        <label for="email">Work email</label>
+        <input id="email" type="email" required autocomplete="email" />
+
+        <label for="password">Password</label>
+        <input id="password" type="password" required minlength="10" autocomplete="new-password" />
+        <div class="hint">At least 10 characters.</div>
+
+        <button class="btn full" type="submit" id="submitBtn">Create account</button>
+      </form>
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const form = document.getElementById("form");
+  const banner = document.getElementById("banner");
+  const submitBtn = document.getElementById("submitBtn");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    banner.innerHTML = "";
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating…";
+    try {
+      await App.apiJson("/api/auth/register", {
+        method: "POST",
+        body: {
+          companyName: document.getElementById("companyName").value.trim(),
+          fullName: document.getElementById("fullName").value.trim(),
+          email: document.getElementById("email").value.trim(),
+          password: document.getElementById("password").value,
+        },
+      });
+      window.location.href = "/onboarding.html";
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Create account";
+    }
+  });
+</script>
+</body>
+</html>

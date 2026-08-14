@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Set up your workspace — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="auth-shell">
+    <div class="auth-card" style="width:440px">
+      <h1 id="stepTitle">About your company</h1>
+      <p class="sub" id="stepSub">A couple of quick details, then we'll create your first campaign.</p>
+      <div class="steps">
+        <div class="step active" id="s1"></div>
+        <div class="step" id="s2"></div>
+        <div class="step" id="s3"></div>
+      </div>
+      <div id="banner"></div>
+
+      <form id="step1">
+        <label for="industry">Industry</label>
+        <input id="industry" placeholder="e.g. Real Estate" />
+        <label for="companySize">Company size</label>
+        <select id="companySize">
+          <option value="1-10">1–10 people</option>
+          <option value="11-50">11–50 people</option>
+          <option value="51-200">51–200 people</option>
+          <option value="200+">200+ people</option>
+        </select>
+        <label for="timezone">Timezone</label>
+        <input id="timezone" value="Asia/Kolkata" />
+        <button class="btn full" type="submit">Continue</button>
+      </form>
+
+      <form id="step2" style="display:none">
+        <label for="campaignName">First campaign name</label>
+        <input id="campaignName" placeholder="e.g. Site Visit — August" required />
+        <label for="platform">Platform</label>
+        <select id="platform">
+          <option value="facebook">Facebook</option>
+          <option value="instagram">Instagram</option>
+          <option value="both">Both</option>
+        </select>
+        <button class="btn full" type="submit">Create campaign</button>
+      </form>
+
+      <div id="step3" style="display:none">
+        <p style="font-size:13px; color:var(--ink-soft)">
+          Your campaign is ready. Add its Meta webhook now, or do it later from the Campaigns page.
+        </p>
+        <button class="btn full" id="goWebhookBtn">Add webhook now</button>
+        <button class="btn secondary full" id="skipBtn">Go to dashboard</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let createdCampaignId = null;
+
+  (async () => {
+    await App.requireAuth({ allowIncompleteOnboarding: true });
+  })();
+
+  document.getElementById("step1").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      await App.apiJson("/api/onboarding/company", {
+        method: "POST",
+        body: {
+          industry: document.getElementById("industry").value.trim(),
+          companySize: document.getElementById("companySize").value,
+          timezone: document.getElementById("timezone").value.trim(),
+        },
+      });
+      document.getElementById("s1").classList.add("done");
+      document.getElementById("s2").classList.add("active");
+      document.getElementById("stepTitle").textContent = "Create your first campaign";
+      document.getElementById("stepSub").textContent = "You can add more campaigns anytime.";
+      document.getElementById("step1").style.display = "none";
+      document.getElementById("step2").style.display = "block";
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  document.getElementById("step2").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { campaign } = await App.apiJson("/api/campaigns", {
+        method: "POST",
+        body: {
+          name: document.getElementById("campaignName").value.trim(),
+          platform: document.getElementById("platform").value,
+        },
+      });
+      createdCampaignId = campaign.id;
+      await App.apiJson("/api/onboarding/complete", { method: "POST" });
+
+      document.getElementById("s2").classList.add("done");
+      document.getElementById("s3").classList.add("active");
+      document.getElementById("stepTitle").textContent = "You're set up";
+      document.getElementById("stepSub").textContent = "";
+      document.getElementById("step2").style.display = "none";
+      document.getElementById("step3").style.display = "block";
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  document.getElementById("goWebhookBtn").addEventListener("click", () => {
+    window.location.href = `/campaign.html?id=${createdCampaignId}`;
+  });
+  document.getElementById("skipBtn").addEventListener("click", () => {
+    window.location.href = "/dashboard.html";
+  });
+</script>
+</body>
+</html>

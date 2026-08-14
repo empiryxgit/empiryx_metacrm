@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dashboard — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom:26px; }
+  .stat-card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; }
+  .stat-card .num{ font-size:24px; font-weight:600; line-height:1.1; font-variant-numeric:tabular-nums; }
+  .stat-card .lbl{ margin-top:4px; color:var(--ink-soft); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .stat-card.accent .num{ color:var(--accent); }
+  .stat-card.warn .num{ color:var(--warn); }
+  .stat-card.bad .num{ color:var(--bad); }
+  .status-strip{ display:flex; align-items:center; gap:8px; margin-bottom:22px; padding:10px 14px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); font-size:12.5px; color:var(--ink-soft); }
+  .dot{ width:7px; height:7px; border-radius:50%; background:var(--accent); flex-shrink:0; }
+  .plat{ color:var(--ink-soft); font-size:12px; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <h1 class="page-title">Ingestion status</h1>
+    <p class="page-sub" id="refreshedAt">Loading…</p>
+
+    <div class="status-strip"><span class="dot" id="statusDot"></span><span id="statusText">Checking…</span></div>
+
+    <h2 class="section-title">Last 24 hours</h2>
+    <div class="grid" id="statGrid"></div>
+
+    <h2 class="section-title">Recent leads</h2>
+    <table>
+      <thead><tr><th>Received</th><th>Meta Lead ID</th><th>Name</th><th>Form</th><th>Campaign</th><th>Status</th></tr></thead>
+      <tbody id="leadsBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+
+    <p style="margin-top:20px; color:var(--ink-soft); font-size:11.5px">
+      Source of truth: PostgreSQL (Neon). n8n and other downstream consumers read from
+      <code>/api/leads</code> — they are not part of this ingestion path.
+    </p>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const STAT_DEFS = [
+    { key: "received",     label: "Received",       cls: "" },
+    { key: "processed",    label: "Processed",      cls: "accent" },
+    { key: "pending",      label: "Pending",        cls: "" },
+    { key: "duplicate",    label: "Duplicate",      cls: "" },
+    { key: "failed",       label: "Failed",         cls: "warn" },
+    { key: "deadLettered", label: "Dead-lettered",  cls: "bad" },
+    { key: "retries",      label: "Retries",        cls: "" },
+  ];
+
+  const MOCK_METRICS = {
+    received: 1284, processed: 1259, pending: 6, duplicate: 14,
+    failed: 3, deadLettered: 2, retries: 21, avgProcessingSeconds: 2.4,
+    lastReconciliationAt: new Date(Date.now() - 6 * 60000).toISOString(),
+    lastReconciliationRecovered: 2,
+  };
+  const MOCK_LEADS = Array.from({ length: 8 }).map((_, i) => ({
+    id: "mock-" + i,
+    metaLeadId: "12345678900" + i,
+    fullName: ["Asha Rao","Vikram Nair","Priya Menon","Rahul Sethi","Divya Iyer"][i % 5],
+    formId: "78945612" + (i % 3),
+    campaignName: ["Site Visit — Aug","Diwali Offer","Retargeting — West Zone"][i % 3],
+    platform: i % 3 === 0 ? "instagram" : "facebook",
+    status: ["processed","processed","processed","pending","duplicate","failed"][i % 6],
+    createdAt: new Date(Date.now() - i * 9 * 60000).toISOString(),
+  }));
+
+  function fmtTime(iso){
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+  }
+
+  function renderStats(m){
+    document.getElementById("statGrid").innerHTML = STAT_DEFS.map(d => `
+      <div class="stat-card ${d.cls}"><div class="num">${(m[d.key] ?? 0).toLocaleString()}</div><div class="lbl">${d.label}</div></div>
+    `).join("") + `<div class="stat-card"><div class="num">${m.avgProcessingSeconds ?? 0}s</div><div class="lbl">Avg. process time</div></div>`;
+  }
+
+  function renderStatus(m, usingMock){
+    document.getElementById("statusDot").className = "dot";
+    const recon = m.lastReconciliationAt
+      ? `Last reconciliation ${fmtTime(m.lastReconciliationAt)} (recovered ${m.lastReconciliationRecovered ?? 0})`
+      : "No reconciliation run recorded yet";
+    document.getElementById("statusText").textContent = (usingMock ? "Sample data — connect a deployment to see live status. " : "All systems reporting. ") + recon;
+  }
+
+  function renderLeads(leads){
+    const body = document.getElementById("leadsBody");
+    if (!leads.length){ body.innerHTML = '<tr><td colspan="6" class="empty">No leads yet.</td></tr>'; return; }
+    body.innerHTML = leads.map(l => `
+      <tr>
+        <td>${fmtTime(l.createdAt)}</td>
+        <td>${App.escapeHtml(l.metaLeadId)}</td>
+        <td>${App.escapeHtml(l.fullName || "—")}</td>
+        <td>${App.escapeHtml(l.formName || l.formId)}<div class="plat">${App.escapeHtml(l.platform)}</div></td>
+        <td>${App.escapeHtml(l.campaignName || "—")}</td>
+        <td><span class="pill ${l.status}">${l.status.replace("_"," ")}</span></td>
+      </tr>
+    `).join("");
+  }
+
+  async function load(){
+    // Distinguish "no backend reachable at all" (standalone preview - show
+    // sample data) from "backend reachable but not logged in" (redirect).
+    let me;
+    try {
+      me = await App.apiJson("/api/auth/me");
+    } catch (err) {
+      if (err.message && err.message.includes("Not authenticated")) {
+        window.location.href = "/login.html?next=/dashboard.html";
+        return;
+      }
+      // network/connection failure - fall through to sample-data mode
+    }
+
+    if (me) {
+      document.getElementById("topnav").style.display = "flex";
+      App.renderNav(me, "/dashboard.html");
+      try {
+        const [metrics, leadsRes] = await Promise.all([
+          App.apiJson("/api/monitoring/metrics"),
+          App.apiJson("/api/leads?limit=15"),
+        ]);
+        renderStats(metrics);
+        renderStatus(metrics, false);
+        renderLeads(leadsRes.leads);
+        document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+        return;
+      } catch { /* fall through to sample data below */ }
+    }
+
+    renderStats(MOCK_METRICS);
+    renderStatus(MOCK_METRICS, true);
+    renderLeads(MOCK_LEADS);
+    document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+  }
+
+  load();
+  setInterval(load, 30000);
+</script>
+</body>
+</html>

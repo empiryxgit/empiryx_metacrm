@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pipeline — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap" style="max-width:1200px">
+    <h1 class="page-title">Pipeline</h1>
+    <p class="page-sub">Drag a lead card to move it between stages.</p>
+
+    <label for="campaignSelect" style="max-width:320px">Campaign</label>
+    <select id="campaignSelect" style="max-width:320px; margin-bottom:18px"></select>
+
+    <div id="banner"></div>
+    <div class="board" id="board"></div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, canManage;
+  const STAGE_LABELS = { new: "New", contacted: "Contacted", qualified: "Qualified", site_visit: "Site Visit", won: "Won", lost: "Lost" };
+
+  async function loadCampaigns() {
+    const { campaigns } = await App.apiJson("/api/campaigns");
+    const select = document.getElementById("campaignSelect");
+    if (!campaigns.length) {
+      select.innerHTML = "<option>No campaigns yet</option>";
+      return null;
+    }
+    select.innerHTML = campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
+    return campaigns[0].id;
+  }
+
+  function leadCard(lead) {
+    const name = lead.fullName || lead.metaLeadId;
+    return `<div class="lead-card" draggable="${canManage}" data-lead-id="${lead.id}">
+      <div class="name">${App.escapeHtml(name)}</div>
+      <div class="meta">${App.escapeHtml(lead.email || lead.phoneNumber || "")}</div>
+    </div>`;
+  }
+
+  function renderBoard(data) {
+    const board = document.getElementById("board");
+    board.innerHTML = data.stages.map(stage => `
+      <div class="col" data-stage="${stage}">
+        <div class="col-head"><span>${STAGE_LABELS[stage]}</span><span>${data.board[stage].length}</span></div>
+        <div class="col-body" data-stage="${stage}">${data.board[stage].map(leadCard).join("")}</div>
+      </div>
+    `).join("");
+
+    if (!canManage) return;
+
+    board.querySelectorAll(".lead-card").forEach(card => {
+      card.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", card.dataset.leadId);
+      });
+    });
+    board.querySelectorAll(".col-body").forEach(col => {
+      col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("dragover"); });
+      col.addEventListener("dragleave", () => col.classList.remove("dragover"));
+      col.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        col.classList.remove("dragover");
+        const leadId = e.dataTransfer.getData("text/plain");
+        const stage = col.dataset.stage;
+        try {
+          await App.apiJson(`/api/leads/${leadId}/stage`, { method: "PATCH", body: { stage } });
+          load();
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        }
+      });
+    });
+  }
+
+  async function load() {
+    const campaignId = document.getElementById("campaignSelect").value;
+    if (!campaignId) return;
+    const data = await App.apiJson(`/api/pipeline?campaignId=${campaignId}`);
+    renderBoard(data);
+  }
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/pipeline.html");
+    canManage = App.hasPermission(me, "pipeline.manage");
+
+    const firstCampaignId = await loadCampaigns();
+    if (!firstCampaignId) return;
+    document.getElementById("campaignSelect").addEventListener("change", load);
+    load();
+  })();
+</script>
+</body>
+</html>

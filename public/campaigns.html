@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Campaigns — Meta Lead Ads</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <h1 class="page-title">Campaigns</h1>
+    <p class="page-sub">Each campaign has its own Meta webhook — set it up from the campaign page.</p>
+
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New campaign</h2>
+      <form id="createForm">
+        <div class="grid-2">
+          <div>
+            <label for="name">Name</label>
+            <input id="name" required placeholder="e.g. Diwali Offer" />
+          </div>
+          <div>
+            <label for="platform">Platform</label>
+            <select id="platform">
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" type="submit" style="margin-top:14px">Create campaign</button>
+      </form>
+    </div>
+
+    <h2 class="section-title">All campaigns</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Webhook</th><th>Created</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me;
+
+  function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"}) : "—"; }
+
+  async function load() {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/campaigns.html");
+
+    if (App.hasPermission(me, "campaigns.manage")) {
+      document.getElementById("createCard").style.display = "block";
+    }
+
+    const { campaigns } = await App.apiJson("/api/campaigns");
+    const rows = document.getElementById("rows");
+    if (!campaigns.length) {
+      rows.innerHTML = '<tr><td colspan="5" class="empty">No campaigns yet — create your first one above.</td></tr>';
+      return;
+    }
+    rows.innerHTML = campaigns.map(c => `
+      <tr onclick="window.location.href='/campaign.html?id=${c.id}'" style="cursor:pointer">
+        <td><strong>${App.escapeHtml(c.name)}</strong></td>
+        <td>${App.escapeHtml(c.platform)}</td>
+        <td><span class="pill ${c.status}">${c.status}</span></td>
+        <td><a href="/campaign.html?id=${c.id}">Configure →</a></td>
+        <td>${fmt(c.createdAt)}</td>
+      </tr>
+    `).join("");
+  }
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { campaign } = await App.apiJson("/api/campaigns", {
+        method: "POST",
+        body: { name: document.getElementById("name").value.trim(), platform: document.getElementById("platform").value },
+      });
+      window.location.href = `/campaign.html?id=${campaign.id}`;
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>
