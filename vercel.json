@@ -2,19 +2,21 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/webhooks/meta/[slug].ts": { "maxDuration": 15 },
-    "api/internal/process-lead.ts": { "maxDuration": 30 },
-    "api/internal/reconciliation.ts": { "maxDuration": 60 },
-    "api/internal/dead-letter.ts": { "maxDuration": 15 },
-    "api/monitoring/metrics.ts": { "maxDuration": 15 },
-    "api/leads/index.ts": { "maxDuration": 15 },
-    "api/leads/[leadId]/stage.ts": { "maxDuration": 10 },
+    "api/internal/[[...action]].ts": { "maxDuration": 60 },
+    "api/leads/[[...params]].ts": { "maxDuration": 15 },
     "api/pipeline/index.ts": { "maxDuration": 15 },
-    "api/campaigns/**/*.ts": { "maxDuration": 15 },
-    "api/admin/**/*.ts": { "maxDuration": 15 },
-    "api/auth/**/*.ts": { "maxDuration": 10 },
-    "api/onboarding/**/*.ts": { "maxDuration": 10 },
-    "api/health.ts": { "maxDuration": 10 }
+    "api/campaigns/[[...params]].ts": { "maxDuration": 15 },
+    "api/admin/roles/[[...params]].ts": { "maxDuration": 15 },
+    "api/admin/users/[[...params]].ts": { "maxDuration": 15 },
+    "api/auth/[[...action]].ts": { "maxDuration": 10 },
+    "api/onboarding/[[...action]].ts": { "maxDuration": 10 },
+    "api/system.ts": { "maxDuration": 15 }
   },
+  "rewrites": [
+    { "source": "/api/health", "destination": "/api/system?resource=health" },
+    { "source": "/api/monitoring/metrics", "destination": "/api/system?resource=metrics" },
+    { "source": "/api/permissions", "destination": "/api/system?resource=permissions" }
+  ],
   "crons": [
     {
       "path": "/api/internal/reconciliation",
