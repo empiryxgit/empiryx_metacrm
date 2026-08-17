@@ -14,8 +14,8 @@ import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCampaign } from "../../src/infrastructure/db/repositories/campaigns";
-import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
-import { getIndustryTemplate, resolveStageKey } from "../../src/domain/industryTemplates";
+import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositories/tenancy";
+import { getIndustryTemplate, resolveStageKey, LEAD_SOURCES } from "../../src/domain/industryTemplates";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -47,11 +47,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const conditions = [eq(leads.companyId, auth.companyId)];
   if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
 
-  const rows = await db
-    .select()
-    .from(leads)
-    .where(and(...conditions))
-    .orderBy(desc(leads.createdAt));
+  const [rows, users] = await Promise.all([
+    db
+      .select()
+      .from(leads)
+      .where(and(...conditions))
+      .orderBy(desc(leads.createdAt)),
+    listUsers(auth.companyId),
+  ]);
 
   const stageKeys = template.stages.map((s) => s.key);
   const board: Record<string, typeof rows> = Object.fromEntries(stageKeys.map((k) => [k, []]));
@@ -68,6 +71,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       stages: template.stages,
       fields: template.fields,
     },
+    sources: LEAD_SOURCES,
+    owners: users.map((u) => ({ id: u.id, fullName: u.fullName })),
     campaign,
     stages: stageKeys,
     board,
