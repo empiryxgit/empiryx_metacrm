@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { and, eq, gte, lt, or, sql as rawSql } from "drizzle-orm";
 import { getDb } from "./client";
 import { leadProcessingLog, leads, rawMetaEvents, reconciliationRuns } from "./schema";
@@ -195,6 +196,77 @@ export async function updateLeadPipelineStage(companyId: string, leadId: string,
     .update(leads)
     .set({ pipelineStage: stage, updatedAt: new Date() })
     .where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)));
+}
+
+// ---- Manual customers (Flow B) -----------------------------------------
+
+export interface InsertManualLeadInput {
+  companyId: string;
+  fullName: string;
+  phoneNumber?: string;
+  email?: string;
+  source: string;
+  ownerId?: string;
+  pipelineStage: string;
+  nextFollowUpAt?: Date;
+  notes?: string;
+  customFields: Record<string, unknown>;
+}
+
+/** Creates a manually-entered customer - a lead/customer record with no
+ * originating Meta event. Uses a synthetic, guaranteed-unique "manual:"
+ * prefixed value for meta_lead_id (still NOT NULL + unique-indexed) rather
+ * than requiring a schema change; platform/page_id/form_id/raw_event_id
+ * are left null since none of them apply. */
+export async function insertManualLead(input: InsertManualLeadInput) {
+  const db = await getDb();
+  const rows = await db
+    .insert(leads)
+    .values({
+      companyId: input.companyId,
+      metaLeadId: `manual:${randomUUID()}`,
+      leadType: "manual_customer",
+      source: input.source,
+      fullName: input.fullName,
+      phoneNumber: input.phoneNumber,
+      email: input.email,
+      ownerId: input.ownerId,
+      pipelineStage: input.pipelineStage,
+      nextFollowUpAt: input.nextFollowUpAt,
+      notes: input.notes,
+      customFields: input.customFields,
+      metaCreatedAt: new Date(),
+      status: "processed",
+      processedAt: new Date(),
+    })
+    .returning();
+  return firstOrThrow(rows);
+}
+
+export interface UpdateLeadCrmFieldsInput {
+  fullName?: string;
+  email?: string;
+  phoneNumber?: string;
+  ownerId?: string | null;
+  pipelineStage?: string;
+  nextFollowUpAt?: Date | null;
+  notes?: string;
+  customFields?: Record<string, unknown>;
+}
+
+/** Generic CRM-field update for the "Add to CRM" flow (turning a Meta lead
+ * into a fully-worked customer record) and general edits. Deliberately
+ * never touches source/leadType/metaLeadId/crmCampaignId/campaignName -
+ * a record's original acquisition source is preserved for the life of the
+ * record regardless of how the CRM data around it is enriched later. */
+export async function updateLeadCrmFields(companyId: string, leadId: string, input: UpdateLeadCrmFieldsInput) {
+  const db = await getDb();
+  const rows = await db
+    .update(leads)
+    .set({ ...input, updatedAt: new Date() })
+    .where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)))
+    .returning();
+  return rows[0] ?? null;
 }
 
 // ---- Audit log --------------------------------------------------------

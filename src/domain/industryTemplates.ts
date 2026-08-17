@@ -61,20 +61,26 @@ export const BASE_FIELD_KEYS = [
 ] as const;
 
 // Where a lead/customer can originate from. "meta_lead_ads" is set
-// automatically by ingestion; the rest are chosen by a user when manually
-// adding a customer (see "Add Customer" / "Not interested -> add to CRM").
+// automatically by ingestion and is never offered as a manual choice; the
+// rest are chosen by a user when manually adding a customer (see "Add
+// Customer" / "Not interested -> add to CRM"). MANUAL_LEAD_SOURCE_KEYS is
+// the exact picklist for that form.
 export const LEAD_SOURCES: Array<{ key: string; label: string }> = [
   { key: "meta_lead_ads", label: "Meta Lead Ads" },
   { key: "facebook", label: "Facebook" },
   { key: "instagram", label: "Instagram" },
-  { key: "website", label: "Website" },
   { key: "referral", label: "Referral" },
   { key: "phone", label: "Phone" },
   { key: "walk_in", label: "Walk-in" },
   { key: "whatsapp", label: "WhatsApp" },
+  { key: "website", label: "Website" },
   { key: "manual", label: "Manual" },
   { key: "other", label: "Other" },
 ];
+
+export const MANUAL_LEAD_SOURCE_KEYS = ["referral", "phone", "walk_in", "whatsapp", "website", "other"];
+
+export const MANUAL_LEAD_SOURCES = LEAD_SOURCES.filter((s) => MANUAL_LEAD_SOURCE_KEYS.includes(s.key));
 
 export const LEAD_TYPES = {
   DIGITAL_LEAD: "digital_lead",
@@ -98,9 +104,9 @@ const REAL_ESTATE_TEMPLATE: IndustryTemplate = {
   ],
   fields: [
     { key: "property", label: "Property / Project", type: "text" },
+    { key: "propertyType", label: "Property Type", type: "select", options: ["Apartment", "Villa", "Plot", "Commercial", "Other"] },
     { key: "budget", label: "Budget", type: "currency", showOnCard: true },
-    { key: "location", label: "Location", type: "text" },
-    { key: "configuration", label: "Configuration", type: "text" }, // e.g. "2BHK"
+    { key: "location", label: "Preferred Location", type: "text" },
   ],
 };
 
@@ -123,7 +129,7 @@ const SOLAR_TEMPLATE: IndustryTemplate = {
   fields: [
     { key: "propertyType", label: "Property Type", type: "select", options: ["Residential", "Commercial"] },
     { key: "monthlyBill", label: "Monthly Electricity Bill", type: "currency" },
-    { key: "systemCapacity", label: "System Capacity", type: "number", unit: "kW", showOnCard: true },
+    { key: "systemCapacity", label: "Required System Capacity", type: "number", unit: "kW", showOnCard: true },
     { key: "location", label: "Location", type: "text" },
   ],
 };

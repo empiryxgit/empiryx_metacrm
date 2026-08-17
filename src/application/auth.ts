@@ -20,6 +20,18 @@ import {
   signAccessToken,
 } from "../infrastructure/auth/tokens";
 import { INDUSTRY_KEYS, type IndustryKey } from "../domain/industryTemplates";
+import { ALL_PERMISSIONS } from "../domain/permissions";
+
+/** The built-in Owner role is documented as "always holds every
+ * permission, cannot be edited" - but its `permissions` column is a
+ * point-in-time snapshot taken when the role was created, so it silently
+ * falls behind whenever a new PERMISSIONS.* constant is added later. Rather
+ * than requiring a data migration every time that happens, system roles
+ * are always granted the current full permission set at the point they're
+ * turned into a token/response. */
+function effectivePermissions(role: { isSystem: boolean; permissions: unknown }): string[] {
+  return role.isSystem ? ALL_PERMISSIONS : (role.permissions as string[]);
+}
 
 export class AuthError extends Error {
   constructor(message: string, public readonly status: number = 400) {
@@ -132,7 +144,7 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
-    permissions: role.permissions as string[],
+    permissions: effectivePermissions(role),
   });
 
   const { token: refreshToken, hash } = generateRefreshToken();
@@ -185,7 +197,7 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
-    permissions: role.permissions as string[],
+    permissions: effectivePermissions(role),
   });
   const { token: newRefreshToken, hash: newHash } = generateRefreshToken();
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);

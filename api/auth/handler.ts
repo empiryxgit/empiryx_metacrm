@@ -31,6 +31,7 @@ import {
   setUserPassword,
 } from "../../src/infrastructure/db/repositories/tenancy";
 import { hashPassword, verifyPassword } from "../../src/infrastructure/auth/password";
+import { ALL_PERMISSIONS } from "../../src/domain/permissions";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -221,7 +222,10 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
       industry: company.industryTemplate,
       onboardingCompleted: Boolean(company.onboardingCompletedAt),
     },
-    role: role ? { id: role.id, name: role.name, permissions: role.permissions } : null,
+    // Owner (isSystem) always reflects the full, current permission catalog
+    // rather than whatever snapshot was stored when the role was created -
+    // see effectivePermissions() in src/application/auth.ts for why.
+    role: role ? { id: role.id, name: role.name, permissions: role.isSystem ? ALL_PERMISSIONS : role.permissions } : null,
   });
 }
 

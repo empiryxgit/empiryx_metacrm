@@ -15,17 +15,9 @@
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">Dashboard</h1>
-        <p class="page-sub">Monitor lead ingestion, processing and CRM activity.</p>
+        <p class="page-sub">A quick read on your leads, customers and what needs attention.</p>
       </div>
-    </div>
-
-    <div class="card status-card">
-      <span class="status-dot" id="statusDot"></span>
-      <div>
-        <div class="status-main" id="statusMain">Checking system status…</div>
-        <div class="status-sub" id="statusSub"></div>
-      </div>
-      <div class="status-refresh">
+      <div class="page-head-actions">
         <span class="status-updated" id="refreshedAt">Loading…</span>
         <button class="refresh-btn" id="refreshBtn" type="button" aria-label="Refresh dashboard">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -33,147 +25,105 @@
       </div>
     </div>
 
-    <h2 class="section-title">Last 24 hours</h2>
     <div class="kpi-grid" id="kpiGrid"></div>
-
-    <div class="card flow-card">
-      <h2 class="section-title" style="margin-top:0">Lead ingestion</h2>
-      <div class="flow" id="ingestionFlow"></div>
-    </div>
 
     <div class="page-head" style="margin-top:var(--space-8)">
       <div class="page-head-text">
-        <h2 class="section-title" style="margin-top:0">Recent leads</h2>
+        <h2 class="section-title" style="margin-top:0">Recent leads &amp; customers</h2>
+      </div>
+      <div class="page-head-actions">
+        <a href="/pipeline.html" class="btn secondary sm" style="display:inline-flex">Open pipeline →</a>
       </div>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Lead</th><th>Received</th><th>Campaign</th><th>Form</th><th>Status</th><th></th></tr></thead>
-        <tbody id="leadsBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th>Lead</th><th>Received</th><th>Campaign</th><th>Source</th><th>Stage</th></tr></thead>
+        <tbody id="leadsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
-
-    <p style="margin-top:var(--space-6); color:var(--text-muted); font-size:11.5px">
-      Source of truth: PostgreSQL (Neon). n8n and other downstream consumers read from
-      <code>/api/leads</code> — they are not part of this ingestion path.
-    </p>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
-  const STAT_DEFS = [
-    { key: "received",     label: "Received" },
-    { key: "processed",    label: "Processed",     tone: "success" },
-    { key: "pending",      label: "Pending" },
-    { key: "duplicate",    label: "Duplicate" },
-    { key: "failed",       label: "Failed",        toneIfPositive: "danger" },
-    { key: "deadLettered", label: "Dead-lettered",  toneIfPositive: "danger" },
-    { key: "retries",      label: "Retries",       toneIfPositive: "warning" },
+  const MOCK_TEMPLATE = {
+    stages: [
+      { key: "new", label: "New Inquiry", isInitial: true },
+      { key: "contacted", label: "Contacted" },
+      { key: "qualified", label: "Qualified" },
+      { key: "won", label: "Won", isClosed: true, isWon: true },
+      { key: "lost", label: "Lost", isClosed: true },
+    ],
+  };
+  const MOCK_SOURCES = [
+    { key: "meta_lead_ads", label: "Meta Lead Ads" },
+    { key: "referral", label: "Referral" },
   ];
-
-  const EMPTY_NOTES = {
-    received: "No leads received",
-    processed: "Nothing processed yet",
-    pending: "Nothing pending",
-    duplicate: "No duplicates",
-    failed: "No failures",
-    deadLettered: "Nothing dead-lettered",
-    retries: "No retries",
-  };
-
-  const MOCK_METRICS = {
-    received: 1284, processed: 1259, pending: 6, duplicate: 14,
-    failed: 3, deadLettered: 2, retries: 21, avgProcessingSeconds: 2.4,
-    lastReconciliationAt: new Date(Date.now() - 6 * 60000).toISOString(),
-    lastReconciliationRecovered: 2,
-  };
-  const MOCK_LEADS = Array.from({ length: 8 }).map((_, i) => ({
+  const MOCK_LEADS = Array.from({ length: 6 }).map((_, i) => ({
     id: "mock-" + i,
     metaLeadId: "12345678900" + i,
-    fullName: ["Asha Rao","Vikram Nair","Priya Menon","Rahul Sethi","Divya Iyer"][i % 5],
-    formId: "78945612" + (i % 3),
-    campaignName: ["Site Visit — Aug","Diwali Offer","Retargeting — West Zone"][i % 3],
-    platform: i % 3 === 0 ? "instagram" : "facebook",
-    status: ["processed","processed","processed","pending","duplicate","failed"][i % 6],
+    fullName: ["Asha Rao", "Vikram Nair", "Priya Menon", "Rahul Sethi", "Divya Iyer", "Amit Shah"][i % 6],
+    campaignName: i % 2 === 0 ? ["Site Visit — Aug", "Diwali Offer"][i % 2] : null,
+    source: i % 3 === 0 ? "referral" : "meta_lead_ads",
+    pipelineStage: ["new", "contacted", "qualified", "won", "lost", "new"][i % 6],
     createdAt: new Date(Date.now() - i * 9 * 60000).toISOString(),
   }));
+  const mockBoard = { new: [MOCK_LEADS[0], MOCK_LEADS[5]], contacted: [MOCK_LEADS[1]], qualified: [MOCK_LEADS[2]], won: [MOCK_LEADS[3]], lost: [MOCK_LEADS[4]] };
 
   function fmtTime(iso){
     if (!iso) return "—";
     return new Date(iso).toLocaleString(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
   }
 
-  function renderKpis(m){
-    const cards = STAT_DEFS.map(d => {
-      const value = m[d.key] ?? 0;
-      let toneClass = d.tone ? `is-${d.tone}` : "";
-      if (!toneClass && d.toneIfPositive && value > 0) toneClass = `is-${d.toneIfPositive}`;
-      const note = value === 0 ? `<div class="kpi-note">${EMPTY_NOTES[d.key]}</div>` : "";
-      return `
-        <div class="kpi-card ${toneClass}">
-          <div class="kpi-label">${d.label}</div>
-          <div class="kpi-value">${value.toLocaleString()}</div>
-          ${note}
-        </div>`;
-    }).join("");
-    const avgSeconds = m.avgProcessingSeconds;
-    const avgCard = `
-      <div class="kpi-card">
-        <div class="kpi-label">Avg. process time</div>
-        <div class="kpi-value">${avgSeconds != null ? avgSeconds + "s" : "—"}</div>
-        ${avgSeconds == null ? '<div class="kpi-note">No processed leads yet</div>' : ""}
-      </div>`;
-    document.getElementById("kpiGrid").innerHTML = cards + avgCard;
+  function computeKpis(template, board){
+    const stageInfo = Object.fromEntries(template.stages.map(s => [s.key, s]));
+    let total = 0, open = 0, won = 0, lost = 0, dueToday = 0, newThisWeek = 0;
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    Object.entries(board).forEach(([stageKey, rows]) => {
+      const info = stageInfo[stageKey] || {};
+      total += rows.length;
+      if (info.isWon) won += rows.length;
+      else if (info.isClosed) lost += rows.length;
+      else open += rows.length;
+      rows.forEach(r => {
+        if (r.nextFollowUpAt && new Date(r.nextFollowUpAt) <= endOfToday) dueToday++;
+        if (r.createdAt && new Date(r.createdAt) >= weekAgo) newThisWeek++;
+      });
+    });
+    return { total, open, won, lost, dueToday, newThisWeek };
   }
 
-  function renderStatus(m, usingMock){
-    const dot = document.getElementById("statusDot");
-    const main = document.getElementById("statusMain");
-    const sub = document.getElementById("statusSub");
-    const hasIssues = (m.failed ?? 0) > 0 || (m.deadLettered ?? 0) > 0;
-
-    dot.className = "status-dot" + (usingMock ? " is-warn" : hasIssues ? " is-warn" : "");
-    main.textContent = usingMock
-      ? "Sample data — connect a deployment to see live status"
-      : hasIssues ? "Operational — some items need attention" : "All systems operational";
-    sub.textContent = m.lastReconciliationAt
-      ? `Last reconciliation ${fmtTime(m.lastReconciliationAt)} · recovered ${m.lastReconciliationRecovered ?? 0}`
-      : "No reconciliation run recorded yet";
-
-    renderFlow(usingMock ? "warn" : hasIssues ? "warn" : "live");
-  }
-
-  function renderFlow(ingestionState){
-    const stateClass = { live: "is-live", warn: "is-warn", bad: "is-bad" }[ingestionState] || "";
-    const nodes = [
-      { label: "Meta Lead Ads", sub: "Source" },
-      { label: "Setu ingestion", sub: ingestionState === "live" ? "Operational" : ingestionState === "warn" ? "Needs attention" : "—", live: stateClass },
-      { label: "CRM", sub: "This workspace" },
-      { label: "Automation", sub: "n8n · via /api/leads" },
+  function renderKpis(k){
+    const cards = [
+      { label: "Total Leads & Customers", value: k.total, note: k.total === 0 ? "Nothing here yet" : "" },
+      { label: "Open in Pipeline", value: k.open, note: k.open === 0 ? "Nothing in progress" : "" },
+      { label: "Won", value: k.won, tone: k.won > 0 ? "success" : "", note: k.won === 0 ? "No wins yet" : "" },
+      { label: "Lost", value: k.lost, note: k.lost === 0 ? "No losses" : "" },
+      { label: "Follow-ups Due Today", value: k.dueToday, tone: k.dueToday > 0 ? "warning" : "", note: k.dueToday === 0 ? "Nothing due today" : "" },
+      { label: "New This Week", value: k.newThisWeek, note: k.newThisWeek === 0 ? "No new activity" : "" },
     ];
-    document.getElementById("ingestionFlow").innerHTML = nodes.map((n, i) => `
-      ${i > 0 ? '<svg class="flow-arrow" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 8h8m0 0-3-3m3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ""}
-      <div class="flow-node ${n.live || ""}">
-        <span class="flow-dot"></span>
-        <div>
-          <div class="flow-node-label">${n.label}</div>
-          <div class="flow-node-sub">${n.sub}</div>
-        </div>
-      </div>
-    `).join("");
+    document.getElementById("kpiGrid").innerHTML = cards.map(c => `
+      <div class="kpi-card ${c.tone ? "is-" + c.tone : ""}">
+        <div class="kpi-label">${c.label}</div>
+        <div class="kpi-value">${c.value.toLocaleString()}</div>
+        ${c.note ? `<div class="kpi-note">${c.note}</div>` : ""}
+      </div>`).join("");
   }
 
-  function renderLeads(leads){
+  function renderLeads(leads, template, sources){
+    const stageLabel = (key) => (template.stages.find(s => s.key === key)?.label) || key || "—";
+    const sourceLabel = (key) => sources.find(s => s.key === key)?.label || key || "—";
     const body = document.getElementById("leadsBody");
     if (!leads.length){
-      body.innerHTML = `<tr><td colspan="6">
+      body.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <div class="state-icon">
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 6.5 10 11l7-4.5M3 6.5v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7M3 6.5a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
           <p class="state-title">No leads yet</p>
-          <p class="state-desc">Once leads arrive from your connected campaigns, they will appear here.</p>
-          <div class="state-actions"><a href="/campaigns.html" class="btn secondary" style="display:inline-flex">View campaigns</a></div>
+          <p class="state-desc">Once leads arrive from your connected campaigns, or you add a customer manually, they will appear here.</p>
+          <div class="state-actions"><a href="/pipeline.html" class="btn secondary" style="display:inline-flex">Open pipeline</a></div>
         </div>
       </td></tr>`;
       return;
@@ -183,29 +133,14 @@
         <td>
           <div class="lead-identity">
             <div class="lead-name">${App.escapeHtml(l.fullName || "Unnamed lead")}</div>
-            <div class="lead-meta-id">Meta ID: ${App.escapeHtml(l.metaLeadId)}</div>
           </div>
         </td>
         <td>${fmtTime(l.createdAt)}</td>
         <td>${App.escapeHtml(l.campaignName || "—")}</td>
-        <td>${App.escapeHtml(l.formName || l.formId)}<div class="cell-sub">${App.escapeHtml(l.platform)}</div></td>
-        <td><span class="pill ${l.status}">${l.status.replace("_"," ")}</span></td>
-        <td>
-          <button class="icon-action" type="button" data-copy="${App.escapeHtml(l.metaLeadId)}" aria-label="Copy Meta Lead ID" title="Copy Meta Lead ID">
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="5.5" y="5.5" width="8" height="8" rx="1.3" stroke="currentColor" stroke-width="1.3"/><path d="M3 10.5H2.5A1.5 1.5 0 0 1 1 9V3a1.5 1.5 0 0 1 1.5-1.5h6A1.5 1.5 0 0 1 10 3v.5" stroke="currentColor" stroke-width="1.3"/></svg>
-          </button>
-        </td>
+        <td>${App.escapeHtml(sourceLabel(l.source))}</td>
+        <td><span class="pill ${l.pipelineStage === "won" ? "processed" : l.pipelineStage === "lost" ? "failed" : "pending"}">${App.escapeHtml(stageLabel(l.pipelineStage))}</span></td>
       </tr>
     `).join("");
-
-    body.querySelectorAll("[data-copy]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          btn.setAttribute("title", "Copied");
-        } catch { /* clipboard unavailable - ignore */ }
-      });
-    });
   }
 
   async function load(){
@@ -226,26 +161,38 @@
     }
 
     if (me) {
+      // A real, logged-in session - never fall back to sample data past
+      // this point. A fetch failure here (including a permissions gap on
+      // a restricted role) gets a real error state, not fabricated numbers.
       document.getElementById("topnav").style.display = "flex";
       App.renderNav(me, "/dashboard.html");
       try {
-        const [metrics, leadsRes] = await Promise.all([
-          App.apiJson("/api/monitoring/metrics"),
+        const [pipelineData, leadsRes] = await Promise.all([
+          App.apiJson("/api/pipeline"),
           App.apiJson("/api/leads?limit=15"),
         ]);
-        renderKpis(metrics);
-        renderStatus(metrics, false);
-        renderLeads(leadsRes.leads);
+        renderKpis(computeKpis(pipelineData.template, pipelineData.board));
+        renderLeads(leadsRes.leads, pipelineData.template, pipelineData.sources);
         document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
-        refreshBtn.classList.remove("is-loading");
-        return;
-      } catch { /* fall through to sample data below */ }
+      } catch (err) {
+        document.getElementById("kpiGrid").innerHTML = "";
+        document.getElementById("leadsBody").innerHTML = `<tr><td colspan="5">
+          <div class="state-block">
+            <p class="state-title">Unable to load dashboard data</p>
+            <p class="state-desc">${App.escapeHtml(err.message || "Something went wrong.")}</p>
+            <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+          </div>
+        </td></tr>`;
+        document.getElementById("retryBtn")?.addEventListener("click", load);
+        document.getElementById("refreshedAt").textContent = "";
+      }
+      refreshBtn.classList.remove("is-loading");
+      return;
     }
 
-    renderKpis(MOCK_METRICS);
-    renderStatus(MOCK_METRICS, true);
-    renderLeads(MOCK_LEADS);
-    document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+    renderKpis(computeKpis(MOCK_TEMPLATE, mockBoard));
+    renderLeads(MOCK_LEADS, MOCK_TEMPLATE, MOCK_SOURCES);
+    document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString() + " (sample data)";
     refreshBtn.classList.remove("is-loading");
   }
 

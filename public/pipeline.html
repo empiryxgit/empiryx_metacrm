@@ -35,12 +35,15 @@
           <label for="searchInput">Search</label>
           <input id="searchInput" type="text" placeholder="Search leads or customers…" />
         </div>
+        <button class="btn" type="button" id="addCustomerBtn" style="display:none">+ Add Customer</button>
       </div>
     </div>
 
     <div id="banner"></div>
 
     <div id="emptyPipeline" style="display:none"></div>
+
+    <div id="modalRoot"></div>
 
     <div id="pipelineContent" style="display:none">
       <div class="mobile-stage-select">
@@ -62,11 +65,19 @@
 
 <script src="/assets/app.js"></script>
 <script>
-  let me, canManage;
+  let me, canManage, canManageLeads;
   let template = null, stages = [], sources = [], owners = [];
   let allRows = [];
   let campaignName = "";
   let viewMode = localStorage.getItem("setu_pipeline_view") === "list" ? "list" : "board";
+  const MANUAL_SOURCES = [
+    { key: "referral", label: "Referral" },
+    { key: "phone", label: "Phone" },
+    { key: "walk_in", label: "Walk-in" },
+    { key: "whatsapp", label: "WhatsApp" },
+    { key: "website", label: "Website" },
+    { key: "other", label: "Other" },
+  ];
 
   const ownerById = () => Object.fromEntries(owners.map(o => [o.id, o.fullName]));
   const sourceLabel = (key) => sources.find(s => s.key === key)?.label || key || "—";
@@ -120,7 +131,11 @@
     const name = row.fullName || "Unnamed lead";
     const contact = row.email || row.phoneNumber || "";
     const ownerName = row.ownerId ? owners_[row.ownerId] : null;
+    const showNotInterested = canManageLeads && row.leadType === "digital_lead";
     return `<div class="lead-card" draggable="${canManage}" data-lead-id="${row.id}">
+      ${showNotInterested ? `<button type="button" class="card-kebab" data-not-interested="${row.id}" title="Not interested" aria-label="Lead actions">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="3.2" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="12.8" r="1.2" fill="currentColor"/></svg>
+      </button>` : ""}
       <div class="name">${App.escapeHtml(name)}</div>
       ${contact ? `<div class="meta">${App.escapeHtml(contact)}</div>` : ""}
       <span class="source">${App.escapeHtml(sourceLabel(row.source))}</span>
@@ -130,6 +145,18 @@
         ${row.nextFollowUpAt ? `<span class="followup">Follow-up ${fmtDate(row.nextFollowUpAt)}</span>` : ""}
       </div>
     </div>`;
+  }
+
+  function wireCardActions(root){
+    root.querySelectorAll("[data-not-interested]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const row = allRows.find(r => r.id === btn.dataset.notInterested);
+        if (row) openNotInterestedModal(row);
+      });
+      btn.addEventListener("dragstart", (e) => e.preventDefault());
+    });
   }
 
   function groupByStage(rows){
@@ -171,6 +198,7 @@
       </div>
     `).join("");
     wireDragDrop(board);
+    wireCardActions(board);
 
     // Mobile: single-stage selector + card list, fed from the same groups.
     const mobileSelect = document.getElementById("mobileStage");
@@ -188,6 +216,7 @@
       ${cards.length ? cards.map(leadCard).join("") : '<div class="empty">No leads in this stage</div>'}
     </div>`;
     wireDragDrop(box);
+    wireCardActions(box);
   }
 
   function renderList(rows){
@@ -233,6 +262,187 @@
   document.getElementById("mobileStage").addEventListener("change", () => renderView());
   document.getElementById("searchInput").addEventListener("input", () => renderView());
 
+  // -------------------------------------------------------------------
+  // Add Customer / Not Interested → Add to CRM - one dynamic form driven
+  // entirely by template.fields, shared between both flows. "create" posts
+  // a brand-new manual customer; "convert" patches an existing lead's CRM
+  // fields without ever touching its source/campaign attribution.
+  // -------------------------------------------------------------------
+
+  function fieldInputHtml(field, value){
+    const val = value !== undefined && value !== null ? value : "";
+    if (field.type === "select") {
+      return `<select data-field="${field.key}">
+        <option value="">Select…</option>
+        ${(field.options || []).map(o => `<option value="${o}" ${val === o ? "selected" : ""}>${App.escapeHtml(o)}</option>`).join("")}
+      </select>`;
+    }
+    if (field.type === "textarea") {
+      return `<textarea data-field="${field.key}" rows="3">${App.escapeHtml(String(val))}</textarea>`;
+    }
+    if (field.type === "currency" || field.type === "number") {
+      return `<input type="number" data-field="${field.key}" value="${App.escapeHtml(String(val))}" step="any" />`;
+    }
+    return `<input type="text" data-field="${field.key}" value="${App.escapeHtml(String(val))}" />`;
+  }
+
+  function customerModalHtml(mode, lead){
+    const isConvert = mode === "convert";
+    const sourceOptions = isConvert
+      ? `<option value="${lead.source}" selected>${App.escapeHtml(sourceLabel(lead.source))}</option>`
+      : MANUAL_SOURCES.map(s => `<option value="${s.key}">${App.escapeHtml(s.label)}</option>`).join("");
+    const stageOptions = stages.map(s => {
+      const selected = isConvert ? lead.pipelineStage === s.key : s.isInitial;
+      return `<option value="${s.key}" ${selected ? "selected" : ""}>${App.escapeHtml(s.label)}</option>`;
+    }).join("");
+    const ownerOptions = `<option value="">Unassigned</option>` +
+      owners.map(o => `<option value="${o.id}" ${isConvert && lead.ownerId === o.id ? "selected" : ""}>${App.escapeHtml(o.fullName)}</option>`).join("");
+
+    return `
+      <div class="modal-overlay" id="customerModalOverlay">
+        <div class="modal">
+          <div class="modal-header">
+            <div>
+              <h2>${isConvert ? "Add to CRM" : "Add Customer"}</h2>
+              <p>${isConvert ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing." : "Create a customer and place them in the pipeline."}</p>
+            </div>
+            <button class="modal-close" type="button" id="customerModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="customerModalError"></div>
+            <div class="modal-field-grid">
+              <div><label for="cf_name">Customer name *</label><input id="cf_name" required value="${App.escapeHtml(lead?.fullName || "")}" /></div>
+              <div><label for="cf_phone">Phone *</label><input id="cf_phone" required value="${App.escapeHtml(lead?.phoneNumber || "")}" /></div>
+            </div>
+            <label for="cf_email">Email</label>
+            <input id="cf_email" type="email" value="${App.escapeHtml(lead?.email || "")}" />
+
+            ${template.fields.map(f => `<label>${App.escapeHtml(f.label)}</label>${fieldInputHtml(f, lead?.customFields?.[f.key])}`).join("")}
+
+            <div class="modal-field-grid">
+              <div><label for="cf_source">Source</label><select id="cf_source" ${isConvert ? "disabled" : ""}>${sourceOptions}</select></div>
+              <div><label for="cf_owner">Owner</label><select id="cf_owner">${ownerOptions}</select></div>
+            </div>
+            <div class="modal-field-grid">
+              <div><label for="cf_stage">Pipeline stage</label><select id="cf_stage">${stageOptions}</select></div>
+              <div><label for="cf_followup">Next follow-up</label><input id="cf_followup" type="date" value="${lead?.nextFollowUpAt ? lead.nextFollowUpAt.slice(0, 10) : ""}" /></div>
+            </div>
+            <label for="cf_notes">Requirement / Notes</label>
+            <textarea id="cf_notes" rows="3">${App.escapeHtml(lead?.notes || "")}</textarea>
+            ${isConvert && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
+          </div>
+          <div class="modal-footer">
+            <button class="btn secondary" type="button" id="customerModalCancel">Cancel</button>
+            <button class="btn" type="button" id="customerModalSave">${isConvert ? "Save Customer" : "Add Customer"}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function closeModal(){
+    document.getElementById("modalRoot").innerHTML = "";
+  }
+
+  function openCustomerModal({ mode, lead }){
+    document.getElementById("modalRoot").innerHTML = customerModalHtml(mode, lead || null);
+    document.getElementById("customerModalClose").addEventListener("click", closeModal);
+    document.getElementById("customerModalCancel").addEventListener("click", closeModal);
+    document.getElementById("customerModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "customerModalOverlay") closeModal();
+    });
+    document.getElementById("customerModalSave").addEventListener("click", () => submitCustomerModal(mode, lead?.id));
+    document.getElementById("cf_name").focus();
+  }
+
+  async function submitCustomerModal(mode, leadId){
+    const errBox = document.getElementById("customerModalError");
+    errBox.innerHTML = "";
+    const fullName = document.getElementById("cf_name").value.trim();
+    const phoneNumber = document.getElementById("cf_phone").value.trim();
+    if (!fullName || !phoneNumber) {
+      errBox.innerHTML = `<div class="banner error">Customer name and phone are required.</div>`;
+      return;
+    }
+    const customFields = {};
+    document.querySelectorAll("#modalRoot [data-field]").forEach(el => {
+      if (el.value !== "") customFields[el.dataset.field] = el.value;
+    });
+    const body = {
+      fullName,
+      phoneNumber,
+      email: document.getElementById("cf_email").value.trim(),
+      ownerId: document.getElementById("cf_owner").value || null,
+      pipelineStage: document.getElementById("cf_stage").value,
+      nextFollowUpAt: document.getElementById("cf_followup").value || null,
+      notes: document.getElementById("cf_notes").value.trim(),
+      customFields,
+    };
+
+    const saveBtn = document.getElementById("customerModalSave");
+    saveBtn.disabled = true;
+    try {
+      if (mode === "create") {
+        body.source = document.getElementById("cf_source").value;
+        await App.apiJson("/api/leads", { method: "POST", body });
+      } else {
+        await App.apiJson(`/api/leads/${leadId}`, { method: "PATCH", body });
+      }
+      closeModal();
+      load();
+    } catch (err) {
+      errBox.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      saveBtn.disabled = false;
+    }
+  }
+
+  function openNotInterestedModal(lead){
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="niModalOverlay">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <div>
+              <h2>Not interested?</h2>
+              <p>${App.escapeHtml(lead.fullName || "This lead")} isn't interested via digital marketing. What would you like to do?</p>
+            </div>
+            <button class="modal-close" type="button" id="niModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <button type="button" class="choice-tile" id="niCloseLead">
+              <span class="choice-tile-title">Close lead</span>
+              <span class="choice-tile-desc">Mark as lost — no further action needed.</span>
+            </button>
+            <button type="button" class="choice-tile" id="niAddToCrm">
+              <span class="choice-tile-title">Add to CRM</span>
+              <span class="choice-tile-desc">Keep working this person as a customer and fill in more details.</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("niModalClose").addEventListener("click", closeModal);
+    document.getElementById("niModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "niModalOverlay") closeModal();
+    });
+    document.getElementById("niCloseLead").addEventListener("click", async () => {
+      const lostStage = stages.find(s => s.isClosed && !s.isWon)?.key || "lost";
+      try {
+        await App.apiJson(`/api/leads/${lead.id}/stage`, { method: "PATCH", body: { stage: lostStage } });
+        closeModal();
+        load();
+      } catch (err) {
+        closeModal();
+        document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      }
+    });
+    document.getElementById("niAddToCrm").addEventListener("click", () => {
+      openCustomerModal({ mode: "convert", lead });
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.getElementById("modalRoot").innerHTML.trim()) closeModal();
+  });
+  document.getElementById("addCustomerBtn").addEventListener("click", () => openCustomerModal({ mode: "create" }));
+
   async function loadCampaignOptions(){
     const select = document.getElementById("campaignSelect");
     try {
@@ -270,9 +480,13 @@
       document.getElementById("emptyPipeline").innerHTML = `
         <div class="card state-block">
           <p class="state-title">Your pipeline is ready</p>
-          <p class="state-desc">New leads from your campaigns will appear here automatically. Manually adding customers is coming soon.</p>
-          <div class="state-actions"><a href="/campaigns.html" class="btn secondary" style="display:inline-flex">View campaigns</a></div>
+          <p class="state-desc">New leads from your campaigns will appear here automatically. You can also add a customer manually.</p>
+          <div class="state-actions">
+            ${canManageLeads ? '<button class="btn" type="button" id="emptyAddCustomerBtn">+ Add Customer</button>' : ""}
+            <a href="/campaigns.html" class="btn secondary" style="display:inline-flex">View campaigns</a>
+          </div>
         </div>`;
+      document.getElementById("emptyAddCustomerBtn")?.addEventListener("click", () => openCustomerModal({ mode: "create" }));
       return;
     }
 
@@ -286,6 +500,8 @@
     if (!me) return;
     App.renderNav(me, "/pipeline.html");
     canManage = App.hasPermission(me, "pipeline.manage");
+    canManageLeads = App.hasPermission(me, "leads.manage");
+    if (canManageLeads) document.getElementById("addCustomerBtn").style.display = "inline-flex";
 
     await loadCampaignOptions();
     document.getElementById("campaignSelect").addEventListener("change", load);

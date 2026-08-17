@@ -33,6 +33,7 @@
 
     { "source": "/api/leads", "destination": "/api/leads/handler" },
     { "source": "/api/leads/:leadId/stage", "destination": "/api/leads/handler?leadId=:leadId&sub=stage" },
+    { "source": "/api/leads/:leadId", "destination": "/api/leads/handler?leadId=:leadId" },
 
     { "source": "/api/campaigns", "destination": "/api/campaigns/handler" },
     { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },

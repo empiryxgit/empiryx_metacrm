@@ -11,10 +11,30 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
-import { updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
+import { insertManualLead, updateLeadCrmFields, updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
-import { getIndustryTemplate, isValidStageKey } from "../../src/domain/industryTemplates";
+import {
+  getIndustryTemplate,
+  getInitialStageKey,
+  isValidStageKey,
+  MANUAL_LEAD_SOURCE_KEYS,
+  type IndustryTemplate,
+} from "../../src/domain/industryTemplates";
+
+/** Keeps custom-field storage limited to whatever the active template
+ * actually defines - an old/edited template can never leave orphaned keys
+ * behind, and a client can't smuggle arbitrary keys into the jsonb blob. */
+function sanitizeCustomFields(template: IndustryTemplate, raw: unknown): Record<string, unknown> {
+  const input = (raw ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const field of template.fields) {
+    const value = input[field.key];
+    if (value === undefined || value === null || value === "") continue;
+    out[field.key] = typeof value === "string" ? value.trim() : value;
+  }
+  return out;
+}
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -26,8 +46,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const leadId = getQueryString(req, "leadId");
   const subresource = getQueryString(req, "sub");
 
-  if (!leadId) return handleList(req, res);
+  if (!leadId) {
+    if (req.method === "GET") return handleList(req, res);
+    if (req.method === "POST") return handleCreate(req, res);
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
   if (subresource === "stage") return handleStage(req, res, leadId);
+  if (!subresource) return handleUpdate(req, res, leadId);
 
   res.status(404).json({ error: "Not found" });
 }
@@ -98,4 +124,128 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
 
   await updateLeadPipelineStage(auth.companyId, leadId, stage);
   res.status(200).json({ updated: true });
+}
+
+interface ManualCreateBody {
+  fullName?: string;
+  phoneNumber?: string;
+  email?: string;
+  source?: string;
+  ownerId?: string;
+  pipelineStage?: string;
+  nextFollowUpAt?: string;
+  notes?: string;
+  customFields?: Record<string, unknown>;
+}
+
+// "+ Add Customer" - a brand-new, manually-entered customer with no
+// originating Meta lead. See insertManualLead() for why this never touches
+// the ingestion path.
+async function handleCreate(req: VercelRequest, res: VercelResponse) {
+  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  if (!auth) return;
+
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(401).json({ error: "Account no longer exists." });
+    return;
+  }
+  const template = getIndustryTemplate(company.industryTemplate);
+
+  const body = (req.body ?? {}) as ManualCreateBody;
+  const fullName = body.fullName?.trim();
+  const phoneNumber = body.phoneNumber?.trim();
+  if (!fullName || !phoneNumber) {
+    res.status(400).json({ error: "fullName and phoneNumber are required." });
+    return;
+  }
+
+  const source = body.source && MANUAL_LEAD_SOURCE_KEYS.includes(body.source) ? body.source : "other";
+  const stage = body.pipelineStage && isValidStageKey(template, body.pipelineStage)
+    ? body.pipelineStage
+    : getInitialStageKey(template);
+  const nextFollowUpAt = body.nextFollowUpAt ? new Date(body.nextFollowUpAt) : undefined;
+
+  try {
+    const lead = await insertManualLead({
+      companyId: auth.companyId,
+      fullName,
+      phoneNumber,
+      email: body.email?.trim() || undefined,
+      source,
+      ownerId: body.ownerId || undefined,
+      pipelineStage: stage,
+      nextFollowUpAt: Number.isNaN(nextFollowUpAt?.getTime()) ? undefined : nextFollowUpAt,
+      notes: body.notes?.trim() || undefined,
+      customFields: sanitizeCustomFields(template, body.customFields),
+    });
+    res.status(201).json({ lead });
+  } catch (err) {
+    console.error("[leads] Failed to create manual customer:", err);
+    res.status(500).json({ error: "Failed to create customer." });
+  }
+}
+
+interface UpdateBody {
+  fullName?: string;
+  email?: string;
+  phoneNumber?: string;
+  ownerId?: string | null;
+  pipelineStage?: string;
+  nextFollowUpAt?: string | null;
+  notes?: string;
+  customFields?: Record<string, unknown>;
+}
+
+// General CRM-field update, including "Not interested -> Add to CRM"
+// (enriching an existing Meta lead with owner/stage/notes/custom fields
+// without touching its source/campaign attribution).
+async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: string) {
+  if (req.method !== "PATCH") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  if (!auth) return;
+
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(401).json({ error: "Account no longer exists." });
+    return;
+  }
+  const template = getIndustryTemplate(company.industryTemplate);
+
+  const body = (req.body ?? {}) as UpdateBody;
+  const patch: Record<string, unknown> = {};
+
+  if (body.fullName !== undefined) patch.fullName = body.fullName.trim();
+  if (body.email !== undefined) patch.email = body.email.trim() || null;
+  if (body.phoneNumber !== undefined) patch.phoneNumber = body.phoneNumber.trim() || null;
+  if (body.ownerId !== undefined) patch.ownerId = body.ownerId || null;
+  if (body.notes !== undefined) patch.notes = body.notes.trim() || null;
+  if (body.customFields !== undefined) patch.customFields = sanitizeCustomFields(template, body.customFields);
+  if (body.nextFollowUpAt !== undefined) {
+    const d = body.nextFollowUpAt ? new Date(body.nextFollowUpAt) : null;
+    patch.nextFollowUpAt = d && !Number.isNaN(d.getTime()) ? d : null;
+  }
+  if (body.pipelineStage !== undefined) {
+    if (!isValidStageKey(template, body.pipelineStage)) {
+      res.status(400).json({ error: `pipelineStage must be one of: ${template.stages.map((s) => s.key).join(", ")}` });
+      return;
+    }
+    patch.pipelineStage = body.pipelineStage;
+  }
+
+  try {
+    const lead = await updateLeadCrmFields(auth.companyId, leadId, patch);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found." });
+      return;
+    }
+    res.status(200).json({ lead });
+  } catch (err) {
+    console.error("[leads] Failed to update lead:", err);
+    res.status(500).json({ error: "Failed to update lead." });
+  }
 }
