@@ -3,14 +3,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Campaigns — Meta Lead Ads</title>
+<title>Campaigns — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <nav class="topnav" id="topnav"></nav>
   <div class="wrap">
-    <h1 class="page-title">Campaigns</h1>
-    <p class="page-sub">Each campaign has its own Meta webhook — set it up from the campaign page.</p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Campaigns</h1>
+        <p class="page-sub">Manage your lead generation campaigns and connected Meta webhooks.</p>
+      </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="ctaCreate">Create campaign</button>
+      </div>
+    </div>
 
     <div id="banner"></div>
 
@@ -36,10 +46,12 @@
     </div>
 
     <h2 class="section-title">All campaigns</h2>
-    <table>
-      <thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Webhook</th><th>Created</th></tr></thead>
-      <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Webhook</th><th>Created</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
 <script src="/assets/app.js"></script>
@@ -55,12 +67,32 @@
 
     if (App.hasPermission(me, "campaigns.manage")) {
       document.getElementById("createCard").style.display = "block";
+      document.getElementById("headActions").style.display = "flex";
     }
 
-    const { campaigns } = await App.apiJson("/api/campaigns");
     const rows = document.getElementById("rows");
+    let campaigns;
+    try {
+      ({ campaigns } = await App.apiJson("/api/campaigns"));
+    } catch (err) {
+      rows.innerHTML = `<tr><td colspan="5">
+        <div class="state-block">
+          <p class="state-title">Unable to load campaigns</p>
+          <p class="state-desc">We couldn't retrieve your campaigns. Please try again.</p>
+          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+        </div>
+      </td></tr>`;
+      document.getElementById("retryBtn")?.addEventListener("click", load);
+      return;
+    }
+
     if (!campaigns.length) {
-      rows.innerHTML = '<tr><td colspan="5" class="empty">No campaigns yet — create your first one above.</td></tr>';
+      rows.innerHTML = `<tr><td colspan="5">
+        <div class="state-block">
+          <p class="state-title">No campaigns yet</p>
+          <p class="state-desc">${App.hasPermission(me, "campaigns.manage") ? "Create your first campaign to start receiving leads." : "Ask an admin to create your first campaign."}</p>
+        </div>
+      </td></tr>`;
       return;
     }
     rows.innerHTML = campaigns.map(c => `
@@ -87,6 +119,11 @@
     } catch (err) {
       banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     }
+  });
+
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("name").focus();
   });
 
   load();

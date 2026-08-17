@@ -3,14 +3,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Roles — Meta Lead Ads</title>
+<title>Roles — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <nav class="topnav" id="topnav"></nav>
   <div class="wrap">
-    <h1 class="page-title">Roles</h1>
-    <p class="page-sub">Fully custom roles — pick exactly which permissions each one grants.</p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Roles</h1>
+        <p class="page-sub">Fully custom roles — pick exactly which permissions each one grants.</p>
+      </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="ctaCreate">New role</button>
+      </div>
+    </div>
     <div id="banner"></div>
 
     <div class="card" id="createCard" style="display:none">
@@ -26,10 +36,12 @@
     </div>
 
     <h2 class="section-title">All roles</h2>
-    <table>
-      <thead><tr><th>Name</th><th>Description</th><th>Permissions</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Description</th><th>Permissions</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
 <script src="/assets/app.js"></script>
@@ -60,12 +72,17 @@
     const rows = document.getElementById("rows");
     rows.innerHTML = roles.map(r => `
       <tr>
-        <td><strong>${App.escapeHtml(r.name)}</strong>${r.isSystem ? ' <span class="pill active">system</span>' : ""}</td>
+        <td><strong>${App.escapeHtml(r.name)}</strong>${r.isSystem ? ' <span class="pill system">system</span>' : ""}</td>
         <td>${App.escapeHtml(r.description || "—")}</td>
         <td>${(r.permissions || []).length} permission(s)</td>
-        <td>${r.isSystem ? "" : `<button class="btn secondary" data-delete="${r.id}">Delete</button>`}</td>
+        <td>${r.isSystem ? "" : `<button class="btn secondary sm" data-delete="${r.id}">Delete</button>`}</td>
       </tr>
-    `).join("") || '<tr><td colspan="4" class="empty">No roles yet.</td></tr>';
+    `).join("") || `<tr><td colspan="4">
+      <div class="state-block">
+        <p class="state-title">No roles yet</p>
+        <p class="state-desc">Create a role to control what each teammate can access.</p>
+      </div>
+    </td></tr>`;
 
     rows.querySelectorAll("[data-delete]").forEach(btn => {
       btn.addEventListener("click", async () => {
@@ -101,6 +118,11 @@
     }
   });
 
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("roleName").focus();
+  });
+
   (async () => {
     me = await App.requireAuth();
     if (!me) return;
@@ -109,7 +131,10 @@
       document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
       return;
     }
-    if (App.hasPermission(me, "roles.manage")) document.getElementById("createCard").style.display = "block";
+    if (App.hasPermission(me, "roles.manage")) {
+      document.getElementById("createCard").style.display = "block";
+      document.getElementById("headActions").style.display = "flex";
+    }
     await loadCatalog();
     await loadRoles();
   })();

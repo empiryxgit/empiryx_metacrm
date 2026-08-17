@@ -3,14 +3,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Users — Meta Lead Ads</title>
+<title>Users — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <nav class="topnav" id="topnav"></nav>
   <div class="wrap">
-    <h1 class="page-title">Users</h1>
-    <p class="page-sub">Create a user and assign a role — a temporary password is shown once, for you to relay to them.</p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Users</h1>
+        <p class="page-sub">Create a user and assign a role — a temporary password is shown once, for you to relay to them.</p>
+      </div>
+      <div class="page-head-actions">
+        <button class="btn" type="button" id="ctaCreate">Add user</button>
+      </div>
+    </div>
     <div id="banner"></div>
 
     <div class="card" id="createCard" style="display:none">
@@ -39,10 +49,12 @@
     </div>
 
     <h2 class="section-title">All users</h2>
-    <table>
-      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Last active</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
 <script src="/assets/app.js"></script>
@@ -62,7 +74,12 @@
     const rows = document.getElementById("rows");
     rows.innerHTML = users.map(u => `
       <tr>
-        <td>${App.escapeHtml(u.fullName)}</td>
+        <td>
+          <div style="display:flex; align-items:center; gap:9px">
+            <span class="avatar">${App.escapeHtml(App.initials(u.fullName))}</span>
+            <strong>${App.escapeHtml(u.fullName)}</strong>
+          </div>
+        </td>
         <td>${App.escapeHtml(u.email)}</td>
         <td>
           <select data-role="${u.id}">
@@ -72,12 +89,17 @@
         <td><span class="pill ${u.status}">${u.status}</span></td>
         <td>${fmt(u.lastLoginAt)}</td>
         <td>
-          <button class="btn secondary" data-toggle="${u.id}" data-status="${u.status === "active" ? "disabled" : "active"}">
+          <button class="btn secondary sm" data-toggle="${u.id}" data-status="${u.status === "active" ? "disabled" : "active"}">
             ${u.status === "active" ? "Disable" : "Enable"}
           </button>
         </td>
       </tr>
-    `).join("") || '<tr><td colspan="6" class="empty">No users yet.</td></tr>';
+    `).join("") || `<tr><td colspan="6">
+      <div class="state-block">
+        <p class="state-title">No users yet</p>
+        <p class="state-desc">Add your first teammate above.</p>
+      </div>
+    </td></tr>`;
 
     rows.querySelectorAll("[data-role]").forEach(sel => {
       sel.addEventListener("change", async () => {
@@ -121,6 +143,11 @@
     } catch (err) {
       banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     }
+  });
+
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("fullName").focus();
   });
 
   (async () => {
