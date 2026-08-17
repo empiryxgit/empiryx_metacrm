@@ -2,7 +2,6 @@
   "name": "meta-lead-integration",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
   "description": "Meta Lead Ads -> CRM integration. Serverless on Vercel; Postgres (Neon) is the source of truth.",
   "scripts": {
     "dev": "vercel dev",
