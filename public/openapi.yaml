@@ -1,0 +1,870 @@
+openapi: 3.0.3
+info:
+  title: Meta Lead Ads → CRM Integration API
+  description: >
+    Serverless ingestion pipeline for Facebook/Instagram Lead Ads, plus the
+    CRM (auth, campaigns, leads, pipeline, admin) built on top of it.
+    Session auth uses httpOnly cookies (mla_access / mla_refresh) - log in
+    via POST /api/auth/login here first, then "Try it out" on the other
+    endpoints will carry the session automatically.
+  version: "1.0.0"
+servers:
+  - url: /
+    description: Current origin
+
+tags:
+  - name: Auth
+  - name: Onboarding
+  - name: Campaigns
+  - name: Leads
+  - name: Pipeline
+  - name: Admin - Roles
+  - name: Admin - Users
+  - name: Webhooks
+  - name: Internal
+  - name: System
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: mla_access
+      description: 15-minute access token set by /api/auth/login, /register, or /refresh.
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        mustChangePassword: { type: boolean }
+
+    Company:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        onboardingCompleted: { type: boolean }
+
+    Role:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        permissions:
+          type: array
+          items: { type: string }
+        isSystem: { type: boolean }
+
+    PermissionCode:
+      type: string
+      enum:
+        - company.manage
+        - users.manage
+        - roles.manage
+        - campaigns.view
+        - campaigns.manage
+        - webhooks.manage
+        - dashboard.view
+        - pipeline.view
+        - pipeline.manage
+        - leads.view
+        - leads.export
+
+    Campaign:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        name: { type: string }
+        platform: { type: string, enum: [facebook, instagram, both] }
+        status: { type: string, enum: [draft, active, paused, archived] }
+        createdBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, nullable: true }
+
+    WebhookConfig:
+      type: object
+      description: Secrets (appSecret/accessToken) are masked in responses.
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        slug: { type: string }
+        callbackUrl: { type: string, format: uri }
+        verifyToken: { type: string }
+        pageId: { type: string, nullable: true }
+        formIds:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [pending, verified, active, error] }
+        lastVerifiedAt: { type: string, format: date-time, nullable: true }
+
+    Lead:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        crmCampaignId: { type: string, format: uuid }
+        metaLeadId: { type: string }
+        platform: { type: string }
+        pageId: { type: string }
+        formId: { type: string }
+        formName: { type: string, nullable: true }
+        adId: { type: string, nullable: true }
+        adName: { type: string, nullable: true }
+        adSetId: { type: string, nullable: true }
+        adSetName: { type: string, nullable: true }
+        campaignId: { type: string, nullable: true, description: "Meta's own ad-campaign id" }
+        campaignName: { type: string, nullable: true }
+        fullName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        phoneNumber: { type: string, nullable: true }
+        formResponses: { type: array, items: {} }
+        metaCreatedAt: { type: string, format: date-time }
+        status: { type: string, enum: [pending, processing, processed, failed, duplicate, dead_lettered] }
+        pipelineStage: { type: string, enum: [new, contacted, qualified, site_visit, won, lost] }
+        retryCount: { type: integer }
+        lastError: { type: string, nullable: true }
+        processedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    AppUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        companyId: { type: string, format: uuid }
+        roleId: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        mustChangePassword: { type: boolean }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+
+security:
+  - cookieAuth: []
+
+paths:
+  # ---------------------------------------------------------------- Auth --
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new company + its first (Owner) user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [companyName, fullName, email, password]
+              properties:
+                companyName: { type: string }
+                fullName: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "201":
+          description: Registered and logged in (Set-Cookie access/refresh)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "400": { description: Missing fields, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Email or company already exists, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Logged in (Set-Cookie access/refresh)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { description: Invalid credentials, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Exchange the refresh-token cookie for a new access token
+      security: []
+      responses:
+        "200":
+          description: New tokens issued (Set-Cookie access/refresh)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { description: No/invalid refresh token (cookies cleared), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current session and clear cookies
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { loggedOut: { type: boolean } }
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user, company, and role
+      responses:
+        "200":
+          description: Session info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  company: { $ref: "#/components/schemas/Company" }
+                  role:
+                    allOf:
+                      - $ref: "#/components/schemas/Role"
+                    nullable: true
+        "401": { description: Not authenticated, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change the current user's password (revokes every other session)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string, format: password }
+                newPassword: { type: string, format: password, minLength: 10 }
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { changed: { type: boolean } }
+        "400": { description: newPassword too short, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Not authenticated or current password wrong, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ----------------------------------------------------------- Onboarding --
+  /api/onboarding/company:
+    post:
+      tags: [Onboarding]
+      summary: Save company profile (step 2 of onboarding)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                industry: { type: string }
+                companySize: { type: string }
+                timezone: { type: string, example: "Asia/Kolkata" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+
+  /api/onboarding/complete:
+    post:
+      tags: [Onboarding]
+      summary: Mark onboarding as complete
+      responses:
+        "200":
+          description: Completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { completed: { type: boolean } }
+
+  # ------------------------------------------------------------ Campaigns --
+  /api/campaigns:
+    get:
+      tags: [Campaigns]
+      summary: List campaigns for the current company
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/Campaign" }
+    post:
+      tags: [Campaigns]
+      summary: Create a campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                platform: { type: string, enum: [facebook, instagram, both], default: facebook }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { campaign: { $ref: "#/components/schemas/Campaign" } }
+        "400": { description: name required, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/campaigns/{campaignId}:
+    parameters:
+      - name: campaignId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Campaigns]
+      summary: Get a campaign
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { campaign: { $ref: "#/components/schemas/Campaign" } }
+        "404": { description: Not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    patch:
+      tags: [Campaigns]
+      summary: Update a campaign
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                platform: { type: string, enum: [facebook, instagram, both] }
+                status: { type: string, enum: [draft, active, paused, archived] }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+
+  /api/campaigns/{campaignId}/webhook:
+    parameters:
+      - name: campaignId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Campaigns]
+      summary: Get this campaign's Meta webhook config (masked secrets)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { webhook: { $ref: "#/components/schemas/WebhookConfig" } }
+        "404": { description: Campaign not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    post:
+      tags: [Campaigns]
+      summary: Create or update this campaign's Meta webhook config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [appSecret, accessToken]
+              properties:
+                appSecret: { type: string }
+                accessToken: { type: string }
+                pageId: { type: string }
+                formIds:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook: { $ref: "#/components/schemas/WebhookConfig" }
+                  instructions: { type: string }
+        "400": { description: appSecret/accessToken required, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ---------------------------------------------------------------- Leads --
+  /api/leads:
+    get:
+      tags: [Leads]
+      summary: List leads for the current company
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, processing, processed, failed, duplicate, dead_lettered] }
+        - name: campaignId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  leads:
+                    type: array
+                    items: { $ref: "#/components/schemas/Lead" }
+
+  /api/leads/{leadId}/stage:
+    parameters:
+      - name: leadId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Leads]
+      summary: Move a lead to a different pipeline stage (drag-and-drop target)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [new, contacted, qualified, site_visit, won, lost] }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+        "400": { description: Invalid stage, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ------------------------------------------------------------- Pipeline --
+  /api/pipeline:
+    get:
+      tags: [Pipeline]
+      summary: Kanban board - every lead for one campaign, grouped by stage
+      parameters:
+        - name: campaignId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaign: { $ref: "#/components/schemas/Campaign" }
+                  stages:
+                    type: array
+                    items: { type: string }
+                  board:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items: { $ref: "#/components/schemas/Lead" }
+        "400": { description: campaignId required, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Campaign not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ---------------------------------------------------------- Admin Roles --
+  /api/admin/roles:
+    get:
+      tags: [Admin - Roles]
+      summary: List custom roles (requires users.manage)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles:
+                    type: array
+                    items: { $ref: "#/components/schemas/Role" }
+    post:
+      tags: [Admin - Roles]
+      summary: Create a custom role (requires roles.manage)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, permissions]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                permissions:
+                  type: array
+                  items: { $ref: "#/components/schemas/PermissionCode" }
+                  minItems: 1
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { role: { $ref: "#/components/schemas/Role" } }
+        "400": { description: Invalid name/permissions, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/admin/roles/{roleId}:
+    parameters:
+      - name: roleId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Admin - Roles]
+      summary: Update a custom role (the system Owner role cannot be edited)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                permissions:
+                  type: array
+                  items: { $ref: "#/components/schemas/PermissionCode" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+        "403": { description: System role cannot be edited, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Role not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [Admin - Roles]
+      summary: Delete a custom role (must not be in use, cannot be system role)
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { deleted: { type: boolean } }
+        "403": { description: System role cannot be deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Role still assigned to a user, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # ---------------------------------------------------------- Admin Users --
+  /api/admin/users:
+    get:
+      tags: [Admin - Users]
+      summary: List users in the current company (requires users.manage)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/AppUser" }
+    post:
+      tags: [Admin - Users]
+      summary: Create a user (returns a one-time temporary password)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, email, roleId]
+              properties:
+                fullName: { type: string }
+                email: { type: string, format: email }
+                roleId: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      email: { type: string }
+                      fullName: { type: string }
+                  temporaryPassword:
+                    type: string
+                    description: Shown exactly once - relay to the new user, who must change it on first login.
+        "409": { description: Email already exists, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/admin/users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Admin - Users]
+      summary: Update a user's role, status, or name
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                roleId: { type: string, format: uuid }
+                status: { type: string, enum: [active, disabled] }
+                fullName: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { updated: { type: boolean } }
+        "409": { description: Would remove the last user able to manage users, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  # -------------------------------------------------------------- Webhooks --
+  /api/webhooks/meta/{slug}:
+    parameters:
+      - name: slug
+        in: path
+        required: true
+        description: Unguessable per-campaign routing segment (not the verify token)
+        schema: { type: string }
+    get:
+      tags: [Webhooks]
+      summary: Meta's one-time webhook subscription verification handshake
+      security: []
+      parameters:
+        - name: hub.mode
+          in: query
+          schema: { type: string, example: subscribe }
+        - name: hub.verify_token
+          in: query
+          schema: { type: string }
+        - name: hub.challenge
+          in: query
+          schema: { type: string }
+      responses:
+        "200": { description: "Verify token matched - echoes hub.challenge back as plain text" }
+        "403": { description: Verify token mismatch }
+        "404": { description: Unknown slug }
+    post:
+      tags: [Webhooks]
+      summary: Meta lead notification (X-Hub-Signature-256 signed)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, description: "Meta's leadgen change-notification payload" }
+      responses:
+        "200":
+          description: Persisted (and enqueued for processing, if that step succeeded)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received: { type: boolean }
+                  enqueued: { type: boolean }
+        "401": { description: Invalid X-Hub-Signature-256 }
+        "404": { description: Unknown slug }
+        "500": { description: Failed to persist event - Meta will retry }
+
+  # -------------------------------------------------------------- Internal --
+  /api/internal/process-lead:
+    post:
+      tags: [Internal]
+      summary: QStash worker - processes one queued lead (QStash-signed, not for manual use)
+      security: []
+      responses:
+        "200":
+          description: Processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { outcome: { type: string } }
+        "401": { description: Invalid QStash signature }
+        "500": { description: Non-retryable failure }
+        "502": { description: Retryable failure - QStash will redeliver }
+
+  /api/internal/reconciliation:
+    get:
+      tags: [Internal]
+      summary: Vercel Cron fallback trigger (Authorization Bearer CRON_SECRET)
+      security: []
+      responses:
+        "200": { description: Reconciliation summary }
+        "401": { description: Unauthorized }
+    post:
+      tags: [Internal]
+      summary: QStash Schedule trigger (QStash-signed, primary trigger)
+      security: []
+      responses:
+        "200": { description: Reconciliation summary }
+        "401": { description: Invalid QStash signature }
+
+  /api/internal/dead-letter:
+    post:
+      tags: [Internal]
+      summary: QStash failureCallback target - records a lead as dead-lettered
+      security: []
+      responses:
+        "200":
+          description: Always recorded (acknowledges receipt)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { recorded: { type: boolean } }
+        "401": { description: Invalid QStash signature }
+
+  # ---------------------------------------------------------------- System --
+  /api/health:
+    get:
+      tags: [System]
+      summary: Liveness/readiness - checks Postgres, Redis, and QStash
+      security: []
+      responses:
+        "200":
+          description: All dependencies reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [healthy] }
+                  checks:
+                    type: object
+                    properties:
+                      database: { type: boolean }
+                      redis: { type: boolean }
+                      queue: { type: boolean }
+                  timestamp: { type: string, format: date-time }
+        "503": { description: One or more dependencies unreachable ("status":"degraded") }
+
+  /api/monitoring/metrics:
+    get:
+      tags: [System]
+      summary: Dashboard counts for the current company (requires dashboard.view)
+      parameters:
+        - name: hours
+          in: query
+          schema: { type: integer, default: 24 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  windowHours: { type: integer }
+                  received: { type: integer }
+                  processed: { type: integer }
+                  pending: { type: integer }
+                  failed: { type: integer }
+                  duplicate: { type: integer }
+                  deadLettered: { type: integer }
+                  retries: { type: integer }
+                  avgProcessingSeconds: { type: number }
+                  lastReconciliationAt: { type: string, format: date-time, nullable: true }
+                  lastReconciliationRecovered: { type: integer }
+                  generatedAt: { type: string, format: date-time }
+        "401": { description: Not authenticated, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Missing dashboard.view, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/permissions:
+    get:
+      tags: [System]
+      summary: Fixed permission catalog (powers the role editor UI)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  permissions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { $ref: "#/components/schemas/PermissionCode" }
+                        label: { type: string }
+                        category: { type: string }
+        "401": { description: Not authenticated, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
