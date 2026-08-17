@@ -22,7 +22,7 @@
 #   bash scripts/bootstrap.sh --all            # everything above
 #
 # Windows: run this from Git Bash or WSL. Without either, run the
-# equivalent steps by hand: `node scripts/generate-secrets.js`,
+# equivalent steps by hand: `node scripts/generate-secrets.cjs`,
 # `npm install`, `npm run db:migrate`, `npm run setup:schedules` all work
 # on plain PowerShell/cmd because they're Node-based, not shell-based - only
 # THIS wrapper script (the "is node even installed" check) needs bash.
@@ -147,7 +147,7 @@ fi
 # placeholders - every other run of this script is a no-op here.
 if grep -q '^AUTH_JWT_SECRET=replace-me' .env 2>/dev/null || grep -q '^ENCRYPTION_KEY=replace-me' .env 2>/dev/null; then
   echo "  Generating AUTH_JWT_SECRET / ENCRYPTION_KEY ..."
-  SECRETS="$(node scripts/generate-secrets.js)"
+  SECRETS="$(node scripts/generate-secrets.cjs)"
   AUTH_SECRET_VALUE="$(echo "$SECRETS" | grep AUTH_JWT_SECRET | cut -d= -f2-)"
   ENC_KEY_VALUE="$(echo "$SECRETS" | grep ENCRYPTION_KEY | cut -d= -f2-)"
   # Portable in-place edit for both GNU and BSD sed.

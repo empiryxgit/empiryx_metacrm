@@ -2,6 +2,7 @@
   "name": "meta-lead-integration",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Meta Lead Ads -> CRM integration. Serverless on Vercel; Postgres (Neon) is the source of truth.",
   "scripts": {
     "dev": "vercel dev",
@@ -13,7 +14,7 @@
     "db:studio": "drizzle-kit studio",
     "setup:schedules": "tsx scripts/setup-schedules.ts",
     "bootstrap": "bash scripts/bootstrap.sh",
-    "gen:secrets": "node scripts/generate-secrets.js"
+    "gen:secrets": "node scripts/generate-secrets.cjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.10.1",
