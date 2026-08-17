@@ -57,6 +57,8 @@
     </div>
   </div>
 
+  <div id="modalRoot"></div>
+
 <script src="/assets/app.js"></script>
 <script>
   let me, roles = [];
@@ -88,7 +90,8 @@
         </td>
         <td><span class="pill ${u.status}">${u.status}</span></td>
         <td>${fmt(u.lastLoginAt)}</td>
-        <td>
+        <td style="white-space:nowrap">
+          <button class="btn secondary sm" data-view="${u.id}">View</button>
           <button class="btn secondary sm" data-toggle="${u.id}" data-status="${u.status === "active" ? "disabled" : "active"}">
             ${u.status === "active" ? "Disable" : "Enable"}
           </button>
@@ -121,7 +124,72 @@
         }
       });
     });
+    rows.querySelectorAll("[data-view]").forEach(btn => {
+      btn.addEventListener("click", () => openUserModal(btn.dataset.view));
+    });
   }
+
+  // -------------------------------------------------------------------
+  // View - fetches one user's full profile plus their company's context
+  // (name, size, industry) from GET /api/admin/users/{id}. Deliberately
+  // shows no campaign data - that lives on its own page.
+  // -------------------------------------------------------------------
+
+  function closeModal(){
+    document.getElementById("modalRoot").innerHTML = "";
+  }
+
+  function detailRow(label, value){
+    return `<div class="detail-row"><span class="detail-label">${App.escapeHtml(label)}</span><span class="detail-value">${value}</span></div>`;
+  }
+
+  async function openUserModal(userId){
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="userModalOverlay">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <div><h2>User details</h2></div>
+            <button class="modal-close" type="button" id="userModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body" id="userModalBody">
+            <p class="state-desc">Loading…</p>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("userModalClose").addEventListener("click", closeModal);
+    document.getElementById("userModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "userModalOverlay") closeModal();
+    });
+
+    const body = document.getElementById("userModalBody");
+    try {
+      const { user, role, company } = await App.apiJson(`/api/admin/users/${userId}`);
+      body.innerHTML = `
+        <div class="lead-identity" style="margin-bottom:14px">
+          <span class="avatar">${App.escapeHtml(App.initials(user.fullName))}</span>
+          <div>
+            <div class="lead-name">${App.escapeHtml(user.fullName)}</div>
+            <div class="hint" style="margin:0">${App.escapeHtml(user.email)}</div>
+          </div>
+        </div>
+        ${detailRow("Role", App.escapeHtml(role?.name || "—"))}
+        ${detailRow("Status", `<span class="pill ${user.status}">${App.escapeHtml(user.status)}</span>`)}
+        ${detailRow("Last active", fmt(user.lastLoginAt))}
+        ${detailRow("User since", fmt(user.createdAt))}
+        <div style="height:1px; background:var(--border); margin:14px 0"></div>
+        <p class="section-title" style="margin-top:0; font-size:13px">Company</p>
+        ${detailRow("Company", App.escapeHtml(company?.name || "—"))}
+        ${detailRow("Company size", App.escapeHtml(company?.companySize || "—"))}
+        ${detailRow("Industry", App.escapeHtml(company?.industry || "—"))}
+      `;
+    } catch (err) {
+      body.innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Unable to load user details.")}</div>`;
+    }
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+  });
 
   document.getElementById("createForm").addEventListener("submit", async (e) => {
     e.preventDefault();

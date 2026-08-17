@@ -13,6 +13,7 @@ import {
   countOtherActiveUsersWithRole,
   createUser,
   emailExists,
+  getCompanyById,
   getRoleById,
   getUserById,
   listUsers,
@@ -20,6 +21,7 @@ import {
 } from "../../../src/infrastructure/db/repositories/tenancy";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
+import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
 
 function getUserId(req: VercelRequest): string | undefined {
   const value = req.query.userId;
@@ -93,7 +95,49 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
   res.status(405).json({ error: "Method not allowed" });
 }
 
+// "View" on the Users page - a single user's full profile plus their
+// company's context (name, size, industry). Deliberately does NOT include
+// campaigns or any other company-scoped data - this is a user-detail view,
+// not a company-detail view, so it stays limited to what's needed there.
+async function handleView(req: VercelRequest, res: VercelResponse, userId: string) {
+  const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
+  if (!auth) return;
+
+  const [user, company] = await Promise.all([getUserById(userId), getCompanyById(auth.companyId)]);
+  if (!user || user.companyId !== auth.companyId) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+
+  const role = await getRoleById(auth.companyId, user.roleId);
+  const template = company ? getIndustryTemplate(company.industryTemplate) : null;
+
+  res.status(200).json({
+    user: {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      status: user.status,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      mustChangePassword: user.mustChangePassword,
+    },
+    role: role ? { id: role.id, name: role.name } : null,
+    company: company
+      ? {
+          name: company.name,
+          companySize: company.companySize,
+          industry: template?.name ?? null,
+        }
+      : null,
+  });
+}
+
 async function handleOne(req: VercelRequest, res: VercelResponse, userId: string) {
+  if (req.method === "GET") {
+    return handleView(req, res, userId);
+  }
+
   const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
   if (!auth) return;
 
