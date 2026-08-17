@@ -8,11 +8,16 @@
 </head>
 <body>
   <div class="auth-shell">
-    <div class="auth-card">
-      <h1>Create your account</h1>
-      <p class="sub">Sets up your company workspace — you'll be the Owner.</p>
+    <div class="auth-card" style="width:440px">
+      <h1 id="stepTitle">Create your account</h1>
+      <p class="sub" id="stepSub">Sets up your company workspace — you'll be the Owner.</p>
+      <div class="steps">
+        <div class="step active" id="s1"></div>
+        <div class="step" id="s2"></div>
+      </div>
       <div id="banner"></div>
-      <form id="form">
+
+      <form id="step1">
         <label for="companyName">Company name</label>
         <input id="companyName" required autocomplete="organization" />
 
@@ -26,6 +31,10 @@
         <input id="password" type="password" required minlength="10" autocomplete="new-password" />
         <div class="hint">At least 10 characters.</div>
 
+        <button class="btn full" type="submit">Continue</button>
+      </form>
+
+      <form id="step2" style="display:none">
         <label>What industry does your business operate in?</label>
         <div class="choice-group" role="radiogroup" aria-label="Industry">
           <label class="choice-card">
@@ -41,19 +50,49 @@
         </div>
         <div class="hint">This sets up your CRM's pipeline and fields — you can't change it later without contacting support.</div>
 
-        <button class="btn full" type="submit" id="submitBtn">Create account</button>
+        <div style="display:flex; gap:10px; margin-top:14px">
+          <button class="btn secondary" type="button" id="backBtn">Back</button>
+          <button class="btn full" type="submit" id="submitBtn">Create account</button>
+        </div>
       </form>
+
       <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>
     </div>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
-  const form = document.getElementById("form");
+  const step1 = document.getElementById("step1");
+  const step2 = document.getElementById("step2");
   const banner = document.getElementById("banner");
   const submitBtn = document.getElementById("submitBtn");
 
-  form.addEventListener("submit", async (e) => {
+  // Step 1 - account basics. Purely a client-side transition: nothing is
+  // sent to the server until step 2 submits, so a user who abandons
+  // partway through never leaves a half-created account behind.
+  step1.addEventListener("submit", (e) => {
+    e.preventDefault();
+    document.getElementById("s1").classList.add("done");
+    document.getElementById("s2").classList.add("active");
+    document.getElementById("stepTitle").textContent = "Choose your industry";
+    document.getElementById("stepSub").textContent = "This shapes your CRM's pipeline stages and fields — pick the closest match.";
+    step1.style.display = "none";
+    step2.style.display = "block";
+  });
+
+  document.getElementById("backBtn").addEventListener("click", () => {
+    document.getElementById("s2").classList.remove("active");
+    document.getElementById("s1").classList.remove("done");
+    document.getElementById("stepTitle").textContent = "Create your account";
+    document.getElementById("stepSub").textContent = "Sets up your company workspace — you'll be the Owner.";
+    step2.style.display = "none";
+    step1.style.display = "block";
+  });
+
+  // Step 2 - industry selection, then the actual registration call. All
+  // step 1 fields are still in the DOM (just hidden), so their values are
+  // read here rather than being carried in JS state.
+  step2.addEventListener("submit", async (e) => {
     e.preventDefault();
     banner.innerHTML = "";
     submitBtn.disabled = true;

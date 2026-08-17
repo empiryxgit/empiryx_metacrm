@@ -19,8 +19,6 @@
       <div id="banner"></div>
 
       <form id="step1">
-        <label for="industry">Industry</label>
-        <input id="industry" placeholder="e.g. Real Estate" />
         <label for="companySize">Company size</label>
         <select id="companySize">
           <option value="1-10">1–10 people</option>
@@ -71,7 +69,6 @@
       await App.apiJson("/api/onboarding/company", {
         method: "POST",
         body: {
-          industry: document.getElementById("industry").value.trim(),
           companySize: document.getElementById("companySize").value,
           timezone: document.getElementById("timezone").value.trim(),
         },
