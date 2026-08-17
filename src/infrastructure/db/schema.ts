@@ -33,7 +33,20 @@ export const companies = crm.table("companies", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   slug: text("slug").notNull(),
+  // Free-text business description collected during onboarding (step 1,
+  // e.g. "Real Estate Broker") - informational only, unrelated to the
+  // structured CRM template below. Left untouched by the dynamic-pipeline
+  // work.
   industry: text("industry"),
+  // The CRM template key selected at registration (see
+  // src/domain/industryTemplates.ts for the fixed catalog - "real_estate" |
+  // "solar" today). Drives which pipeline stages, lead/customer fields and
+  // list columns the CRM renders for this tenant. Deliberately a separate
+  // column from `industry` above - that one is a free-text description,
+  // this one is a controlled key the template system indexes by. Never
+  // branch on this value directly outside the template lookup - always go
+  // through getIndustryTemplate().
+  industryTemplate: text("industry_template").notNull().default("real_estate"),
   companySize: text("company_size"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
@@ -190,9 +203,11 @@ export const leads = crm.table(
     // fires or a QStash message is redelivered.
     metaLeadId: text("meta_lead_id").notNull(),
 
-    platform: text("platform").notNull(),
-    pageId: text("page_id").notNull(),
-    formId: text("form_id").notNull(),
+    // Meta-specific - null for manually-created customers (see leadType
+    // below), which have no page/form/platform to speak of.
+    platform: text("platform"),
+    pageId: text("page_id"),
+    formId: text("form_id"),
     formName: text("form_name"),
 
     adId: text("ad_id"),
@@ -208,11 +223,35 @@ export const leads = crm.table(
 
     formResponses: jsonb("form_responses").notNull().default(sql`'[]'::jsonb`),
 
+    // Where this record originated - preserved for the life of the record,
+    // even after a digital lead is worked into a customer. See
+    // src/domain/industryTemplates.ts LEAD_SOURCES for the fixed catalog
+    // ("meta_lead_ads" | "facebook" | "instagram" | "website" | "referral" |
+    // "phone" | "walk_in" | "whatsapp" | "manual" | "other").
+    source: text("source").notNull().default("meta_lead_ads"),
+    // DIGITAL_LEAD - arrived automatically via a connected campaign.
+    // MANUAL_CUSTOMER - entered directly by a salesperson (see "Add
+    // customer" / "Not interested -> add customer to CRM"). Distinguishes
+    // origin independently of `source` above so the UI never has to guess.
+    leadType: text("lead_type").notNull().default("digital_lead"),
+    // Assigned salesperson - null until explicitly assigned.
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    nextFollowUpAt: timestamp("next_follow_up_at", { withTimezone: true }),
+    notes: text("notes"),
+    // Industry-template-defined field values, keyed by field.key (e.g.
+    // {"budget": "7500000", "location": "Bandra"} for Real Estate, or
+    // {"system_capacity": "5", "monthly_bill": "4500"} for Solar). The UI
+    // renders these dynamically from the company's active template -
+    // nothing here is hard-coded per industry.
+    customFields: jsonb("custom_fields").notNull().default(sql`'{}'::jsonb`),
+
     metaCreatedAt: timestamp("meta_created_at", { withTimezone: true }).notNull(),
     status: text("status").notNull().default("pending"),
 
-    // CRM pipeline stage - independent of ingestion `status` above.
-    // new -> contacted -> qualified -> site_visit -> won | lost
+    // CRM pipeline stage key - independent of ingestion `status` above, and
+    // validated at the application layer against the company's active
+    // industry template (see src/domain/industryTemplates.ts) rather than a
+    // fixed enum, since valid stages differ per industry.
     pipelineStage: text("pipeline_stage").notNull().default("new"),
 
     retryCount: integer("retry_count").notNull().default(0),
@@ -220,7 +259,9 @@ export const leads = crm.table(
     processedAt: timestamp("processed_at", { withTimezone: true }),
     recoveredByReconciliation: boolean("recovered_by_reconciliation").notNull().default(false),
 
-    rawEventId: uuid("raw_event_id").notNull(),
+    // Null for manually-created customers - there is no raw Meta event
+    // behind them.
+    rawEventId: uuid("raw_event_id"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),
@@ -233,6 +274,8 @@ export const leads = crm.table(
     createdAtIdx: index("ix_leads_created_at").on(t.createdAt),
     crmCampaignIdx: index("ix_leads_crm_campaign_id").on(t.crmCampaignId),
     pipelineStageIdx: index("ix_leads_pipeline_stage").on(t.pipelineStage),
+    leadTypeIdx: index("ix_leads_lead_type").on(t.leadType),
+    ownerIdx: index("ix_leads_owner_id").on(t.ownerId),
   }),
 );
 

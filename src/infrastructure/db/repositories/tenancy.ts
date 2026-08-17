@@ -6,7 +6,7 @@ import { ALL_PERMISSIONS } from "../../../domain/permissions";
 
 // ---- Companies --------------------------------------------------------
 
-export async function createCompany(input: { name: string; slug: string }) {
+export async function createCompany(input: { name: string; slug: string; industryTemplate: string }) {
   const db = await getDb();
   const rows = await db.insert(companies).values(input).returning();
   return firstOrThrow(rows);

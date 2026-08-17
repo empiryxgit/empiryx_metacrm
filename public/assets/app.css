@@ -393,8 +393,25 @@ body table:not(.table-wrap table){ border:1px solid var(--border); border-radius
    Kanban / pipeline board
 ============================================================================= */
 .board-toolbar{ display:flex; align-items:flex-end; gap:var(--space-4); flex-wrap:wrap; margin-bottom:var(--space-4); }
-.board-toolbar .field-inline{ max-width:320px; flex:1 1 240px; }
+.board-toolbar .field-inline{ max-width:280px; flex:1 1 220px; }
 .board-toolbar label{ margin:0 0 6px; }
+.board-toolbar-right{ display:flex; align-items:flex-end; gap:var(--space-3); margin-left:auto; }
+
+.segmented{ display:inline-flex; padding:3px; background:var(--surface-sunken); border-radius:var(--radius-md); gap:2px; }
+.segmented button{
+  border:none; background:none; cursor:pointer; font-family:inherit;
+  font-size:12.5px; font-weight:600; color:var(--text-secondary);
+  padding:6px 13px; border-radius:calc(var(--radius-md) - 2px);
+}
+.segmented button.active{ background:var(--surface); color:var(--text-primary); box-shadow:var(--shadow-xs); }
+
+.mobile-stage-select{ display:none; margin-bottom:var(--space-4); }
+.mobile-stage-select select{ font-weight:600; }
+
+.lead-card-meta-row{ display:flex; align-items:center; justify-content:space-between; margin-top:8px; gap:6px; }
+.lead-card .avatar-sm{ width:20px; height:20px; font-size:9.5px; }
+.lead-card .followup{ font-size:11px; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lead-card .context-line{ margin-top:5px; font-size:11.5px; color:var(--text-secondary); font-weight:500; }
 .board{ display:grid; grid-template-columns:repeat(6, minmax(200px, 1fr)); gap:10px; overflow-x:auto; padding-bottom:4px; }
 .col{ background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius-lg); min-height:220px; display:flex; flex-direction:column; }
 .col-head{ padding:11px 13px; border-bottom:1px solid var(--border); font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); display:flex; justify-content:space-between; align-items:center; }
@@ -440,6 +457,26 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
 .steps .step.done, .steps .step.active{ background:var(--brand-primary); }
 
 /* =============================================================================
+   Choice cards — radio/checkbox groups presented as selectable cards
+   (e.g. industry picker at registration).
+============================================================================= */
+.choice-group{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 4px; }
+.choice-card{
+  position:relative; display:block; cursor:pointer;
+  border:1px solid var(--border-strong); border-radius:var(--radius-md);
+  padding:12px 14px 13px; background:var(--surface);
+}
+.choice-card input{ position:absolute; top:12px; right:12px; width:15px; height:15px; margin:0; accent-color:var(--brand-primary); }
+.choice-card-title{ display:block; font-size:13.5px; font-weight:700; color:var(--text-primary); padding-right:20px; }
+.choice-card-desc{ display:block; margin-top:4px; font-size:12px; color:var(--text-muted); line-height:1.5; }
+.choice-card:has(input:checked){ border-color:var(--brand-primary); background:var(--brand-primary-soft); }
+.choice-card:has(input:focus-visible){ outline:2px solid var(--brand-primary); outline-offset:2px; }
+
+@media (max-width:480px){
+  .choice-group{ grid-template-columns:1fr; }
+}
+
+/* =============================================================================
    Responsive
 ============================================================================= */
 @media (max-width:1080px){
@@ -455,7 +492,8 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
 @media (max-width:768px){
   .wrap{ padding:var(--space-6) var(--space-4) var(--space-10); }
   .grid-2{ grid-template-columns:1fr; }
-  .board{ grid-template-columns:repeat(6, minmax(220px, 1fr)); }
+  .board{ display:none; }
+  .mobile-stage-select{ display:block; }
 }
 
 @media (max-width:600px){

@@ -62,6 +62,7 @@ interface RegisterBody {
   fullName: string;
   email: string;
   password: string;
+  industry?: string;
 }
 
 async function handleRegister(req: VercelRequest, res: VercelResponse) {
@@ -217,6 +218,7 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
       id: company.id,
       name: company.name,
       slug: company.slug,
+      industry: company.industryTemplate,
       onboardingCompleted: Boolean(company.onboardingCompletedAt),
     },
     role: role ? { id: role.id, name: role.name, permissions: role.permissions } : null,

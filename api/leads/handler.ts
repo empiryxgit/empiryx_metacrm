@@ -12,7 +12,9 @@ import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
-import { PERMISSIONS, PIPELINE_STAGE_KEYS } from "../../src/domain/permissions";
+import { PERMISSIONS } from "../../src/domain/permissions";
+import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
+import { getIndustryTemplate, isValidStageKey } from "../../src/domain/industryTemplates";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -82,8 +84,15 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
 
   const { stage } = (req.body ?? {}) as { stage?: string };
 
-  if (!stage || !PIPELINE_STAGE_KEYS.includes(stage as never)) {
-    res.status(400).json({ error: `stage must be one of: ${PIPELINE_STAGE_KEYS.join(", ")}` });
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(401).json({ error: "Account no longer exists." });
+    return;
+  }
+  const template = getIndustryTemplate(company.industryTemplate);
+
+  if (!stage || !isValidStageKey(template, stage)) {
+    res.status(400).json({ error: `stage must be one of: ${template.stages.map((s) => s.key).join(", ")}` });
     return;
   }
 

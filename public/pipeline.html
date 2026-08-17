@@ -11,11 +11,17 @@
 </head>
 <body>
   <nav class="topnav" id="topnav"></nav>
-  <div class="wrap" style="max-width:1240px">
+  <div class="wrap" style="max-width:1280px">
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">Pipeline</h1>
-        <p class="page-sub">Drag a lead card to move it between stages.</p>
+        <p class="page-sub">Manage leads and customers from first contact to conversion.</p>
+      </div>
+      <div class="page-head-actions">
+        <div class="segmented" id="viewToggle" role="tablist" aria-label="Pipeline view">
+          <button type="button" data-view="board" role="tab">Board</button>
+          <button type="button" data-view="list" role="tab">List</button>
+        </div>
       </div>
     </div>
 
@@ -24,68 +30,120 @@
         <label for="campaignSelect">Campaign</label>
         <select id="campaignSelect"></select>
       </div>
+      <div class="board-toolbar-right">
+        <div class="field-inline" style="max-width:260px">
+          <label for="searchInput">Search</label>
+          <input id="searchInput" type="text" placeholder="Search leads or customers…" />
+        </div>
+      </div>
     </div>
 
     <div id="banner"></div>
-    <div class="board" id="board"></div>
+
+    <div id="emptyPipeline" style="display:none"></div>
+
+    <div id="pipelineContent" style="display:none">
+      <div class="mobile-stage-select">
+        <label for="mobileStage">Stage</label>
+        <select id="mobileStage"></select>
+        <div id="mobileBoard" style="margin-top:10px; display:flex; flex-direction:column; gap:8px"></div>
+      </div>
+
+      <div class="board" id="board"></div>
+
+      <div class="table-wrap" id="listWrap" style="display:none">
+        <table id="listTable">
+          <thead id="listHead"></thead>
+          <tbody id="listBody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
   let me, canManage;
-  const STAGE_LABELS = { new: "New", contacted: "Contacted", qualified: "Qualified", site_visit: "Site Visit", won: "Won", lost: "Lost" };
+  let template = null, stages = [], sources = [], owners = [];
+  let allRows = [];
+  let campaignName = "";
+  let viewMode = localStorage.getItem("setu_pipeline_view") === "list" ? "list" : "board";
 
-  async function loadCampaigns() {
-    const select = document.getElementById("campaignSelect");
-    let campaigns;
-    try {
-      ({ campaigns } = await App.apiJson("/api/campaigns"));
-    } catch (err) {
-      select.innerHTML = "<option>Unable to load campaigns</option>";
-      document.getElementById("banner").innerHTML = `<div class="banner error">We couldn't load your campaigns. Refresh to try again.</div>`;
-      return null;
+  const ownerById = () => Object.fromEntries(owners.map(o => [o.id, o.fullName]));
+  const sourceLabel = (key) => sources.find(s => s.key === key)?.label || key || "—";
+  const stageLabel = (key) => stages.find(s => s.key === key)?.label || key;
+
+  function fmtDate(iso){
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function fmtDateTime(iso){
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  function fmtFieldValue(field, value){
+    if (value === undefined || value === null || value === "") return "—";
+    if (field.type === "currency") {
+      const n = Number(value);
+      return Number.isFinite(n) ? "₹" + n.toLocaleString("en-IN") : App.escapeHtml(String(value));
     }
-    if (!campaigns.length) {
-      select.innerHTML = "<option>No campaigns yet</option>";
-      document.getElementById("board").innerHTML = `
-        <div class="card state-block" style="grid-column:1/-1">
-          <p class="state-title">No campaigns yet</p>
-          <p class="state-desc">Create a campaign to start building a pipeline of leads.</p>
-          <div class="state-actions"><a href="/campaigns.html" class="btn secondary" style="display:inline-flex">Go to campaigns</a></div>
-        </div>`;
-      return null;
+    if (field.type === "number") {
+      return App.escapeHtml(String(value)) + (field.unit ? " " + field.unit : "");
     }
-    select.innerHTML = campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
-    return campaigns[0].id;
+    return App.escapeHtml(String(value));
   }
 
-  function leadCard(lead) {
-    const name = lead.fullName || lead.metaLeadId;
-    const contact = lead.email || lead.phoneNumber || "";
-    return `<div class="lead-card" draggable="${canManage}" data-lead-id="${lead.id}">
+  function resolvedStage(row){
+    return stages.some(s => s.key === row.pipelineStage) ? row.pipelineStage : (stages.find(s => s.isInitial)?.key || stages[0]?.key);
+  }
+
+  function applyFilters(rows){
+    const q = document.getElementById("searchInput").value.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(r =>
+      (r.fullName || "").toLowerCase().includes(q) ||
+      (r.email || "").toLowerCase().includes(q) ||
+      (r.phoneNumber || "").toLowerCase().includes(q) ||
+      (r.metaLeadId || "").toLowerCase().includes(q)
+    );
+  }
+
+  function cardContextLine(row){
+    const cardField = template.fields.find(f => f.showOnCard);
+    if (!cardField) return "";
+    const value = row.customFields && row.customFields[cardField.key];
+    if (value === undefined || value === null || value === "") return "";
+    return `<div class="context-line">${App.escapeHtml(cardField.label)}: ${fmtFieldValue(cardField, value)}</div>`;
+  }
+
+  function leadCard(row){
+    const owners_ = ownerById();
+    const name = row.fullName || "Unnamed lead";
+    const contact = row.email || row.phoneNumber || "";
+    const ownerName = row.ownerId ? owners_[row.ownerId] : null;
+    return `<div class="lead-card" draggable="${canManage}" data-lead-id="${row.id}">
       <div class="name">${App.escapeHtml(name)}</div>
       ${contact ? `<div class="meta">${App.escapeHtml(contact)}</div>` : ""}
-      ${lead.campaignName ? `<span class="source">${App.escapeHtml(lead.campaignName)}</span>` : ""}
+      <span class="source">${App.escapeHtml(sourceLabel(row.source))}</span>
+      ${cardContextLine(row)}
+      <div class="lead-card-meta-row">
+        ${ownerName ? `<span class="avatar avatar-sm" title="${App.escapeHtml(ownerName)}">${App.escapeHtml(App.initials(ownerName))}</span>` : "<span></span>"}
+        ${row.nextFollowUpAt ? `<span class="followup">Follow-up ${fmtDate(row.nextFollowUpAt)}</span>` : ""}
+      </div>
     </div>`;
   }
 
-  function renderBoard(data) {
-    const board = document.getElementById("board");
-    board.innerHTML = data.stages.map(stage => `
-      <div class="col" data-stage="${stage}">
-        <div class="col-head"><span>${STAGE_LABELS[stage]}</span><span>${data.board[stage].length}</span></div>
-        <div class="col-body" data-stage="${stage}">${data.board[stage].length ? data.board[stage].map(leadCard).join("") : '<div class="empty" style="padding:18px 8px">No leads</div>'}</div>
-      </div>
-    `).join("");
+  function groupByStage(rows){
+    const groups = Object.fromEntries(stages.map(s => [s.key, []]));
+    rows.forEach(r => { groups[resolvedStage(r)].push(r); });
+    return groups;
+  }
 
+  function wireDragDrop(root){
     if (!canManage) return;
-
-    board.querySelectorAll(".lead-card").forEach(card => {
-      card.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("text/plain", card.dataset.leadId);
-      });
+    root.querySelectorAll(".lead-card").forEach(card => {
+      card.addEventListener("dragstart", (e) => e.dataTransfer.setData("text/plain", card.dataset.leadId));
     });
-    board.querySelectorAll(".col-body").forEach(col => {
+    root.querySelectorAll(".col-body, .mobile-drop").forEach(col => {
       col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("dragover"); });
       col.addEventListener("dragleave", () => col.classList.remove("dragover"));
       col.addEventListener("drop", async (e) => {
@@ -103,15 +161,124 @@
     });
   }
 
-  async function load() {
-    const campaignId = document.getElementById("campaignSelect").value;
-    if (!campaignId) return;
+  function renderBoard(rows){
+    const groups = groupByStage(rows);
+    const board = document.getElementById("board");
+    board.innerHTML = stages.map(s => `
+      <div class="col" data-stage="${s.key}">
+        <div class="col-head"><span>${App.escapeHtml(s.label.toUpperCase())}</span><span>${groups[s.key].length}</span></div>
+        <div class="col-body" data-stage="${s.key}">${groups[s.key].length ? groups[s.key].map(leadCard).join("") : '<div class="empty" style="padding:16px 8px; font-size:12px">No leads in this stage</div>'}</div>
+      </div>
+    `).join("");
+    wireDragDrop(board);
+
+    // Mobile: single-stage selector + card list, fed from the same groups.
+    const mobileSelect = document.getElementById("mobileStage");
+    const prevValue = mobileSelect.value;
+    mobileSelect.innerHTML = stages.map(s => `<option value="${s.key}">${App.escapeHtml(s.label)} (${groups[s.key].length})</option>`).join("");
+    if (prevValue && stages.some(s => s.key === prevValue)) mobileSelect.value = prevValue;
+    renderMobileStage(groups);
+  }
+
+  function renderMobileStage(groups){
+    const key = document.getElementById("mobileStage").value || stages[0]?.key;
+    const cards = groups[key] || [];
+    const box = document.getElementById("mobileBoard");
+    box.innerHTML = `<div class="mobile-drop" data-stage="${key}" style="min-height:60px; display:flex; flex-direction:column; gap:8px">
+      ${cards.length ? cards.map(leadCard).join("") : '<div class="empty">No leads in this stage</div>'}
+    </div>`;
+    wireDragDrop(box);
+  }
+
+  function renderList(rows){
+    const industryFields = template.fields;
+    document.getElementById("listHead").innerHTML = `<tr>
+      <th>Lead</th><th>Phone</th><th>Source</th><th>Campaign</th>
+      ${industryFields.map(f => `<th>${App.escapeHtml(f.label)}</th>`).join("")}
+      <th>Stage</th><th>Owner</th><th>Next follow-up</th><th>Created</th>
+    </tr>`;
+    const owners_ = ownerById();
+    const sorted = [...rows].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    document.getElementById("listBody").innerHTML = sorted.length ? sorted.map(r => `
+      <tr>
+        <td><div class="lead-identity"><div class="lead-name">${App.escapeHtml(r.fullName || "Unnamed lead")}</div>${r.email ? `<div class="lead-meta-id">${App.escapeHtml(r.email)}</div>` : ""}</div></td>
+        <td>${App.escapeHtml(r.phoneNumber || "—")}</td>
+        <td>${App.escapeHtml(sourceLabel(r.source))}</td>
+        <td>${App.escapeHtml(r.campaignName || "—")}</td>
+        ${industryFields.map(f => `<td>${fmtFieldValue(f, r.customFields && r.customFields[f.key])}</td>`).join("")}
+        <td><span class="pill ${resolvedStage(r) === "won" ? "processed" : resolvedStage(r) === "lost" ? "failed" : "pending"}">${App.escapeHtml(stageLabel(resolvedStage(r)))}</span></td>
+        <td>${owners_[r.ownerId] ? App.escapeHtml(owners_[r.ownerId]) : "—"}</td>
+        <td>${r.nextFollowUpAt ? fmtDate(r.nextFollowUpAt) : "—"}</td>
+        <td>${fmtDateTime(r.createdAt)}</td>
+      </tr>
+    `).join("") : `<tr><td colspan="${8 + industryFields.length}" class="empty">No leads match your search.</td></tr>`;
+  }
+
+  function renderView(){
+    const rows = applyFilters(allRows);
+    document.querySelectorAll("#viewToggle button").forEach(b => b.classList.toggle("active", b.dataset.view === viewMode));
+    document.getElementById("board").style.display = viewMode === "board" ? "grid" : "none";
+    document.querySelector(".mobile-stage-select").style.display = viewMode === "board" ? "" : "none";
+    document.getElementById("listWrap").style.display = viewMode === "list" ? "block" : "none";
+    if (viewMode === "board") renderBoard(rows); else renderList(rows);
+  }
+
+  document.getElementById("viewToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-view]");
+    if (!btn) return;
+    viewMode = btn.dataset.view;
+    localStorage.setItem("setu_pipeline_view", viewMode);
+    renderView();
+  });
+  document.getElementById("mobileStage").addEventListener("change", () => renderView());
+  document.getElementById("searchInput").addEventListener("input", () => renderView());
+
+  async function loadCampaignOptions(){
+    const select = document.getElementById("campaignSelect");
     try {
-      const data = await App.apiJson(`/api/pipeline?campaignId=${campaignId}`);
-      renderBoard(data);
-    } catch (err) {
-      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      const { campaigns } = await App.apiJson("/api/campaigns");
+      select.innerHTML = `<option value="">All campaigns</option>` + campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
+    } catch {
+      select.innerHTML = `<option value="">All campaigns</option>`;
     }
+  }
+
+  async function load(){
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    const campaignId = document.getElementById("campaignSelect").value;
+    let data;
+    try {
+      data = await App.apiJson(`/api/pipeline${campaignId ? `?campaignId=${campaignId}` : ""}`);
+    } catch (err) {
+      document.getElementById("pipelineContent").style.display = "none";
+      document.getElementById("emptyPipeline").style.display = "none";
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      return;
+    }
+
+    template = data.template;
+    stages = data.template.stages;
+    sources = data.sources;
+    owners = data.owners;
+    allRows = Object.values(data.board).flat();
+
+    const totalCount = allRows.length;
+    if (totalCount === 0 && !campaignId) {
+      document.getElementById("pipelineContent").style.display = "none";
+      document.getElementById("emptyPipeline").style.display = "block";
+      document.getElementById("emptyPipeline").innerHTML = `
+        <div class="card state-block">
+          <p class="state-title">Your pipeline is ready</p>
+          <p class="state-desc">New leads from your campaigns will appear here automatically. Manually adding customers is coming soon.</p>
+          <div class="state-actions"><a href="/campaigns.html" class="btn secondary" style="display:inline-flex">View campaigns</a></div>
+        </div>`;
+      return;
+    }
+
+    document.getElementById("emptyPipeline").style.display = "none";
+    document.getElementById("pipelineContent").style.display = "block";
+    renderView();
   }
 
   (async () => {
@@ -120,10 +287,9 @@
     App.renderNav(me, "/pipeline.html");
     canManage = App.hasPermission(me, "pipeline.manage");
 
-    const firstCampaignId = await loadCampaigns();
-    if (!firstCampaignId) return;
+    await loadCampaignOptions();
     document.getElementById("campaignSelect").addEventListener("change", load);
-    load();
+    await load();
   })();
 </script>
 </body>

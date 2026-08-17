@@ -19,6 +19,7 @@ import {
   REFRESH_TOKEN_TTL_SECONDS,
   signAccessToken,
 } from "../infrastructure/auth/tokens";
+import { INDUSTRY_KEYS, type IndustryKey } from "../domain/industryTemplates";
 
 export class AuthError extends Error {
   constructor(message: string, public readonly status: number = 400) {
@@ -49,6 +50,15 @@ export interface RegisterInput {
   fullName: string;
   email: string;
   password: string;
+  // Which CRM template to provision the company with. Defaults to
+  // "real_estate" for any missing/unrecognized value rather than rejecting
+  // registration outright - this is a product default, not a hard
+  // requirement the user must get exactly right.
+  industry?: string;
+}
+
+function resolveIndustryKey(industry: string | undefined): IndustryKey {
+  return INDUSTRY_KEYS.includes(industry as IndustryKey) ? (industry as IndustryKey) : "real_estate";
 }
 
 /**
@@ -69,13 +79,14 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
 
   const slug = await uniqueSlug(input.companyName);
   const passwordHash = await hashPassword(input.password);
+  const industryTemplate = resolveIndustryKey(input.industry);
 
   // Not wrapped in a single SQL transaction because the Neon HTTP driver
   // does not support multi-statement transactions over `neon-http` - each
   // step is individually idempotent-safe to retry, and a partial failure
   // here (company created, user creation fails) is recoverable manually
   // since it's a rare, low-volume, admin-visible path (see README).
-  const company = await createCompany({ name: input.companyName, slug });
+  const company = await createCompany({ name: input.companyName, slug, industryTemplate });
   const ownerRole = await createOwnerRole(company.id);
   const user = await createUser({
     companyId: company.id,

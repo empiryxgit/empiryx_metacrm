@@ -26,6 +26,21 @@
         <input id="password" type="password" required minlength="10" autocomplete="new-password" />
         <div class="hint">At least 10 characters.</div>
 
+        <label>What industry does your business operate in?</label>
+        <div class="choice-group" role="radiogroup" aria-label="Industry">
+          <label class="choice-card">
+            <input type="radio" name="industry" value="real_estate" checked />
+            <span class="choice-card-title">Real Estate</span>
+            <span class="choice-card-desc">Manage property inquiries, site visits, follow-ups and sales.</span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="industry" value="solar" />
+            <span class="choice-card-title">Solar</span>
+            <span class="choice-card-desc">Manage solar inquiries, site surveys, proposals and installations.</span>
+          </label>
+        </div>
+        <div class="hint">This sets up your CRM's pipeline and fields — you can't change it later without contacting support.</div>
+
         <button class="btn full" type="submit" id="submitBtn">Create account</button>
       </form>
       <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>
@@ -44,6 +59,7 @@
     submitBtn.disabled = true;
     submitBtn.textContent = "Creating…";
     try {
+      const industry = document.querySelector('input[name="industry"]:checked')?.value || "real_estate";
       await App.apiJson("/api/auth/register", {
         method: "POST",
         body: {
@@ -51,6 +67,7 @@
           fullName: document.getElementById("fullName").value.trim(),
           email: document.getElementById("email").value.trim(),
           password: document.getElementById("password").value,
+          industry,
         },
       });
       window.location.href = "/onboarding.html";

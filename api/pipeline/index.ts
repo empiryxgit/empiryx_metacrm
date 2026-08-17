@@ -1,15 +1,21 @@
-// Kanban board data: every lead for a campaign, grouped by pipeline stage.
-// A campaign is required - the pipeline is always viewed one campaign at a
-// time (see public/pipeline.html), matching "inside a campaign" from the
-// product brief.
+// Company-wide pipeline board data: every lead/customer for the company,
+// grouped by pipeline stage according to the company's active industry
+// template (see src/domain/industryTemplates.ts). A campaign is an OPTIONAL
+// filter now, not a required scope - the pipeline is one CRM workspace that
+// blends digital leads (from any/all connected campaigns) and manually
+// added customers, matching the "two sources of customer relationships"
+// product concept. Passing ?campaignId= narrows to a single campaign, same
+// as the previous behaviour, for callers that still want that.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
-import { PERMISSIONS, PIPELINE_STAGE_KEYS, type PipelineStage } from "../../src/domain/permissions";
+import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCampaign } from "../../src/infrastructure/db/repositories/campaigns";
+import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
+import { getIndustryTemplate, resolveStageKey } from "../../src/domain/industryTemplates";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -20,34 +26,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const auth = await requirePermission(req, res, PERMISSIONS.PIPELINE_VIEW);
   if (!auth) return;
 
-  const campaignId = req.query.campaignId as string;
-  if (!campaignId) {
-    res.status(400).json({ error: "campaignId is required." });
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(401).json({ error: "Account no longer exists." });
     return;
   }
+  const template = getIndustryTemplate(company.industryTemplate);
 
-  const campaign = await getCampaign(auth.companyId, campaignId);
-  if (!campaign) {
-    res.status(404).json({ error: "Campaign not found." });
-    return;
+  const campaignId = typeof req.query.campaignId === "string" && req.query.campaignId ? req.query.campaignId : null;
+  let campaign = null;
+  if (campaignId) {
+    campaign = await getCampaign(auth.companyId, campaignId);
+    if (!campaign) {
+      res.status(404).json({ error: "Campaign not found." });
+      return;
+    }
   }
 
   const db = await getDb();
+  const conditions = [eq(leads.companyId, auth.companyId)];
+  if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
+
   const rows = await db
     .select()
     .from(leads)
-    .where(and(eq(leads.companyId, auth.companyId), eq(leads.crmCampaignId, campaignId)))
+    .where(and(...conditions))
     .orderBy(desc(leads.createdAt));
 
-  const board = Object.fromEntries(PIPELINE_STAGE_KEYS.map((k) => [k, [] as typeof rows])) as Record<
-    PipelineStage,
-    typeof rows
-  >;
-  const stageKeySet = new Set<string>(PIPELINE_STAGE_KEYS);
+  const stageKeys = template.stages.map((s) => s.key);
+  const board: Record<string, typeof rows> = Object.fromEntries(stageKeys.map((k) => [k, []]));
   for (const row of rows) {
-    const stage = stageKeySet.has(row.pipelineStage) ? (row.pipelineStage as PipelineStage) : "new";
-    board[stage].push(row);
+    const stage = resolveStageKey(template, row.pipelineStage);
+    (board[stage] ??= []).push(row);
   }
 
-  res.status(200).json({ campaign, stages: PIPELINE_STAGE_KEYS, board });
+  res.status(200).json({
+    template: {
+      key: template.key,
+      name: template.name,
+      pipelineName: template.pipelineName,
+      stages: template.stages,
+      fields: template.fields,
+    },
+    campaign,
+    stages: stageKeys,
+    board,
+  });
 }
