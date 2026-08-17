@@ -33,7 +33,7 @@
     "drizzle-kit": "^0.28.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
-    "vercel": "^37.14.0",
+    "vercel": "^59.0.0",
     "vitest": "^2.1.4"
   },
   "engines": {

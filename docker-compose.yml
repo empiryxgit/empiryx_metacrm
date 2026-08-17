@@ -19,11 +19,11 @@ services:
     container_name: meta-leads-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: neondb_owner
+      POSTGRES_PASSWORD: npg_5VMX6YhFmQtzs
       POSTGRES_DB: meta_leads
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro

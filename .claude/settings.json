@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx vercel *)",
+      "Bash(DATABASE_URL='postgresql://neondb_owner:npg_5VMX6YhFmQtz@ep-aged-sun-ax7gz64d.c-4.us-east-2.aws.neon.tech/meta_leads?sslmode=require&channel_binding=require' npx tsx scripts/migrate.ts)",
+      "Bash(node -e ' *)",
+      "Bash(npm view *)",
+      "Bash(npm config *)",
+      "Read(//c/Users/MITUL/AppData/Local/com.vercel.cli/**)",
+      "Read(//c/Users/MITUL/AppData/Roaming/com.vercel.cli/**)",
+      "Read(//c/Users/MITUL/**)",
+      "Bash(npm install *)",
+      "Bash(node -e \"console.log\\('fg:', JSON.stringify\\(process.env.__VERCEL_DEV_RUNNING\\)\\)\")",
+      "Bash(node -e \"console.log\\('bg:', JSON.stringify\\(process.env.__VERCEL_DEV_RUNNING\\)\\)\")",
+      "Bash(CLAUDECODE= npx vercel dev --local)",
+      "Bash(Select-String -Pattern \"framework|devCommand|Running|spawn|detect\")",
+      "Bash(netstat -ano)",
+      "Read(//c/Users/MITUL/AppData/Local/Temp/**)"
+    ]
+  }
+}
