@@ -1,21 +1,51 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/webhooks/meta/[slug].ts": { "maxDuration": 15 },
-    "api/internal/[[...action]].ts": { "maxDuration": 60 },
-    "api/leads/[[...params]].ts": { "maxDuration": 15 },
+    "api/webhooks/meta/handler.ts": { "maxDuration": 15 },
+    "api/internal/handler.ts": { "maxDuration": 60 },
+    "api/leads/handler.ts": { "maxDuration": 15 },
     "api/pipeline/index.ts": { "maxDuration": 15 },
-    "api/campaigns/[[...params]].ts": { "maxDuration": 15 },
-    "api/admin/roles/[[...params]].ts": { "maxDuration": 15 },
-    "api/admin/users/[[...params]].ts": { "maxDuration": 15 },
-    "api/auth/[[...action]].ts": { "maxDuration": 10 },
-    "api/onboarding/[[...action]].ts": { "maxDuration": 10 },
+    "api/campaigns/handler.ts": { "maxDuration": 15 },
+    "api/admin/roles/handler.ts": { "maxDuration": 15 },
+    "api/admin/users/handler.ts": { "maxDuration": 15 },
+    "api/auth/handler.ts": { "maxDuration": 10 },
+    "api/onboarding/handler.ts": { "maxDuration": 10 },
     "api/system.ts": { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/api/health", "destination": "/api/system?resource=health" },
     { "source": "/api/monitoring/metrics", "destination": "/api/system?resource=metrics" },
     { "source": "/api/permissions", "destination": "/api/system?resource=permissions" },
+
+    { "source": "/api/auth/register", "destination": "/api/auth/handler?action=register" },
+    { "source": "/api/auth/login", "destination": "/api/auth/handler?action=login" },
+    { "source": "/api/auth/refresh", "destination": "/api/auth/handler?action=refresh" },
+    { "source": "/api/auth/logout", "destination": "/api/auth/handler?action=logout" },
+    { "source": "/api/auth/me", "destination": "/api/auth/handler?action=me" },
+    { "source": "/api/auth/change-password", "destination": "/api/auth/handler?action=change-password" },
+
+    { "source": "/api/onboarding/company", "destination": "/api/onboarding/handler?action=company" },
+    { "source": "/api/onboarding/complete", "destination": "/api/onboarding/handler?action=complete" },
+
+    { "source": "/api/internal/process-lead", "destination": "/api/internal/handler?action=process-lead" },
+    { "source": "/api/internal/reconciliation", "destination": "/api/internal/handler?action=reconciliation" },
+    { "source": "/api/internal/dead-letter", "destination": "/api/internal/handler?action=dead-letter" },
+
+    { "source": "/api/leads", "destination": "/api/leads/handler" },
+    { "source": "/api/leads/:leadId/stage", "destination": "/api/leads/handler?leadId=:leadId&sub=stage" },
+
+    { "source": "/api/campaigns", "destination": "/api/campaigns/handler" },
+    { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },
+    { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },
+
+    { "source": "/api/admin/roles", "destination": "/api/admin/roles/handler" },
+    { "source": "/api/admin/roles/:roleId", "destination": "/api/admin/roles/handler?roleId=:roleId" },
+
+    { "source": "/api/admin/users", "destination": "/api/admin/users/handler" },
+    { "source": "/api/admin/users/:userId", "destination": "/api/admin/users/handler?userId=:userId" },
+
+    { "source": "/api/webhooks/meta/:slug", "destination": "/api/webhooks/meta/handler?slug=:slug" },
+
     { "source": "/", "destination": "/login.html" }
   ],
   "crons": [

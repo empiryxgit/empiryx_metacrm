@@ -1,10 +1,17 @@
 // Combines register/login/refresh/logout/me/change-password into ONE Vercel
-// Function via an optional catch-all route, dispatching on the path segment
-// after /api/auth/. Purely a deployment-footprint optimization (Vercel's
-// Hobby plan caps a deployment at 12 Functions total) - every handler below
-// is byte-for-byte the same logic as when each lived in its own file; the
-// public URLs (/api/auth/register, /api/auth/login, ...) are unchanged, so
-// no frontend code needed to move.
+// Function, dispatching on ?action= - see vercel.json's rewrites, which map
+// each public path (/api/auth/register, /api/auth/login, ...) to this file
+// with the action injected as a query param. Purely a deployment-footprint
+// optimization (Vercel's Hobby plan caps a deployment at 12 Functions
+// total) - every handler below is byte-for-byte the same logic as when
+// each lived in its own file; the public URLs are unchanged, so no
+// frontend code needed to move.
+//
+// This used to be a filesystem [[...action]].ts optional catch-all, but
+// that convention was found not to reliably populate req.query in this
+// deployment (path segments never reached the handler), so it was
+// converted to this fixed filename + explicit rewrite pattern instead,
+// matching api/system.ts which already worked this way.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { AuthError, login, logout, refresh, registerCompanyAndOwner } from "../../src/application/auth";

@@ -2,6 +2,11 @@
 // (https://.../api/webhooks/meta/{slug}), because each campaign has its own
 // Meta app/page and therefore its own app secret and verify token (see
 // webhook_configs, configured from the campaign's "Add webhook" screen).
+// Public URL unchanged - vercel.json rewrites /api/webhooks/meta/:slug here
+// with slug injected as a query param (Vercel's filesystem [slug].ts
+// dynamic-segment convention was found not to reliably populate req.query
+// in this deployment, so every dynamic route now uses the same
+// explicit-rewrite pattern api/system.ts already relied on).
 //
 //   GET  -> the one-time subscription verification handshake for THIS
 //           campaign's config.

@@ -1,6 +1,10 @@
 // Combines lead listing (/api/leads) and the pipeline drag-and-drop stage
 // update (/api/leads/{leadId}/stage) into ONE Vercel Function - see
-// api/auth/[[...action]].ts for why. URLs unchanged.
+// api/auth/handler.ts for why. Public URLs unchanged - vercel.json rewrites
+// them here with leadId/sub injected as query params (Vercel's filesystem
+// [[...x]].ts catch-all convention was found not to reliably populate
+// req.query in this deployment, so every dynamic route now uses the same
+// explicit-rewrite pattern api/system.ts already relied on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { and, desc, eq } from "drizzle-orm";
@@ -10,14 +14,15 @@ import { requirePermission } from "../../src/infrastructure/auth/context";
 import { updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
 import { PERMISSIONS, PIPELINE_STAGE_KEYS } from "../../src/domain/permissions";
 
-function getParams(req: VercelRequest): string[] {
-  const segments = req.query.params;
-  if (Array.isArray(segments)) return segments;
-  return typeof segments === "string" ? [segments] : [];
+function getQueryString(req: VercelRequest, key: string): string | undefined {
+  const value = req.query[key];
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" ? value : undefined;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const [leadId, subresource] = getParams(req);
+  const leadId = getQueryString(req, "leadId");
+  const subresource = getQueryString(req, "sub");
 
   if (!leadId) return handleList(req, res);
   if (subresource === "stage") return handleStage(req, res, leadId);

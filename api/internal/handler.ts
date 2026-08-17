@@ -1,10 +1,11 @@
 // Combines the QStash-invoked worker (process-lead), the reconciliation
 // sweep (QStash schedule + Vercel cron fallback), and the QStash
 // failureCallback target (dead-letter) into ONE Vercel Function - see
-// api/auth/[[...action]].ts for why. URLs unchanged: /api/internal/process-lead,
-// /api/internal/reconciliation, /api/internal/dead-letter. All three still
-// need the raw request body for signature verification, so bodyParser stays
-// disabled for the whole function and each handler reads it itself.
+// api/auth/handler.ts for why. URLs unchanged: /api/internal/process-lead,
+// /api/internal/reconciliation, /api/internal/dead-letter - vercel.json
+// rewrites them here with ?action= injected. All three still need the raw
+// request body for signature verification, so bodyParser stays disabled
+// for the whole function and each handler reads it itself.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Receiver } from "@upstash/qstash";

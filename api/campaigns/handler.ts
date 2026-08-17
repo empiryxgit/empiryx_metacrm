@@ -1,7 +1,11 @@
 // Combines list/create (/api/campaigns), read/update
 // (/api/campaigns/{campaignId}), and the "add webhook" screen
 // (/api/campaigns/{campaignId}/webhook) into ONE Vercel Function - see
-// api/auth/[[...action]].ts for why. URLs unchanged.
+// api/auth/handler.ts for why. Public URLs unchanged - vercel.json rewrites
+// them here with campaignId/sub injected as query params (Vercel's
+// filesystem [[...x]].ts catch-all convention was found not to reliably
+// populate req.query in this deployment, so every dynamic route now uses
+// the same explicit-rewrite pattern api/system.ts already relied on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
@@ -15,10 +19,10 @@ import {
 } from "../../src/infrastructure/db/repositories/campaigns";
 import { PERMISSIONS } from "../../src/domain/permissions";
 
-function getParams(req: VercelRequest): string[] {
-  const segments = req.query.params;
-  if (Array.isArray(segments)) return segments;
-  return typeof segments === "string" ? [segments] : [];
+function getQueryString(req: VercelRequest, key: string): string | undefined {
+  const value = req.query[key];
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" ? value : undefined;
 }
 
 function getBaseUrl(req: VercelRequest): string {
@@ -28,7 +32,8 @@ function getBaseUrl(req: VercelRequest): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const [campaignId, subresource] = getParams(req);
+  const campaignId = getQueryString(req, "campaignId");
+  const subresource = getQueryString(req, "sub");
 
   if (!campaignId) return handleCollection(req, res);
   if (!subresource) return handleOne(req, res, campaignId);

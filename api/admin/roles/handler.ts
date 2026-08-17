@@ -1,6 +1,11 @@
 // Combines list/create (/api/admin/roles) and update/delete
 // (/api/admin/roles/{roleId}) into ONE Vercel Function - see
-// api/auth/[[...action]].ts for why. URLs unchanged.
+// api/auth/handler.ts for why. Public URLs unchanged - vercel.json rewrites
+// /api/admin/roles/:roleId here with roleId injected as a query param
+// (Vercel's filesystem [[...x]].ts catch-all convention was found not to
+// reliably populate req.query in this deployment, so every dynamic route
+// now uses the same explicit-rewrite pattern api/system.ts already relied
+// on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../../src/infrastructure/auth/context";
@@ -15,9 +20,9 @@ import {
 import { ALL_PERMISSIONS, PERMISSIONS } from "../../../src/domain/permissions";
 
 function getRoleId(req: VercelRequest): string | undefined {
-  const segments = req.query.params;
-  if (Array.isArray(segments)) return segments[0];
-  return typeof segments === "string" ? segments : undefined;
+  const value = req.query.roleId;
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" ? value : undefined;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

@@ -1,6 +1,7 @@
 // Combines the two onboarding steps (company profile + complete) into ONE
-// Vercel Function - see api/auth/[[...action]].ts for why. URLs unchanged:
-// /api/onboarding/company, /api/onboarding/complete.
+// Vercel Function - see api/auth/handler.ts for why. URLs unchanged:
+// /api/onboarding/company, /api/onboarding/complete - vercel.json rewrites
+// them here with ?action= injected.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
