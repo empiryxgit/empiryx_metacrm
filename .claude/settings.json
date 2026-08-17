@@ -16,7 +16,8 @@
       "Bash(CLAUDECODE= npx vercel dev --local)",
       "Bash(Select-String -Pattern \"framework|devCommand|Running|spawn|detect\")",
       "Bash(netstat -ano)",
-      "Read(//c/Users/MITUL/AppData/Local/Temp/**)"
+      "Read(//c/Users/MITUL/AppData/Local/Temp/**)",
+      "Bash(cd \"d:/Empiryx/Project/meta-lead-CRM/hitarth_git_crm/empiryx_metacrm\" && rm .github/workflows/datadog-synthetics.yml && git status --short 2>&1)"
     ]
   }
 }
