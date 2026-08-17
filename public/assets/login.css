@@ -1,0 +1,373 @@
+/* Setu — login page. Deliberately scoped to this page only (does not touch
+   app.css, which the rest of the app — dashboard, campaigns, pipeline —
+   still relies on). Setu is the CRM's new brand surface; the internal
+   ops-tool styling elsewhere is untouched. */
+
+:root{
+  --navy:#111827;
+  --navy-soft:#182235;
+
+  --orange:#F47B32;
+  --orange-dark:#DC6824;
+  --orange-light:#FFF1E8;
+
+  --white:#FFFFFF;
+
+  --surface:#F7F6F3;
+  --surface-dark:#ECEAE5;
+
+  --text:#171A1F;
+  --text-muted:#6B7280;
+
+  --border:#E2E1DD;
+
+  --danger:#C94141;
+  --danger-soft:#FBEDED;
+
+  --radius:9px;
+  --radius-lg:14px;
+}
+
+*{ box-sizing:border-box; }
+
+html, body{ height:100%; }
+
+body{
+  margin:0;
+  background:var(--surface);
+  color:var(--text);
+  font-family:"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing:antialiased;
+  font-size:15px;
+  line-height:1.5;
+}
+
+.setu-shell{
+  min-height:100vh;
+  display:flex;
+}
+
+/* ---------------------------------------------------------------------
+   Brand panel (desktop only)
+--------------------------------------------------------------------- */
+.brand-panel{
+  flex:0 0 45%;
+  max-width:45%;
+  background:var(--navy);
+  color:var(--white);
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  padding:56px 56px 32px;
+  overflow:hidden;
+}
+
+.brand-panel-inner{
+  display:flex;
+  flex-direction:column;
+  gap:40px;
+  max-width:440px;
+}
+
+.setu-logo{
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  width:fit-content;
+}
+.setu-logo .logo-text{
+  font-size:22px;
+  font-weight:800;
+  letter-spacing:-0.02em;
+  color:var(--white);
+}
+.brand-panel .logo-mark{ flex:none; }
+
+.eyebrow{
+  margin:0 0 14px;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.11em;
+  text-transform:uppercase;
+  color:#9CA7BE;
+}
+
+.hero-heading{
+  margin:0 0 16px;
+  font-size:44px;
+  line-height:1.12;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  color:var(--white);
+}
+.hero-heading .accent{ color:var(--orange); }
+
+.hero-sub{
+  margin:0;
+  font-size:15.5px;
+  line-height:1.6;
+  color:#AEB6C4;
+  max-width:400px;
+}
+
+/* Minimal abstract "bridge" mark - two anchor points joined by a low
+   opacity arc. Not a literal illustration. */
+.bridge-visual{
+  margin-top:8px;
+  opacity:.55;
+}
+.bridge-visual svg{ display:block; width:100%; height:auto; max-width:360px; }
+
+.brand-footer{
+  margin:0;
+  font-size:12.5px;
+  color:#7C879C;
+}
+
+/* ---------------------------------------------------------------------
+   Login panel
+--------------------------------------------------------------------- */
+.login-panel{
+  flex:1 1 55%;
+  background:var(--surface);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:40px 24px;
+}
+
+.login-panel-inner{
+  width:100%;
+  max-width:420px;
+}
+
+.mobile-logo{ display:none; margin-bottom:36px; }
+.mobile-logo .logo-text{ color:var(--navy); }
+
+.login-header{ margin-bottom:28px; }
+.login-header h2{
+  margin:0 0 8px;
+  font-size:26px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  color:var(--text);
+}
+.login-header p{
+  margin:0;
+  font-size:14.5px;
+  color:var(--text-muted);
+  line-height:1.5;
+}
+
+/* ---- Banner (server-side / generic errors) ---- */
+.banner{
+  padding:11px 14px;
+  border-radius:var(--radius);
+  font-size:13.5px;
+  margin-bottom:18px;
+  display:none;
+}
+.banner.error{
+  display:block;
+  background:var(--danger-soft);
+  color:var(--danger);
+  border:1px solid #F0D3D3;
+}
+
+/* ---- Fields ---- */
+.field{ margin-bottom:18px; }
+
+label{
+  display:block;
+  font-size:13px;
+  font-weight:600;
+  color:var(--text);
+  margin-bottom:6px;
+}
+
+input[type="email"],
+input[type="password"],
+input[type="text"]{
+  width:100%;
+  height:50px;
+  padding:0 14px;
+  font-size:14.5px;
+  font-family:inherit;
+  color:var(--text);
+  background:var(--white);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+input::placeholder{ color:#A5A9AF; }
+
+input:focus{
+  outline:none;
+  border-color:var(--orange);
+  box-shadow:0 0 0 3px rgba(244,123,50,.16);
+}
+
+input[aria-invalid="true"]{
+  border-color:var(--danger);
+}
+input[aria-invalid="true"]:focus{
+  box-shadow:0 0 0 3px rgba(201,65,65,.14);
+}
+
+.password-field{ position:relative; }
+.password-field input{ padding-right:46px; }
+
+.toggle-visibility{
+  position:absolute;
+  right:6px;
+  top:50%;
+  transform:translateY(-50%);
+  width:38px;
+  height:38px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:none;
+  border:none;
+  border-radius:7px;
+  color:var(--text-muted);
+  cursor:pointer;
+}
+.toggle-visibility:hover{ background:var(--surface-dark); color:var(--text); }
+.toggle-visibility:focus-visible{ outline:2px solid var(--orange); outline-offset:1px; }
+.toggle-visibility svg{ width:19px; height:19px; }
+.toggle-visibility .icon-eye-off{ display:none; }
+.toggle-visibility[aria-pressed="true"] .icon-eye{ display:none; }
+.toggle-visibility[aria-pressed="true"] .icon-eye-off{ display:block; }
+
+.field-error{
+  margin:6px 0 0;
+  font-size:12.5px;
+  color:var(--danger);
+  display:none;
+}
+.field-error:not(:empty){ display:block; }
+
+/* ---- Options row ---- */
+.login-options{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:2px 0 22px;
+}
+
+.checkbox-label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:13.5px;
+  font-weight:500;
+  color:var(--text);
+  margin:0;
+  cursor:pointer;
+}
+.checkbox-label input{
+  width:16px;
+  height:16px;
+  margin:0;
+  accent-color:var(--orange);
+  cursor:pointer;
+}
+
+.link-forgot{
+  font-size:13.5px;
+  font-weight:600;
+  color:var(--orange);
+  text-decoration:none;
+}
+.link-forgot:hover{ color:var(--orange-dark); text-decoration:underline; }
+.link-forgot:focus-visible{ outline:2px solid var(--orange); outline-offset:2px; border-radius:3px; }
+
+/* ---- Primary CTA ---- */
+.btn-primary{
+  width:100%;
+  height:50px;
+  border:none;
+  border-radius:var(--radius);
+  background:var(--orange);
+  color:var(--white);
+  font-family:inherit;
+  font-size:15px;
+  font-weight:600;
+  letter-spacing:-0.005em;
+  cursor:pointer;
+  transition:background-color .15s ease;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.btn-primary:hover{ background:var(--orange-dark); }
+.btn-primary:active{ background:#C55A1C; }
+.btn-primary:focus-visible{ outline:2px solid var(--navy); outline-offset:2px; }
+.btn-primary:disabled{ background:#F2A67C; cursor:not-allowed; }
+
+/* ---- Divider ---- */
+.divider{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin:26px 0 20px;
+  color:var(--text-muted);
+  font-size:12px;
+}
+.divider::before, .divider::after{
+  content:"";
+  flex:1;
+  height:1px;
+  background:var(--border);
+}
+
+.signup-line{
+  margin:0 0 26px;
+  text-align:center;
+  font-size:14px;
+  color:var(--text-muted);
+}
+.signup-line a{
+  color:var(--orange);
+  font-weight:600;
+  text-decoration:none;
+}
+.signup-line a:hover{ text-decoration:underline; }
+
+/* ---- Security note ---- */
+.security-note{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  margin:0;
+  font-size:12px;
+  color:var(--text-muted);
+}
+.security-note svg{ width:13px; height:13px; flex:none; }
+
+/* ---------------------------------------------------------------------
+   Responsive
+--------------------------------------------------------------------- */
+@media (max-width:900px){
+  .brand-panel{ display:none; }
+  .login-panel{ flex:1 1 100%; }
+  .mobile-logo{ display:inline-flex; }
+}
+
+@media (max-width:480px){
+  .login-panel{ padding:32px 20px; }
+  .login-header h2{ font-size:22px; }
+  .hero-heading{ font-size:36px; }
+  .login-options{ flex-wrap:wrap; gap:10px; }
+}
+
+@media (min-width:1440px){
+  .hero-heading{ font-size:56px; }
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{ transition:none !important; }
+}

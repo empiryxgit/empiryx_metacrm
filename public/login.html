@@ -3,59 +3,238 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sign in — Meta Lead Ads</title>
-<link rel="stylesheet" href="/assets/app.css" />
+<meta name="theme-color" content="#111827" />
+<title>Sign in · Setu</title>
+<meta name="description" content="Sign in to Setu — the CRM that bridges business and customers." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/login.css" />
 </head>
 <body>
-  <div class="auth-shell">
-    <div class="auth-card">
-      <h1>Sign in</h1>
-      <p class="sub">Meta Lead Ads → CRM integration</p>
-      <div id="banner"></div>
-      <form id="form">
-        <label for="email">Email</label>
-        <input id="email" type="email" required autocomplete="email" />
+  <div class="setu-shell">
 
-        <label for="password">Password</label>
-        <input id="password" type="password" required autocomplete="current-password" />
+    <!-- Brand panel — hidden on tablet/mobile, see login.css -->
+    <aside class="brand-panel" aria-hidden="true">
+      <div class="brand-panel-inner">
+        <div class="setu-logo">
+          <svg class="logo-mark" width="26" height="26" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <circle cx="6" cy="20" r="3" fill="#F47B32" />
+            <circle cx="22" cy="20" r="3" fill="#F47B32" />
+            <path d="M6 20 C 6 8, 22 8, 22 20" stroke="#F47B32" stroke-width="2.5" stroke-linecap="round" fill="none" />
+          </svg>
+          <span class="logo-text">Setu</span>
+        </div>
 
-        <button class="btn full" type="submit" id="submitBtn">Sign in</button>
-      </form>
-      <div class="switch">New here? <a href="/register.html">Create a company account</a></div>
-    </div>
+        <div class="brand-copy">
+          <p class="eyebrow">Customer Relationship Management</p>
+          <h1 class="hero-heading">Build better<br /><span class="accent">connections.</span></h1>
+          <p class="hero-sub">Setu brings your business and customers together — from the first lead to the next conversation. Keep every relationship moving forward.</p>
+        </div>
+
+        <div class="bridge-visual">
+          <svg viewBox="0 0 360 90" fill="none">
+            <circle cx="24" cy="70" r="5" fill="#F47B32" />
+            <circle cx="336" cy="70" r="5" fill="#F47B32" />
+            <path d="M24 70 C 24 20, 336 20, 336 70" stroke="#F47B32" stroke-width="1.5" fill="none" />
+            <path d="M24 70 L 24 78 M336 70 L336 78" stroke="#7C879C" stroke-width="1.5" stroke-linecap="round" />
+            <line x1="10" y1="80" x2="350" y2="80" stroke="#3A445A" stroke-width="1.5" />
+          </svg>
+        </div>
+      </div>
+
+      <p class="brand-footer">Setu · A CRM built around meaningful customer relationships</p>
+    </aside>
+
+    <!-- Login panel -->
+    <main class="login-panel">
+      <div class="login-panel-inner">
+
+        <div class="setu-logo mobile-logo">
+          <svg class="logo-mark" width="24" height="24" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <circle cx="6" cy="20" r="3" fill="#F47B32" />
+            <circle cx="22" cy="20" r="3" fill="#F47B32" />
+            <path d="M6 20 C 6 8, 22 8, 22 20" stroke="#F47B32" stroke-width="2.5" stroke-linecap="round" fill="none" />
+          </svg>
+          <span class="logo-text">Setu</span>
+        </div>
+
+        <header class="login-header">
+          <h2>Welcome back</h2>
+          <p>Sign in to continue managing your customers, leads and conversations.</p>
+        </header>
+
+        <div id="banner" class="banner" role="alert" aria-live="assertive"></div>
+
+        <form id="form" novalidate>
+          <div class="field">
+            <label for="email">Work email</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              placeholder="you@company.com"
+              autocomplete="email"
+              inputmode="email"
+              aria-describedby="email-error"
+            />
+            <p class="field-error" id="email-error" role="alert"></p>
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <div class="password-field">
+              <input
+                id="password"
+                name="password"
+                type="password"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                aria-describedby="password-error"
+              />
+              <button type="button" class="toggle-visibility" id="togglePassword" aria-label="Show password" aria-pressed="false">
+                <svg class="icon-eye" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M1.5 10S4.5 4 10 4s8.5 6 8.5 6-3 6-8.5 6-8.5-6-8.5-6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                  <circle cx="10" cy="10" r="2.5" stroke="currentColor" stroke-width="1.5" />
+                </svg>
+                <svg class="icon-eye-off" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M2.5 2.5l15 15M8.4 4.3A8.9 8.9 0 0 1 10 4c5.5 0 8.5 6 8.5 6a15.7 15.7 0 0 1-2.3 3.1M5.6 5.7C3.2 7.2 1.5 10 1.5 10s3 6 8.5 6a8.6 8.6 0 0 0 3.1-.6M11.8 11.8a2.5 2.5 0 0 1-3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <p class="field-error" id="password-error" role="alert"></p>
+          </div>
+
+          <div class="login-options">
+            <label class="checkbox-label" for="remember">
+              <input type="checkbox" id="remember" name="remember" />
+              <span>Remember me</span>
+            </label>
+            <a href="/forgot-password.html" class="link-forgot">Forgot password?</a>
+          </div>
+
+          <button class="btn-primary" type="submit" id="submitBtn">
+            <span class="btn-text">Sign in</span>
+          </button>
+        </form>
+
+        <div class="divider"><span>or</span></div>
+
+        <p class="signup-line">New to Setu? <a href="/register.html">Create a company account</a></p>
+
+        <p class="security-note">
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="4.5" y="9" width="11" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.4" />
+            <path d="M6.5 9V6.5a3.5 3.5 0 0 1 7 0V9" stroke="currentColor" stroke-width="1.4" />
+          </svg>
+          Your connection is secure
+        </p>
+
+      </div>
+    </main>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
-  const form = document.getElementById("form");
-  const banner = document.getElementById("banner");
-  const submitBtn = document.getElementById("submitBtn");
-  const params = new URLSearchParams(window.location.search);
+  (() => {
+    const form = document.getElementById("form");
+    const banner = document.getElementById("banner");
+    const submitBtn = document.getElementById("submitBtn");
+    const btnText = submitBtn.querySelector(".btn-text");
+    const emailInput = document.getElementById("email");
+    const passwordInput = document.getElementById("password");
+    const emailError = document.getElementById("email-error");
+    const passwordError = document.getElementById("password-error");
+    const toggleBtn = document.getElementById("togglePassword");
+    const params = new URLSearchParams(window.location.search);
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    banner.innerHTML = "";
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Signing in…";
-    try {
-      const result = await App.apiJson("/api/auth/login", {
-        method: "POST",
-        body: {
-          email: document.getElementById("email").value.trim(),
-          password: document.getElementById("password").value,
-        },
-      });
-      if (result.user.mustChangePassword) {
-        window.location.href = "/change-password.html";
-        return;
-      }
-      window.location.href = params.get("next") || "/dashboard.html";
-    } catch (err) {
-      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Sign in";
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    let submitting = false;
+
+    toggleBtn.addEventListener("click", () => {
+      const showing = toggleBtn.getAttribute("aria-pressed") === "true";
+      toggleBtn.setAttribute("aria-pressed", String(!showing));
+      toggleBtn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+      passwordInput.type = showing ? "password" : "text";
+    });
+
+    function clearErrors() {
+      banner.textContent = "";
+      banner.classList.remove("error");
+      emailError.textContent = "";
+      passwordError.textContent = "";
+      emailInput.removeAttribute("aria-invalid");
+      passwordInput.removeAttribute("aria-invalid");
     }
-  });
+
+    function showBanner(message) {
+      banner.textContent = message;
+      banner.classList.add("error");
+    }
+
+    function validate() {
+      let firstInvalid = null;
+
+      const email = emailInput.value.trim();
+      if (!email) {
+        emailError.textContent = "Please enter your email.";
+        emailInput.setAttribute("aria-invalid", "true");
+        firstInvalid = firstInvalid || emailInput;
+      } else if (!EMAIL_RE.test(email)) {
+        emailError.textContent = "Please enter a valid email address.";
+        emailInput.setAttribute("aria-invalid", "true");
+        firstInvalid = firstInvalid || emailInput;
+      }
+
+      if (!passwordInput.value) {
+        passwordError.textContent = "Please enter your password.";
+        passwordInput.setAttribute("aria-invalid", "true");
+        firstInvalid = firstInvalid || passwordInput;
+      }
+
+      if (firstInvalid) {
+        firstInvalid.focus();
+        return false;
+      }
+      return true;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (submitting) return;
+
+      clearErrors();
+      if (!validate()) return;
+
+      submitting = true;
+      submitBtn.disabled = true;
+      btnText.textContent = "Signing in…";
+
+      try {
+        const result = await App.apiJson("/api/auth/login", {
+          method: "POST",
+          body: {
+            email: emailInput.value.trim(),
+            password: passwordInput.value,
+          },
+        });
+        if (result.user.mustChangePassword) {
+          window.location.href = "/change-password.html";
+          return;
+        }
+        window.location.href = params.get("next") || "/dashboard.html";
+        // Intentionally leave the button disabled - a redirect is already in flight.
+      } catch (err) {
+        // Never surface the raw API/technical error - a generic message avoids
+        // leaking whether an account exists and keeps this consistent for any
+        // failure mode (bad credentials, network issue, server error).
+        showBanner("Unable to sign in. Please check your email and password and try again.");
+        submitting = false;
+        submitBtn.disabled = false;
+        btnText.textContent = "Sign in";
+      }
+    });
+  })();
 </script>
 </body>
 </html>
