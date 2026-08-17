@@ -15,7 +15,8 @@
   "rewrites": [
     { "source": "/api/health", "destination": "/api/system?resource=health" },
     { "source": "/api/monitoring/metrics", "destination": "/api/system?resource=metrics" },
-    { "source": "/api/permissions", "destination": "/api/system?resource=permissions" }
+    { "source": "/api/permissions", "destination": "/api/system?resource=permissions" },
+    { "source": "/", "destination": "/login.html" }
   ],
   "crons": [
     {
