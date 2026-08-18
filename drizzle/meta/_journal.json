@@ -15,6 +15,13 @@
       "when": 1786962422155,
       "tag": "0001_tough_white_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787035605887,
+      "tag": "0002_gigantic_thunderball",
+      "breakpoints": true
     }
   ]
 }
