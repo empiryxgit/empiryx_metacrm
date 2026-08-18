@@ -173,13 +173,28 @@
 
   // ---- Canvas (live preview + reorder) -----------------------------------
 
-  // On the default Add Customer form, the built-in CRM fields stay exactly
-  // where they are (can't be dragged, reordered or removed) so the form a
-  // salesperson already relies on never shifts under them. Admins can still
-  // drag new fields in anywhere around/between them. Custom fields, and any
-  // field on a non-default form, remain fully draggable/removable as before.
+  // On the default Add Customer form, every field the company was
+  // provisioned with at onboarding - the universal CRM fields *and* the
+  // industry's own fields (Real Estate: property/propertyType/budget/
+  // location, Solar: propertyType/monthlyBill/systemCapacity/location) -
+  // stays exactly as it was created: fixed in place, can't be dragged,
+  // reordered or removed. This mirrors SYSTEM_FIELDS_LEAD/SYSTEM_FIELDS_CRM
+  // and REAL_ESTATE_TEMPLATE/SOLAR_TEMPLATE.defaultFormFields in
+  // src/domain/industryTemplates.ts - keep this list in sync with that file.
+  // Only fields an admin adds beyond that provisioned set are freely
+  // draggable/removable; admins can still drag new fields in anywhere
+  // around/between the locked ones. Non-default forms are never locked.
+  const DEFAULT_TEMPLATE_FIELD_KEYS = new Set([
+    // universal - every industry's default form (SYSTEM_FIELDS_LEAD / SYSTEM_FIELDS_CRM)
+    "fullName", "phoneNumber", "email", "source", "ownerId", "pipelineStage", "nextFollowUpAt", "notes",
+    // Real Estate industry fields
+    "property", "propertyType", "budget", "location",
+    // Solar industry fields ("propertyType" and "location" keys are shared with Real Estate above)
+    "monthlyBill", "systemCapacity",
+  ]);
+
   function isFieldLocked(field){
-    return Boolean(form && form.isDefault && field.mappingType === "system");
+    return Boolean(form && form.isDefault && DEFAULT_TEMPLATE_FIELD_KEYS.has(field.key));
   }
 
   function fieldRowHtml(field){
@@ -287,6 +302,22 @@
       panel.innerHTML = `<p class="hint">Select a field to edit its settings, or add one from the palette.</p>`;
       return;
     }
+
+    if (isFieldLocked(field)) {
+      panel.innerHTML = `
+        <div class="field-settings">
+          <p class="hint">🔒 This field was set up with the default form and stays as-is — label, options and settings can't be changed here. Add new fields from the palette for anything else you need.</p>
+          <label>Label</label>
+          <input value="${App.escapeHtml(field.label)}" disabled />
+          ${field.mappingType === "system"
+            ? `<p class="hint">CRM field — maps to <code>${App.escapeHtml(field.systemField)}</code>.</p>`
+            : `<label style="margin-top:10px">Field key</label><input value="${App.escapeHtml(field.key)}" disabled />`}
+          ${(field.options || []).length ? `<label style="margin-top:10px">Options</label><p class="hint">${field.options.map(App.escapeHtml).join(", ")}</p>` : ""}
+          <label class="checkbox-option" style="margin-top:10px"><input type="checkbox" disabled ${field.required ? "checked" : ""}/> Required</label>
+        </div>`;
+      return;
+    }
+
     const isSystem = field.mappingType === "system";
     const showOptions = ["select", "radio", "multiselect"].includes(field.fieldType) && !isSystem;
     const otherFields = fields.filter(f => f.key !== field.key);
