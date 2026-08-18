@@ -39,6 +39,8 @@
       </div>
     </div>
 
+    <div id="stageFilterChip" style="display:none; margin-bottom:var(--space-4)"></div>
+
     <div id="banner"></div>
 
     <div id="emptyPipeline" style="display:none"></div>
@@ -70,6 +72,10 @@
   let allRows = [];
   let campaignName = "";
   let viewMode = localStorage.getItem("setu_pipeline_view") === "list" ? "list" : "board";
+  // Set when arriving via a link like /pipeline.html?stage=won (e.g. from
+  // the Dashboard's pipeline funnel). Cleared by the chip's "Clear" action.
+  let stageFilter = new URLSearchParams(window.location.search).get("stage") || null;
+  if (stageFilter) viewMode = "list"; // a single-stage filter reads best as a flat list, not a mostly-empty board
   const MANUAL_SOURCES = [
     { key: "referral", label: "Referral" },
     { key: "phone", label: "Phone" },
@@ -108,14 +114,34 @@
   }
 
   function applyFilters(rows){
+    let out = rows;
+    if (stageFilter) out = out.filter(r => resolvedStage(r) === stageFilter);
     const q = document.getElementById("searchInput").value.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(r =>
+    if (!q) return out;
+    return out.filter(r =>
       (r.fullName || "").toLowerCase().includes(q) ||
       (r.email || "").toLowerCase().includes(q) ||
       (r.phoneNumber || "").toLowerCase().includes(q) ||
       (r.metaLeadId || "").toLowerCase().includes(q)
     );
+  }
+
+  function renderStageFilterChip(){
+    const box = document.getElementById("stageFilterChip");
+    if (!stageFilter) { box.style.display = "none"; box.innerHTML = ""; return; }
+    box.style.display = "block";
+    box.innerHTML = `<span class="pill pending" style="display:inline-flex; align-items:center; gap:7px; cursor:default">
+      Filtered by stage: <strong>${App.escapeHtml(stageLabel(stageFilter))}</strong>
+      <button type="button" id="clearStageFilter" class="icon-action" style="width:18px; height:18px; border:none; padding:0" aria-label="Clear stage filter">✕</button>
+    </span>`;
+    document.getElementById("clearStageFilter").addEventListener("click", () => {
+      stageFilter = null;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("stage");
+      window.history.replaceState({}, "", url);
+      renderStageFilterChip();
+      renderView();
+    });
   }
 
   function cardContextLine(row){
@@ -472,6 +498,11 @@
     sources = data.sources;
     owners = data.owners;
     allRows = Object.values(data.board).flat();
+
+    // A stale/invalid ?stage= (e.g. leftover after an industry template
+    // change) should never silently hide the whole pipeline - drop it.
+    if (stageFilter && !stages.some(s => s.key === stageFilter)) stageFilter = null;
+    renderStageFilterChip();
 
     const totalCount = allRows.length;
     if (totalCount === 0 && !campaignId) {

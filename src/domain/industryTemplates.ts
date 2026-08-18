@@ -23,6 +23,15 @@ export interface StageDef {
   isInitial?: boolean;
   isClosed?: boolean;
   isWon?: boolean;
+  // Marks the stage the dashboard treats as "qualified" for its KPI card
+  // and charts - kept as an explicit flag (like isWon/isClosed) rather than
+  // matching on the key "qualified" directly, so the dashboard never has to
+  // know a stage's literal key.
+  isQualified?: boolean;
+  // Marks the industry's key mid-funnel milestone stage (site visit for
+  // Real Estate, site survey for Solar, ...) that the dashboard surfaces as
+  // its own KPI card, labeled via the template's milestoneLabel below.
+  isMilestone?: boolean;
 }
 
 export type FieldType = "text" | "textarea" | "currency" | "number" | "select";
@@ -43,6 +52,10 @@ export interface IndustryTemplate {
   pipelineName: string;
   stages: StageDef[];
   fields: FieldDef[]; // industry-specific fields, stored in leads.customFields
+  // Plural, dashboard-facing label for the isMilestone stage (e.g. "Site
+  // Visits" / "Site Surveys") - distinct from that stage's own singular
+  // pipeline-column label ("Site Visit" / "Site Survey").
+  milestoneLabel: string;
 }
 
 // Universal fields every lead/customer has regardless of industry - these
@@ -95,8 +108,8 @@ const REAL_ESTATE_TEMPLATE: IndustryTemplate = {
   stages: [
     { key: "new", label: "New Inquiry", isInitial: true },
     { key: "contacted", label: "Contacted" },
-    { key: "qualified", label: "Qualified" },
-    { key: "site_visit", label: "Site Visit" },
+    { key: "qualified", label: "Qualified", isQualified: true },
+    { key: "site_visit", label: "Site Visit", isMilestone: true },
     { key: "negotiation", label: "Negotiation" },
     { key: "booking", label: "Booking" },
     { key: "won", label: "Won", isClosed: true, isWon: true },
@@ -108,6 +121,7 @@ const REAL_ESTATE_TEMPLATE: IndustryTemplate = {
     { key: "budget", label: "Budget", type: "currency", showOnCard: true },
     { key: "location", label: "Preferred Location", type: "text" },
   ],
+  milestoneLabel: "Site Visits",
 };
 
 const SOLAR_TEMPLATE: IndustryTemplate = {
@@ -118,8 +132,8 @@ const SOLAR_TEMPLATE: IndustryTemplate = {
   stages: [
     { key: "new", label: "New Inquiry", isInitial: true },
     { key: "contacted", label: "Contacted" },
-    { key: "qualified", label: "Qualified" },
-    { key: "site_survey", label: "Site Survey" },
+    { key: "qualified", label: "Qualified", isQualified: true },
+    { key: "site_survey", label: "Site Survey", isMilestone: true },
     { key: "proposal", label: "Proposal" },
     { key: "negotiation", label: "Negotiation" },
     { key: "installation", label: "Installation" },
@@ -132,6 +146,7 @@ const SOLAR_TEMPLATE: IndustryTemplate = {
     { key: "systemCapacity", label: "Required System Capacity", type: "number", unit: "kW", showOnCard: true },
     { key: "location", label: "Location", type: "text" },
   ],
+  milestoneLabel: "Site Surveys",
 };
 
 export const INDUSTRY_TEMPLATES: Record<IndustryKey, IndustryTemplate> = {
@@ -162,4 +177,12 @@ export function isValidStageKey(template: IndustryTemplate, stageKey: string): b
 export function resolveStageKey(template: IndustryTemplate, stageKey: string | null | undefined): string {
   if (stageKey && isValidStageKey(template, stageKey)) return stageKey;
   return getInitialStageKey(template);
+}
+
+/** A stage's position in the funnel (0 = first). Used by the dashboard to
+ * ask "has this lead reached at least stage X" without ever comparing
+ * stage keys directly - callers compare indexes instead. */
+export function getStageIndex(template: IndustryTemplate, stageKey: string): number {
+  const idx = template.stages.findIndex((s) => s.key === stageKey);
+  return idx === -1 ? 0 : idx;
 }

@@ -5,6 +5,7 @@
     "api/internal/handler.ts": { "maxDuration": 60 },
     "api/leads/handler.ts": { "maxDuration": 15 },
     "api/pipeline/index.ts": { "maxDuration": 15 },
+    "api/dashboard/index.ts": { "maxDuration": 15 },
     "api/campaigns/handler.ts": { "maxDuration": 15 },
     "api/admin/roles/handler.ts": { "maxDuration": 15 },
     "api/admin/users/handler.ts": { "maxDuration": 15 },
