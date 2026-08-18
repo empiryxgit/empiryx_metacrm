@@ -86,6 +86,7 @@ export async function leadExistsByMetaLeadId(metaLeadId: string): Promise<boolea
 
 export interface InsertLeadInput {
   companyId: string;
+  branchId?: string | null;
   crmCampaignId: string;
   metaLeadId: string;
   platform: string;
@@ -202,6 +203,7 @@ export async function updateLeadPipelineStage(companyId: string, leadId: string,
 
 export interface InsertManualLeadInput {
   companyId: string;
+  branchId?: string | null;
   fullName: string;
   phoneNumber?: string;
   email?: string;
@@ -224,6 +226,7 @@ export async function insertManualLead(input: InsertManualLeadInput) {
     .insert(leads)
     .values({
       companyId: input.companyId,
+      branchId: input.branchId ?? null,
       metaLeadId: `manual:${randomUUID()}`,
       leadType: "manual_customer",
       source: input.source,
@@ -245,6 +248,7 @@ export async function insertManualLead(input: InsertManualLeadInput) {
 
 export interface InsertFormLeadInput {
   companyId: string;
+  branchId?: string | null;
   fullName: string;
   phoneNumber?: string;
   email?: string;
@@ -277,6 +281,7 @@ export async function insertFormLead(input: InsertFormLeadInput) {
     .insert(leads)
     .values({
       companyId: input.companyId,
+      branchId: input.branchId ?? null,
       metaLeadId: `form:${randomUUID()}`,
       leadType: input.leadType,
       source: input.source,
@@ -306,6 +311,7 @@ export interface UpdateLeadCrmFieldsInput {
   nextFollowUpAt?: Date | null;
   notes?: string;
   customFields?: Record<string, unknown>;
+  branchId?: string | null;
 }
 
 /** Generic CRM-field update for the "Add to CRM" flow (turning a Meta lead

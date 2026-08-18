@@ -22,14 +22,43 @@ import {
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
 import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
+import {
+  addUserToBranch,
+  archiveBranch,
+  codeExists,
+  createBranch,
+  getBranchById,
+  listBranches,
+  listBranchUsers,
+  removeUserFromBranch,
+  setPrimaryBranch,
+  updateBranch,
+} from "../../../src/infrastructure/db/repositories/branches";
 
-function getUserId(req: VercelRequest): string | undefined {
-  const value = req.query.userId;
+function getQueryString(req: VercelRequest, key: string): string | undefined {
+  const value = req.query[key];
   if (Array.isArray(value)) return value[0];
   return typeof value === "string" ? value : undefined;
 }
 
+function getUserId(req: VercelRequest): string | undefined {
+  return getQueryString(req, "userId");
+}
+
+// Branch admin (list/create/view/update/archive branches, and manage
+// branch_users) is folded into this same Vercel Function rather than given
+// its own file - Vercel Hobby caps a deployment at 12 Functions total and
+// this was already the 12th/last available slot (see api/forms/handler.ts's
+// note) - so vercel.json routes every /api/branches/* path here with
+// ?resource=branches (plus branchId/action/branchUserId as needed) instead.
+// Falls through to the pre-existing user-management behavior below whenever
+// ?resource= is absent, so /api/admin/users is completely unaffected.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const resource = getQueryString(req, "resource");
+  if (resource === "branches") {
+    return handleBranchesResource(req, res);
+  }
+
   const userId = getUserId(req);
   if (userId) {
     return handleOne(req, res, userId);
@@ -178,4 +207,282 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
   }
 
   res.status(405).json({ error: "Method not allowed" });
+}
+
+// ---------------------------------------------------------------------
+// Branches (?resource=branches) - see the note on the default export above
+// for why this lives in the users-admin handler rather than its own file.
+//
+// Route map (see vercel.json):
+//   GET/POST      /api/branches                               -> list / create
+//   GET/PATCH     /api/branches/{branchId}                     -> view / update
+//   POST          /api/branches/{branchId}/archive             -> archive
+//   GET/POST      /api/branches/{branchId}/users                -> list members / add member
+//   DELETE        /api/branches/{branchId}/users/{branchUserId} -> remove member
+//   POST          /api/branches/{branchId}/users/{branchUserId}/primary -> set as that user's primary branch
+//
+// Every mutating and viewing route is gated on branches.manage - branch
+// administration is an admin-only surface, unlike forms/leads/campaigns
+// which are readable by anyone with the underlying module permission.
+// ---------------------------------------------------------------------
+
+async function handleBranchesResource(req: VercelRequest, res: VercelResponse) {
+  const branchId = getQueryString(req, "branchId");
+  const action = getQueryString(req, "action");
+  const branchUserId = getQueryString(req, "branchUserId");
+  const isPrimaryAction = getQueryString(req, "sub") === "primary";
+
+  if (!branchId) return handleBranchCollection(req, res);
+
+  if (action === "archive") return handleBranchArchive(req, res, branchId);
+  if (action === "users") {
+    if (branchUserId) {
+      if (isPrimaryAction) return handleSetPrimaryBranch(req, res, branchId, branchUserId);
+      return handleRemoveBranchUser(req, res, branchId, branchUserId);
+    }
+    return handleBranchUsersCollection(req, res, branchId);
+  }
+  if (!action) return handleBranchOne(req, res, branchId);
+
+  res.status(404).json({ error: "Not found" });
+}
+
+async function handleBranchCollection(req: VercelRequest, res: VercelResponse) {
+  if (req.method === "GET") {
+    const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+    if (!auth) return;
+    const rows = await listBranches(auth.companyId);
+    res.status(200).json({ branches: rows });
+    return;
+  }
+
+  if (req.method === "POST") {
+    const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+    if (!auth) return;
+
+    const body = (req.body ?? {}) as {
+      name?: string;
+      code?: string;
+      address?: string;
+      city?: string;
+      state?: string;
+      managerId?: string;
+    };
+    const name = body.name?.trim();
+    const code = body.code?.trim();
+    if (!name || !code) {
+      res.status(400).json({ error: "name and code are required." });
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(code)) {
+      res.status(400).json({ error: "code may only contain letters, numbers, hyphens and underscores." });
+      return;
+    }
+
+    if (await codeExists(auth.companyId, code)) {
+      res.status(409).json({ error: "A branch with this code already exists." });
+      return;
+    }
+
+    if (body.managerId) {
+      const manager = await getUserById(body.managerId);
+      if (!manager || manager.companyId !== auth.companyId) {
+        res.status(400).json({ error: "Invalid manager." });
+        return;
+      }
+    }
+
+    try {
+      const branch = await createBranch({
+        companyId: auth.companyId,
+        name,
+        code,
+        address: body.address?.trim() || undefined,
+        city: body.city?.trim() || undefined,
+        state: body.state?.trim() || undefined,
+        managerId: body.managerId || undefined,
+      });
+      res.status(201).json({ branch });
+    } catch (err) {
+      console.error("[branches] Failed to create branch:", err);
+      res.status(500).json({ error: "Failed to create branch." });
+    }
+    return;
+  }
+
+  res.status(405).json({ error: "Method not allowed" });
+}
+
+async function handleBranchOne(req: VercelRequest, res: VercelResponse, branchId: string) {
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  if (req.method === "GET") {
+    const branch = await getBranchById(auth.companyId, branchId);
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    res.status(200).json({ branch });
+    return;
+  }
+
+  if (req.method === "PATCH") {
+    const existing = await getBranchById(auth.companyId, branchId);
+    if (!existing) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      name?: string;
+      code?: string;
+      address?: string;
+      city?: string;
+      state?: string;
+      managerId?: string | null;
+      status?: string;
+    };
+
+    if (body.code !== undefined && body.code.trim() !== existing.code) {
+      const code = body.code.trim();
+      if (!/^[a-zA-Z0-9_-]+$/.test(code)) {
+        res.status(400).json({ error: "code may only contain letters, numbers, hyphens and underscores." });
+        return;
+      }
+      if (await codeExists(auth.companyId, code)) {
+        res.status(409).json({ error: "A branch with this code already exists." });
+        return;
+      }
+    }
+
+    if (body.managerId) {
+      const manager = await getUserById(body.managerId);
+      if (!manager || manager.companyId !== auth.companyId) {
+        res.status(400).json({ error: "Invalid manager." });
+        return;
+      }
+    }
+
+    const branch = await updateBranch(auth.companyId, branchId, {
+      name: body.name?.trim(),
+      code: body.code?.trim(),
+      address: body.address?.trim(),
+      city: body.city?.trim(),
+      state: body.state?.trim(),
+      managerId: body.managerId === undefined ? undefined : body.managerId || null,
+      status: body.status,
+    });
+    if (!branch) {
+      res.status(404).json({ error: "Branch not found." });
+      return;
+    }
+    res.status(200).json({ branch });
+    return;
+  }
+
+  res.status(405).json({ error: "Method not allowed" });
+}
+
+async function handleBranchArchive(req: VercelRequest, res: VercelResponse, branchId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  const branch = await archiveBranch(auth.companyId, branchId);
+  if (!branch) {
+    res.status(404).json({ error: "Branch not found." });
+    return;
+  }
+  res.status(200).json({ archived: true });
+}
+
+async function handleBranchUsersCollection(req: VercelRequest, res: VercelResponse, branchId: string) {
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  const branch = await getBranchById(auth.companyId, branchId);
+  if (!branch) {
+    res.status(404).json({ error: "Branch not found." });
+    return;
+  }
+
+  if (req.method === "GET") {
+    const members = await listBranchUsers(branchId);
+    res.status(200).json({ users: members });
+    return;
+  }
+
+  if (req.method === "POST") {
+    const body = (req.body ?? {}) as { userId?: string; role?: string; isPrimary?: boolean };
+    if (!body.userId) {
+      res.status(400).json({ error: "userId is required." });
+      return;
+    }
+    const target = await getUserById(body.userId);
+    if (!target || target.companyId !== auth.companyId) {
+      res.status(400).json({ error: "Invalid user." });
+      return;
+    }
+
+    try {
+      const membership = await addUserToBranch({
+        branchId,
+        userId: body.userId,
+        role: body.role,
+        isPrimary: Boolean(body.isPrimary),
+      });
+      res.status(200).json({ membership });
+    } catch (err) {
+      console.error("[branches] Failed to add user to branch:", err);
+      res.status(500).json({ error: "Failed to add user to branch." });
+    }
+    return;
+  }
+
+  res.status(405).json({ error: "Method not allowed" });
+}
+
+async function handleRemoveBranchUser(req: VercelRequest, res: VercelResponse, branchId: string, targetUserId: string) {
+  if (req.method !== "DELETE") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  const branch = await getBranchById(auth.companyId, branchId);
+  if (!branch) {
+    res.status(404).json({ error: "Branch not found." });
+    return;
+  }
+
+  await removeUserFromBranch(branchId, targetUserId);
+  res.status(200).json({ removed: true });
+}
+
+async function handleSetPrimaryBranch(req: VercelRequest, res: VercelResponse, branchId: string, targetUserId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  const branch = await getBranchById(auth.companyId, branchId);
+  if (!branch) {
+    res.status(404).json({ error: "Branch not found." });
+    return;
+  }
+  const target = await getUserById(targetUserId);
+  if (!target || target.companyId !== auth.companyId) {
+    res.status(400).json({ error: "Invalid user." });
+    return;
+  }
+
+  await setPrimaryBranch(targetUserId, branchId);
+  res.status(200).json({ updated: true });
 }

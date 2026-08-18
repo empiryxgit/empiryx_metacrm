@@ -20,6 +20,13 @@ export const PERMISSIONS = {
   FORMS_VIEW: "forms.view", // see the Forms list + individual form definitions
   FORMS_MANAGE: "forms.manage", // create/edit/publish/archive forms in the builder
   SUBMISSIONS_VIEW: "submissions.view", // view the Submissions list/detail for this company's forms
+  // Create/edit/archive branches and manage which users belong to them.
+  // Also doubles as the "company-wide branch visibility" flag: a user who
+  // holds this permission sees every branch's data; a user who doesn't is
+  // restricted to whichever branch(es) they're a member of (or unrestricted,
+  // same as before this feature existed, if they belong to none) - see
+  // src/application/branchAccess.ts.
+  BRANCHES_MANAGE: "branches.manage",
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -42,6 +49,7 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.FORMS_VIEW, label: "View forms", category: "Forms" },
   { code: PERMISSIONS.FORMS_MANAGE, label: "Create and manage forms", category: "Forms" },
   { code: PERMISSIONS.SUBMISSIONS_VIEW, label: "View form submissions", category: "Forms" },
+  { code: PERMISSIONS.BRANCHES_MANAGE, label: "Create and manage branches", category: "Administration" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

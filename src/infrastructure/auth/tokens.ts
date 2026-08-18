@@ -15,6 +15,14 @@ export interface AccessTokenClaims {
   companyId: string;
   roleId: string;
   permissions: string[];
+  // Every branch this user is a member of (branch_users rows), carried in
+  // the token the same way permissions already are, to authorize
+  // branch-scoped requests without a DB round trip. Empty array means
+  // "not assigned to any specific branch" - see resolveBranchAccess() in
+  // src/application/branchAccess.ts for what that implies. Optional so a
+  // token issued before this field existed still verifies (jose/JWT just
+  // omits it; branchIds is treated as [] when absent, never as a crash).
+  branchIds?: string[];
 }
 
 function getSecret(): Uint8Array {

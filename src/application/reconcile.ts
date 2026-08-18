@@ -76,6 +76,7 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
           campaignMissingFound++;
           const result = await insertRecoveredLead({
             companyId: config.companyId,
+            branchId: config.branchId,
             crmCampaignId: config.campaignId,
             metaLeadId: lead.id,
             platform: LeadPlatform.Unknown, // reconciliation doesn't know the source object type

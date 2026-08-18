@@ -20,6 +20,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../src/domain/permissions";
+import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
 import {
   FORM_FIELD_TYPES,
   LEAD_SOURCES,
@@ -269,7 +270,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   if (!auth) return;
   const type = getQueryString(req, "type");
   try {
-    const rows = await listForms(auth.companyId, type);
+    const rows = await listForms(auth.companyId, type, resolveBranchAccess(auth));
     res.status(200).json({ forms: rows });
   } catch (err) {
     console.error("[forms] Failed to list forms:", err);
@@ -293,8 +294,18 @@ async function handleDefaultInternal(req: VercelRequest, res: VercelResponse) {
   const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
   if (!auth) return;
 
+  const requestedBranchId = getQueryString(req, "branchId");
+  const assertion = await assertBranchAccessible(auth, requestedBranchId);
+  if (!assertion.ok) {
+    // Fail open to the fallback rather than blocking Add Customer on a bad/
+    // inaccessible branchId - same "never block" contract as the try/catch
+    // below.
+    res.status(200).json({ form: null, fields: [] });
+    return;
+  }
+
   try {
-    const result = await getDefaultInternalForm(auth.companyId);
+    const result = await getDefaultInternalForm(auth.companyId, assertion.branchId);
     if (!result) {
       res.status(200).json({ form: null, fields: [] });
       return;
@@ -310,6 +321,7 @@ interface CreateFormBody {
   name?: string;
   description?: string;
   type?: string;
+  branchId?: string;
   fields?: unknown;
 }
 
@@ -331,9 +343,16 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  const branchAssertion = await assertBranchAccessible(auth, body.branchId);
+  if (!branchAssertion.ok) {
+    res.status(branchAssertion.status).json({ error: branchAssertion.error });
+    return;
+  }
+
   try {
     const form = await createForm({
       companyId: auth.companyId,
+      branchId: branchAssertion.branchId,
       name,
       description: body.description?.trim() || undefined,
       type,
@@ -353,6 +372,7 @@ interface UpdateFormBody {
   name?: string;
   description?: string;
   settings?: Record<string, unknown>;
+  branchId?: string | null;
   fields?: unknown;
 }
 
@@ -375,11 +395,20 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
   if (req.method === "PUT") {
     const body = (req.body ?? {}) as UpdateFormBody;
 
-    if (body.name !== undefined || body.description !== undefined || body.settings !== undefined) {
+    if (body.branchId !== undefined) {
+      const branchAssertion = await assertBranchAccessible(auth, body.branchId);
+      if (!branchAssertion.ok) {
+        res.status(branchAssertion.status).json({ error: branchAssertion.error });
+        return;
+      }
+    }
+
+    if (body.name !== undefined || body.description !== undefined || body.settings !== undefined || body.branchId !== undefined) {
       await updateFormMeta(auth.companyId, formId, {
         name: body.name?.trim(),
         description: body.description?.trim(),
         settings: body.settings,
+        branchId: body.branchId === undefined ? undefined : body.branchId || null,
       });
     }
 
@@ -482,7 +511,7 @@ async function handleSubmissions(req: VercelRequest, res: VercelResponse, formId
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  const rows = await listSubmissions(auth.companyId, formId);
+  const rows = await listSubmissions(auth.companyId, formId, 200, resolveBranchAccess(auth));
   res.status(200).json({ submissions: rows });
 }
 
@@ -563,6 +592,7 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
       }
       lead = await insertFormLead({
         companyId: auth.companyId,
+        branchId: form.branchId,
         fullName: systemPatch.fullName,
         phoneNumber: systemPatch.phoneNumber,
         email: systemPatch.email,
@@ -579,6 +609,7 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
     const submission = await createSubmission({
       formId,
       companyId: auth.companyId,
+      branchId: form.branchId,
       leadId: lead.id,
       schemaVersion: form.schemaVersion,
       fieldsSnapshot: toFieldsSnapshot(fields),
@@ -695,6 +726,7 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
   try {
     const lead = await insertFormLead({
       companyId: form.companyId,
+      branchId: form.branchId,
       fullName: systemPatch.fullName,
       phoneNumber: systemPatch.phoneNumber,
       email: systemPatch.email,
@@ -711,6 +743,7 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
     const submission = await createSubmission({
       formId: form.id,
       companyId: form.companyId,
+      branchId: form.branchId,
       leadId: lead.id,
       schemaVersion: form.schemaVersion,
       fieldsSnapshot: toFieldsSnapshot(fields),

@@ -6,7 +6,7 @@
 import { getLeadDetails, MetaApiError } from "../infrastructure/meta/graphClient";
 import { releaseLeadIdClaim, tryClaimLeadId } from "../infrastructure/cache/redis";
 import { insertLead, leadExistsByMetaLeadId, logEvent } from "../infrastructure/db/repositories";
-import { getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
+import { getCampaign, getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
 import { LeadPlatform } from "../domain/types";
 import type { MetaLeadDetails } from "../domain/types";
 
@@ -54,8 +54,16 @@ export async function processLead(
 
   const contact = extractContactFields(details);
 
+  // Meta ingestion never receives a branchId directly (the webhook only
+  // knows the campaign) - it's resolved here from the campaign's own
+  // branchId, so a lead raised by a branch-owned campaign lands in that
+  // branch automatically, with zero change needed to the webhook handler
+  // or the QStash message shape.
+  const campaign = await getCampaign(companyId, crmCampaignId);
+
   const result = await insertLead({
     companyId,
+    branchId: campaign?.branchId ?? null,
     crmCampaignId,
     metaLeadId: details.id,
     platform: objectType.includes("instagram") ? LeadPlatform.Instagram : LeadPlatform.Facebook,

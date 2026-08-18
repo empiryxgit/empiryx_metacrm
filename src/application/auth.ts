@@ -12,6 +12,7 @@ import {
   getActiveSessionByHash,
   revokeSession,
 } from "../infrastructure/db/repositories/tenancy";
+import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
 import { hashPassword, verifyPassword } from "../infrastructure/auth/password";
 import {
   generateRefreshToken,
@@ -154,11 +155,13 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     throw new AuthError("Account has no role assigned - contact your administrator.", 403);
   }
 
+  const branchIds = await getUserBranchIds(user.id);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
+    branchIds,
   });
 
   const { token: refreshToken, hash } = generateRefreshToken();
@@ -207,11 +210,13 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
   // blast radius of a stolen refresh token to a single use.
   await revokeSession(session.id);
 
+  const branchIds = await getUserBranchIds(user.id);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
+    branchIds,
   });
   const { token: newRefreshToken, hash: newHash } = generateRefreshToken();
   const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);

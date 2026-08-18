@@ -16,6 +16,8 @@ import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCampaign } from "../../src/infrastructure/db/repositories/campaigns";
 import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositories/tenancy";
 import { getIndustryTemplate, resolveStageKey, LEAD_SOURCES } from "../../src/domain/industryTemplates";
+import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
+import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
@@ -43,9 +45,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  const requestedBranchId = typeof req.query.branchId === "string" && req.query.branchId ? req.query.branchId : undefined;
+  let branchCondition;
+  if (requestedBranchId !== undefined) {
+    const assertion = await assertBranchAccessible(auth, requestedBranchId);
+    if (!assertion.ok) {
+      res.status(assertion.status).json({ error: assertion.error });
+      return;
+    }
+    branchCondition = branchAccessCondition(
+      leads.branchId,
+      { scope: "restricted", branchIds: assertion.branchId ? [assertion.branchId] : [] },
+    );
+  } else {
+    branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+  }
+
   const db = await getDb();
   const conditions = [eq(leads.companyId, auth.companyId)];
   if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
+  if (branchCondition) conditions.push(branchCondition);
 
   const [rows, users] = await Promise.all([
     db

@@ -4,11 +4,14 @@ import { getDb } from "../client";
 import { campaigns, webhookConfigs } from "../schema";
 import { firstOrThrow } from "../util";
 import { decryptSecret, encryptSecret, maskSecret } from "../../security/encryption";
+import { branchAccessCondition } from "../branchFilter";
+import type { BranchAccess } from "../../../application/branchAccess";
 
 // ---- Campaigns ----------------------------------------------------------
 
 export async function createCampaign(input: {
   companyId: string;
+  branchId?: string | null;
   name: string;
   platform: string;
   createdBy: string;
@@ -18,9 +21,16 @@ export async function createCampaign(input: {
   return firstOrThrow(rows);
 }
 
-export async function listCampaigns(companyId: string) {
+/** `access` narrows the result set the same way every other branch-scoped
+ * listing does (see branchAccessCondition) - omit it for internal/system
+ * callers (reconciliation, dashboards run without a request-scoped user)
+ * that already have their own scoping. */
+export async function listCampaigns(companyId: string, access?: BranchAccess) {
   const db = await getDb();
-  return db.select().from(campaigns).where(eq(campaigns.companyId, companyId));
+  const conditions = [eq(campaigns.companyId, companyId)];
+  const branchCondition = access ? branchAccessCondition(campaigns.branchId, access) : undefined;
+  if (branchCondition) conditions.push(branchCondition);
+  return db.select().from(campaigns).where(and(...conditions));
 }
 
 export async function getCampaign(companyId: string, campaignId: string) {
@@ -36,7 +46,7 @@ export async function getCampaign(companyId: string, campaignId: string) {
 export async function updateCampaign(
   companyId: string,
   campaignId: string,
-  input: { name?: string; platform?: string; status?: string },
+  input: { name?: string; platform?: string; status?: string; branchId?: string | null },
 ) {
   const db = await getDb();
   await db
@@ -201,17 +211,21 @@ export async function markWebhookActive(webhookConfigId: string) {
 
 /** Every campaign with a verified/active webhook, decrypted and ready for the
  * reconciliation sweep to iterate - one global QStash schedule covers every
- * tenant rather than provisioning a per-campaign schedule. */
+ * tenant rather than provisioning a per-campaign schedule. Joins campaigns
+ * for branchId so a lead reconciliation recovers directly (never went
+ * through processLead.ts) still ends up correctly branch-tagged. */
 export async function listActiveWebhookConfigs() {
   const db = await getDb();
   const rows = await db
-    .select()
+    .select({ webhookConfigs, branchId: campaigns.branchId })
     .from(webhookConfigs)
+    .innerJoin(campaigns, eq(webhookConfigs.campaignId, campaigns.id))
     .where(inArray(webhookConfigs.status, ["verified", "active"]));
-  return rows.map((row) => ({
+  return rows.map(({ webhookConfigs: row, branchId }) => ({
     id: row.id,
     campaignId: row.campaignId,
     companyId: row.companyId,
+    branchId,
     formIds: (row.formIds as string[]) ?? [],
     accessToken: decryptSecret(row.accessTokenEncrypted),
   }));

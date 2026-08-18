@@ -14,6 +14,8 @@ import { requirePermission } from "../../src/infrastructure/auth/context";
 import { insertManualLead, updateLeadCrmFields, updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
+import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
+import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 import {
   getIndustryTemplate,
   getInitialStageKey,
@@ -77,12 +79,35 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const campaignId = typeof req.query.campaignId === "string" ? req.query.campaignId : undefined;
+  const requestedBranchId = typeof req.query.branchId === "string" ? req.query.branchId : undefined;
+
+  // An explicit ?branchId= narrows to that one branch, still combined with
+  // company-wide rows the same way every other branch filter is (validated
+  // against both tenant isolation and the caller's own branch access via
+  // assertBranchAccessible); omitted, it falls back to the caller's full
+  // branch access (every branch they're allowed to see, plus company-wide
+  // rows) - never unfiltered across branches the caller doesn't belong to.
+  let branchCondition;
+  if (requestedBranchId !== undefined) {
+    const assertion = await assertBranchAccessible(auth, requestedBranchId);
+    if (!assertion.ok) {
+      res.status(assertion.status).json({ error: assertion.error });
+      return;
+    }
+    branchCondition = branchAccessCondition(
+      leads.branchId,
+      { scope: "restricted", branchIds: assertion.branchId ? [assertion.branchId] : [] },
+    );
+  } else {
+    branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+  }
 
   try {
     const db = await getDb();
     const conditions = [eq(leads.companyId, auth.companyId)];
     if (status) conditions.push(eq(leads.status, status));
     if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
+    if (branchCondition) conditions.push(branchCondition);
 
     const rows = await db
       .select()
@@ -132,6 +157,7 @@ interface ManualCreateBody {
   email?: string;
   source?: string;
   ownerId?: string;
+  branchId?: string;
   pipelineStage?: string;
   nextFollowUpAt?: string;
   notes?: string;
@@ -166,9 +192,16 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     : getInitialStageKey(template);
   const nextFollowUpAt = body.nextFollowUpAt ? new Date(body.nextFollowUpAt) : undefined;
 
+  const branchAssertion = await assertBranchAccessible(auth, body.branchId);
+  if (!branchAssertion.ok) {
+    res.status(branchAssertion.status).json({ error: branchAssertion.error });
+    return;
+  }
+
   try {
     const lead = await insertManualLead({
       companyId: auth.companyId,
+      branchId: branchAssertion.branchId,
       fullName,
       phoneNumber,
       email: body.email?.trim() || undefined,
@@ -191,6 +224,7 @@ interface UpdateBody {
   email?: string;
   phoneNumber?: string;
   ownerId?: string | null;
+  branchId?: string | null;
   pipelineStage?: string;
   nextFollowUpAt?: string | null;
   notes?: string;
@@ -235,6 +269,14 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: str
       return;
     }
     patch.pipelineStage = body.pipelineStage;
+  }
+  if (body.branchId !== undefined) {
+    const branchAssertion = await assertBranchAccessible(auth, body.branchId);
+    if (!branchAssertion.ok) {
+      res.status(branchAssertion.status).json({ error: branchAssertion.error });
+      return;
+    }
+    patch.branchId = branchAssertion.branchId;
   }
 
   try {

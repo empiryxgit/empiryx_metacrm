@@ -18,6 +18,7 @@ import {
   upsertWebhookConfig,
 } from "../../src/infrastructure/db/repositories/campaigns";
 import { PERMISSIONS } from "../../src/domain/permissions";
+import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -46,7 +47,7 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
     if (!auth) return;
-    const campaigns = await listCampaigns(auth.companyId);
+    const campaigns = await listCampaigns(auth.companyId, resolveBranchAccess(auth));
     res.status(200).json({ campaigns });
     return;
   }
@@ -55,14 +56,21 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
     if (!auth) return;
 
-    const { name, platform } = (req.body ?? {}) as { name?: string; platform?: string };
+    const { name, platform, branchId } = (req.body ?? {}) as { name?: string; platform?: string; branchId?: string };
     if (!name) {
       res.status(400).json({ error: "name is required." });
       return;
     }
 
+    const branchAssertion = await assertBranchAccessible(auth, branchId);
+    if (!branchAssertion.ok) {
+      res.status(branchAssertion.status).json({ error: branchAssertion.error });
+      return;
+    }
+
     const campaign = await createCampaign({
       companyId: auth.companyId,
+      branchId: branchAssertion.branchId,
       name,
       platform: platform && ["facebook", "instagram", "both"].includes(platform) ? platform : "facebook",
       createdBy: auth.userId,
@@ -90,8 +98,24 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
   if (req.method === "PATCH") {
     const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
     if (!auth) return;
-    const { name, platform, status } = (req.body ?? {}) as { name?: string; platform?: string; status?: string };
-    await updateCampaign(auth.companyId, campaignId, { name, platform, status });
+    const { name, platform, status, branchId } = (req.body ?? {}) as {
+      name?: string;
+      platform?: string;
+      status?: string;
+      branchId?: string | null;
+    };
+
+    let branchIdPatch: string | null | undefined;
+    if (branchId !== undefined) {
+      const branchAssertion = await assertBranchAccessible(auth, branchId);
+      if (!branchAssertion.ok) {
+        res.status(branchAssertion.status).json({ error: branchAssertion.error });
+        return;
+      }
+      branchIdPatch = branchAssertion.branchId;
+    }
+
+    await updateCampaign(auth.companyId, campaignId, { name, platform, status, branchId: branchIdPatch });
     res.status(200).json({ updated: true });
     return;
   }

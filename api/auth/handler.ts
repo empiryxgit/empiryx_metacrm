@@ -226,6 +226,11 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
     // rather than whatever snapshot was stored when the role was created -
     // see effectivePermissions() in src/application/auth.ts for why.
     role: role ? { id: role.id, name: role.name, permissions: role.isSystem ? ALL_PERMISSIONS : role.permissions } : null,
+    // Branch ids this user is a member of, straight from the access token
+    // (see AccessTokenClaims.branchIds) - empty means "not assigned to a
+    // specific branch," which src/application/branchAccess.ts treats as
+    // unrestricted, not as "no access."
+    branchIds: auth.branchIds ?? [],
   });
 }
 

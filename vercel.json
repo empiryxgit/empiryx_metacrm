@@ -47,6 +47,13 @@
     { "source": "/api/admin/users", "destination": "/api/admin/users/handler" },
     { "source": "/api/admin/users/:userId", "destination": "/api/admin/users/handler?userId=:userId" },
 
+    { "source": "/api/branches/:branchId/users/:branchUserId/primary", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId&sub=primary" },
+    { "source": "/api/branches/:branchId/users/:branchUserId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId" },
+    { "source": "/api/branches/:branchId/users", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users" },
+    { "source": "/api/branches/:branchId/archive", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=archive" },
+    { "source": "/api/branches/:branchId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId" },
+    { "source": "/api/branches", "destination": "/api/admin/users/handler?resource=branches" },
+
     { "source": "/api/forms/default-internal", "destination": "/api/forms/handler?sub=default-internal" },
     { "source": "/api/forms/:formId/publish", "destination": "/api/forms/handler?formId=:formId&sub=publish" },
     { "source": "/api/forms/:formId/archive", "destination": "/api/forms/handler?formId=:formId&sub=archive" },
