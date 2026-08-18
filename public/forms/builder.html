@@ -174,6 +174,17 @@
     };
   }
 
+  // Same resolution FormRenderer.optionsFor uses at render time: a CRM
+  // field's choices always come from the company's live data, a custom
+  // field's from its own configured options list.
+  function fieldChoices(field){
+    if (field.systemField) {
+      const dyn = dynamicOptionsMap();
+      if (dyn[field.systemField]) return dyn[field.systemField];
+    }
+    return (field.options || []).map(o => ({ value: o, label: o }));
+  }
+
   // ---- Palette ----------------------------------------------------------
 
   function paletteItemHtml(def){
@@ -372,6 +383,22 @@
     const showOptions = ["select", "radio", "multiselect"].includes(field.fieldType) && !isSystem;
     const otherFields = fields.filter(f => f.key !== field.key);
 
+    // For a single-choice field (Dropdown/select or Radio), the "Default
+    // value" control offers exactly its own choices - the field's own
+    // static options for a custom field, or the company's live data
+    // (sources/owners/stages/campaigns) for a CRM field - instead of a
+    // freeform text box the admin would have to match by hand. Multiselect
+    // keeps the plain text box below since FormRenderer only pre-checks an
+    // array value for it, not a single default string.
+    const defaultChoices = ["select", "radio"].includes(field.fieldType) ? fieldChoices(field) : null;
+    const defaultValueHtml = field.fieldType === "checkbox" ? "" : defaultChoices
+      ? `<label for="set_default">Default value</label>
+         <select id="set_default">
+           <option value="">No default</option>
+           ${defaultChoices.map(c => `<option value="${App.escapeHtml(String(c.value))}" ${String(field.defaultValue ?? "") === String(c.value) ? "selected" : ""}>${App.escapeHtml(c.label)}</option>`).join("")}
+         </select>`
+      : `<label for="set_default">Default value</label><input id="set_default" value="${App.escapeHtml(field.defaultValue || "")}" />`;
+
     panel.innerHTML = `
       <div class="field-settings">
         <label for="set_label">Label</label>
@@ -387,7 +414,7 @@
         <label for="set_help">Help text</label>
         <input id="set_help" value="${App.escapeHtml(field.helpText || "")}" />
 
-        ${field.fieldType !== "checkbox" ? `<label for="set_default">Default value</label><input id="set_default" value="${App.escapeHtml(field.defaultValue || "")}" />` : ""}
+        ${defaultValueHtml}
 
         <label class="checkbox-option" style="margin-top:10px"><input type="checkbox" id="set_required" ${field.required ? "checked" : ""}/> Required</label>
 
