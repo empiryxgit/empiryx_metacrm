@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Form Builder — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap" style="max-width:1320px">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title" id="formTitle">Form Builder</h1>
+        <p class="page-sub" id="formSub">Loading…</p>
+      </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn secondary" type="button" id="previewBtn">Preview</button>
+        <button class="btn secondary" type="button" id="saveBtn">Save draft</button>
+        <button class="btn" type="button" id="publishBtn">Publish</button>
+        <button class="btn secondary" type="button" id="setDefaultBtn" style="display:none">Set as default</button>
+        <button class="btn secondary" type="button" id="archiveBtn" style="display:none">Archive</button>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+    <div id="modalRoot"></div>
+
+    <div class="card" id="metaCard" style="margin-bottom:var(--space-5)">
+      <div class="grid-2">
+        <div>
+          <label for="metaName">Form name</label>
+          <input id="metaName" />
+        </div>
+        <div>
+          <label for="metaDescription">Description</label>
+          <input id="metaDescription" placeholder="Internal note — shown to your team only" />
+        </div>
+      </div>
+    </div>
+
+    <div class="builder-shell">
+      <div class="builder-col builder-col-palette">
+        <div class="builder-col-title">Field types</div>
+        <div id="paletteFieldTypes"></div>
+        <div class="builder-col-title" style="margin-top:18px">CRM fields</div>
+        <div id="paletteCrmFields"></div>
+        <p class="hint" style="margin-top:14px">Click to add, or drag onto the form.</p>
+      </div>
+
+      <div class="builder-col builder-col-canvas">
+        <div class="builder-col-title">Form preview</div>
+        <div id="builderCanvas" class="builder-canvas"></div>
+      </div>
+
+      <div class="builder-col builder-col-settings">
+        <div class="builder-col-title">Field settings</div>
+        <div id="settingsPanel"></div>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script src="/assets/formRenderer.js"></script>
+<script>
+  let me, canManage;
+  let formId = new URLSearchParams(window.location.search).get("id");
+  let form = null;
+  let fields = []; // working copy: {key,label,fieldType,mappingType,systemField,options,placeholder,helpText,defaultValue,required,conditional}
+  let selectedKey = null;
+  let owners = [], stages = [], sources = [], campaigns = [];
+  let dragState = null;
+
+  const FIELD_TYPE_PALETTE = [
+    { fieldType: "text", label: "Text" },
+    { fieldType: "textarea", label: "Long Text" },
+    { fieldType: "number", label: "Number" },
+    { fieldType: "currency", label: "Currency" },
+    { fieldType: "email", label: "Email" },
+    { fieldType: "phone", label: "Phone" },
+    { fieldType: "date", label: "Date" },
+    { fieldType: "datetime", label: "Date & Time" },
+    { fieldType: "select", label: "Dropdown" },
+    { fieldType: "radio", label: "Radio" },
+    { fieldType: "checkbox", label: "Checkbox" },
+    { fieldType: "multiselect", label: "Multi-select" },
+  ];
+  const CRM_FIELD_PALETTE = [
+    { systemField: "fullName", label: "Customer Name", fieldType: "text" },
+    { systemField: "phoneNumber", label: "Phone", fieldType: "phone" },
+    { systemField: "email", label: "Email", fieldType: "email" },
+    { systemField: "source", label: "Lead Source", fieldType: "select" },
+    { systemField: "ownerId", label: "Lead Owner", fieldType: "select" },
+    { systemField: "crmCampaignId", label: "Campaign", fieldType: "select" },
+    { systemField: "pipelineStage", label: "Pipeline Stage", fieldType: "select" },
+    { systemField: "nextFollowUpAt", label: "Next Follow-up", fieldType: "date" },
+    { systemField: "notes", label: "Notes", fieldType: "textarea" },
+  ];
+  const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_PALETTE.map(f => [f.fieldType, f.label]));
+
+  function showBanner(message, kind){
+    document.getElementById("banner").innerHTML = `<div class="banner ${kind === "success" ? "success" : "error"}">${App.escapeHtml(message)}</div>`;
+  }
+
+  function slugFromLabel(label, existingKeys){
+    let base = label.trim().replace(/[^a-zA-Z0-9]+/g, " ").trim().split(/\s+/)
+      .map((w, i) => i === 0 ? w.toLowerCase() : (w[0] || "").toUpperCase() + w.slice(1).toLowerCase()).join("");
+    if (!base) base = "field";
+    if (!/^[a-zA-Z]/.test(base)) base = "f" + base;
+    let key = base, n = 1;
+    while (existingKeys.includes(key)) { key = base + n; n++; }
+    return key;
+  }
+
+  function dynamicOptionsMap(){
+    return {
+      source: sources.map(s => ({ value: s.key, label: s.label })),
+      ownerId: owners.map(o => ({ value: o.id, label: o.fullName })),
+      pipelineStage: stages.map(s => ({ value: s.key, label: s.label })),
+      crmCampaignId: campaigns.map(c => ({ value: c.id, label: c.name })),
+    };
+  }
+
+  // ---- Palette ----------------------------------------------------------
+
+  function paletteItemHtml(def){
+    return `<div class="palette-item" draggable="true" data-def='${JSON.stringify(def).replace(/'/g, "&#39;")}'>
+      <span class="palette-item-label">${App.escapeHtml(def.label)}</span>
+      <span class="palette-item-plus">+</span>
+    </div>`;
+  }
+
+  function renderPalette(){
+    document.getElementById("paletteFieldTypes").innerHTML = FIELD_TYPE_PALETTE.map(paletteItemHtml).join("");
+    document.getElementById("paletteCrmFields").innerHTML = CRM_FIELD_PALETTE.map(paletteItemHtml).join("");
+
+    document.querySelectorAll(".palette-item").forEach(el => {
+      el.addEventListener("click", () => addField(JSON.parse(el.dataset.def)));
+      el.addEventListener("dragstart", (e) => {
+        dragState = { kind: "palette", def: JSON.parse(el.dataset.def) };
+        e.dataTransfer.effectAllowed = "copy";
+      });
+    });
+  }
+
+  function newFieldFromDef(def, existingKeys){
+    const isSystem = Boolean(def.systemField);
+    const key = isSystem ? def.systemField : slugFromLabel(def.label, existingKeys);
+    return {
+      key, label: def.label, fieldType: def.fieldType,
+      mappingType: isSystem ? "system" : "custom",
+      systemField: isSystem ? def.systemField : null,
+      options: ["select", "radio", "multiselect"].includes(def.fieldType) && !isSystem ? ["Option 1", "Option 2"] : [],
+      placeholder: null, helpText: null, defaultValue: null, required: false, conditional: null,
+    };
+  }
+
+  function addField(def){
+    const existingKeys = fields.map(f => f.key);
+    if (def.systemField && existingKeys.includes(def.systemField)) {
+      selectedKey = def.systemField;
+      renderAll();
+      return;
+    }
+    const field = newFieldFromDef(def, existingKeys);
+    fields.push(field);
+    selectedKey = field.key;
+    renderAll();
+  }
+
+  // ---- Canvas (live preview + reorder) -----------------------------------
+
+  function fieldRowHtml(field){
+    const bodyHtml = FormRenderer.renderFields([field], {}, { dynamicOptions: dynamicOptionsMap(), disabledFields: fields.map(f => f.key) });
+    return `<div class="builder-field-row ${selectedKey === field.key ? "selected" : ""}" draggable="true" data-key="${field.key}">
+      <div class="builder-field-row-head">
+        <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="builder-field-type-badge">${App.escapeHtml(FIELD_TYPE_LABELS[field.fieldType] || field.fieldType)}</span>
+        ${field.mappingType === "system" ? '<span class="pill pending">CRM field</span>' : ""}
+        ${field.required ? '<span class="pill failed">Required</span>' : ""}
+        <span class="builder-field-row-actions">
+          <button type="button" class="icon-action" data-dup="${field.key}" title="Duplicate">⧉</button>
+          <button type="button" class="icon-action" data-del="${field.key}" title="Delete">✕</button>
+        </span>
+      </div>
+      <div class="builder-field-row-body">${bodyHtml}</div>
+    </div>`;
+  }
+
+  function renderCanvas(){
+    const canvas = document.getElementById("builderCanvas");
+    canvas.innerHTML = fields.length
+      ? fields.map(fieldRowHtml).join("")
+      : `<div class="state-block"><p class="state-title">No fields yet</p><p class="state-desc">Add fields from the palette on the left, or drag one onto this area.</p></div>`;
+
+    canvas.querySelectorAll(".builder-field-row").forEach(row => {
+      row.addEventListener("click", (e) => {
+        if (e.target.closest("[data-dup],[data-del],input,select,textarea,label")) return;
+        selectedKey = row.dataset.key;
+        renderAll();
+      });
+      row.addEventListener("dragstart", (e) => {
+        dragState = { kind: "field", key: row.dataset.key };
+        e.dataTransfer.effectAllowed = "move";
+      });
+      row.querySelector("[data-dup]")?.addEventListener("click", () => duplicateField(row.dataset.key));
+      row.querySelector("[data-del]")?.addEventListener("click", () => deleteField(row.dataset.key));
+    });
+
+    canvas.ondragover = (e) => { e.preventDefault(); canvas.classList.add("dragover"); };
+    canvas.ondragleave = () => canvas.classList.remove("dragover");
+    canvas.ondrop = (e) => {
+      e.preventDefault();
+      canvas.classList.remove("dragover");
+      if (!dragState) return;
+      const rows = Array.from(canvas.querySelectorAll(".builder-field-row"));
+      let insertIdx = rows.length;
+      for (let i = 0; i < rows.length; i++) {
+        const rect = rows[i].getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { insertIdx = i; break; }
+      }
+      if (dragState.kind === "palette") {
+        const existingKeys = fields.map(f => f.key);
+        if (dragState.def.systemField && existingKeys.includes(dragState.def.systemField)) { dragState = null; return; }
+        const field = newFieldFromDef(dragState.def, existingKeys);
+        fields.splice(insertIdx, 0, field);
+        selectedKey = field.key;
+      } else if (dragState.kind === "field") {
+        const fromIdx = fields.findIndex(f => f.key === dragState.key);
+        if (fromIdx === -1) { dragState = null; return; }
+        const [moved] = fields.splice(fromIdx, 1);
+        let target = insertIdx;
+        if (fromIdx < target) target -= 1;
+        fields.splice(target, 0, moved);
+      }
+      dragState = null;
+      renderAll();
+    };
+  }
+
+  function duplicateField(key){
+    const idx = fields.findIndex(f => f.key === key);
+    if (idx === -1) return;
+    const original = fields[idx];
+    if (original.mappingType === "system") return; // a CRM field can only appear once
+    const existingKeys = fields.map(f => f.key);
+    const copy = { ...original, key: slugFromLabel(original.label + " copy", existingKeys), options: [...(original.options || [])] };
+    fields.splice(idx + 1, 0, copy);
+    selectedKey = copy.key;
+    renderAll();
+  }
+
+  function deleteField(key){
+    fields = fields.filter(f => f.key !== key);
+    if (selectedKey === key) selectedKey = null;
+    renderAll();
+  }
+
+  // ---- Settings panel -----------------------------------------------
+
+  function optionRowHtml(o, i){
+    return `<div class="option-row" data-idx="${i}"><input type="text" class="option-input" value="${App.escapeHtml(o)}" /><button type="button" class="icon-action" data-remove-option="${i}" title="Remove">✕</button></div>`;
+  }
+
+  function renderSettings(){
+    const panel = document.getElementById("settingsPanel");
+    const field = fields.find(f => f.key === selectedKey);
+    if (!field) {
+      panel.innerHTML = `<p class="hint">Select a field to edit its settings, or add one from the palette.</p>`;
+      return;
+    }
+    const isSystem = field.mappingType === "system";
+    const showOptions = ["select", "radio", "multiselect"].includes(field.fieldType) && !isSystem;
+    const otherFields = fields.filter(f => f.key !== field.key);
+
+    panel.innerHTML = `
+      <div class="field-settings">
+        <label for="set_label">Label</label>
+        <input id="set_label" value="${App.escapeHtml(field.label)}" />
+
+        ${isSystem
+          ? `<p class="hint">CRM field — maps to <code>${App.escapeHtml(field.systemField)}</code>, choices are always this company's live data.</p>`
+          : `<label for="set_key">Field key</label><input id="set_key" value="${App.escapeHtml(field.key)}" /><p class="hint">Stored under this key in the customer's custom fields.</p>`}
+
+        <label for="set_placeholder">Placeholder</label>
+        <input id="set_placeholder" value="${App.escapeHtml(field.placeholder || "")}" />
+
+        <label for="set_help">Help text</label>
+        <input id="set_help" value="${App.escapeHtml(field.helpText || "")}" />
+
+        ${field.fieldType !== "checkbox" ? `<label for="set_default">Default value</label><input id="set_default" value="${App.escapeHtml(field.defaultValue || "")}" />` : ""}
+
+        <label class="checkbox-option" style="margin-top:10px"><input type="checkbox" id="set_required" ${field.required ? "checked" : ""}/> Required</label>
+
+        ${showOptions ? `
+          <label style="margin-top:12px">Options</label>
+          <div id="optionsList">${(field.options || []).map(optionRowHtml).join("")}</div>
+          <button type="button" class="btn secondary" id="addOptionBtn" style="margin-top:8px">+ Add option</button>
+        ` : ""}
+
+        <label style="margin-top:14px">Show only if…</label>
+        <div class="grid-2">
+          <select id="set_condField">
+            <option value="">No condition</option>
+            ${otherFields.map(f => `<option value="${f.key}" ${field.conditional && field.conditional.fieldKey === f.key ? "selected" : ""}>${App.escapeHtml(f.label)}</option>`).join("")}
+          </select>
+          <select id="set_condOp">
+            <option value="equals" ${!field.conditional || field.conditional.operator !== "not_equals" ? "selected" : ""}>equals</option>
+            <option value="not_equals" ${field.conditional && field.conditional.operator === "not_equals" ? "selected" : ""}>does not equal</option>
+          </select>
+        </div>
+        <input id="set_condValue" placeholder="value" value="${App.escapeHtml(field.conditional ? field.conditional.value : "")}" style="margin-top:8px" />
+
+        <button type="button" class="btn" id="applyFieldSettings" style="margin-top:16px; width:100%">Apply</button>
+      </div>
+    `;
+
+    document.getElementById("addOptionBtn")?.addEventListener("click", () => {
+      field.options = [...(field.options || []), `Option ${(field.options || []).length + 1}`];
+      renderSettings();
+    });
+    panel.querySelectorAll("[data-remove-option]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.dataset.removeOption);
+        field.options = (field.options || []).filter((_, idx) => idx !== i);
+        renderSettings();
+      });
+    });
+
+    document.getElementById("applyFieldSettings").addEventListener("click", () => {
+      field.label = document.getElementById("set_label").value.trim() || field.label;
+      if (!isSystem) {
+        const newKey = document.getElementById("set_key").value.trim();
+        if (newKey && newKey !== field.key && /^[a-zA-Z][a-zA-Z0-9_]*$/.test(newKey) && !fields.some(f => f !== field && f.key === newKey)) {
+          field.key = newKey;
+          selectedKey = newKey;
+        }
+      }
+      field.placeholder = document.getElementById("set_placeholder").value.trim() || null;
+      field.helpText = document.getElementById("set_help").value.trim() || null;
+      const defaultEl = document.getElementById("set_default");
+      field.defaultValue = defaultEl ? (defaultEl.value.trim() || null) : null;
+      field.required = document.getElementById("set_required").checked;
+      if (showOptions) {
+        field.options = Array.from(panel.querySelectorAll(".option-input")).map(el => el.value.trim()).filter(Boolean);
+      }
+      const condField = document.getElementById("set_condField").value;
+      field.conditional = condField
+        ? { fieldKey: condField, operator: document.getElementById("set_condOp").value, value: document.getElementById("set_condValue").value.trim() }
+        : null;
+      renderAll();
+    });
+  }
+
+  function renderAll(){
+    renderCanvas();
+    renderSettings();
+  }
+
+  // ---- Preview modal (same FormRenderer as production) -----------------
+
+  function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+
+  function openPreview(){
+    const html = FormRenderer.renderFields(fields, {}, { dynamicOptions: dynamicOptionsMap() });
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="previewOverlay">
+        <div class="modal" style="max-width:540px">
+          <div class="modal-header">
+            <div><h2>${App.escapeHtml(form?.name || "Preview")}</h2><p>${form?.description ? App.escapeHtml(form.description) : "Exactly what production renders."}</p></div>
+            <button class="modal-close" type="button" id="previewClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="segmented" id="previewViewport" style="margin-bottom:14px">
+              <button type="button" data-vp="desktop" class="active">Desktop</button>
+              <button type="button" data-vp="mobile">Mobile</button>
+            </div>
+            <div id="previewFrame" class="preview-frame desktop">
+              ${html}
+              <button type="button" class="btn" style="margin-top:10px" disabled>${form?.type === "public" ? "Submit" : "Save"} (preview only)</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("previewClose").addEventListener("click", closeModal);
+    document.getElementById("previewOverlay").addEventListener("click", (e) => { if (e.target.id === "previewOverlay") closeModal(); });
+    document.getElementById("previewViewport").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-vp]");
+      if (!btn) return;
+      document.querySelectorAll("#previewViewport button").forEach(b => b.classList.toggle("active", b === btn));
+      document.getElementById("previewFrame").className = `preview-frame ${btn.dataset.vp}`;
+    });
+  }
+
+  // ---- Load / Save --------------------------------------------------
+
+  function fieldsPayload(){
+    return fields.map(({ key, label, fieldType, mappingType, systemField, options, placeholder, helpText, defaultValue, required, conditional }) =>
+      ({ key, label, fieldType, mappingType, systemField, options, placeholder, helpText, defaultValue, required, conditional }));
+  }
+
+  function applyFormMeta(){
+    document.getElementById("formTitle").textContent = form.name;
+    document.getElementById("formSub").textContent =
+      `${form.type === "public" ? "Public lead-capture form" : "Internal form"} · ${form.status}${form.isDefault ? " · Default Add Customer form" : ""}`;
+    document.getElementById("metaName").value = form.name;
+    document.getElementById("metaDescription").value = form.description || "";
+    document.getElementById("publishBtn").style.display = form.status === "draft" ? "inline-flex" : "none";
+    document.getElementById("archiveBtn").style.display = form.status === "published" ? "inline-flex" : "none";
+    document.getElementById("setDefaultBtn").style.display = form.type === "internal" && form.status === "published" && !form.isDefault ? "inline-flex" : "none";
+  }
+
+  async function loadSupportingData(){
+    try {
+      const data = await App.apiJson("/api/pipeline");
+      sources = data.sources || [];
+      owners = data.owners || [];
+      stages = (data.template && data.template.stages) || [];
+    } catch { /* non-fatal - dynamic option lists just stay empty */ }
+    try {
+      const { campaigns: c } = await App.apiJson("/api/campaigns");
+      campaigns = c || [];
+    } catch { /* non-fatal */ }
+  }
+
+  async function load(){
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/forms.html");
+    canManage = App.hasPermission(me, "forms.manage");
+    if (!canManage) {
+      document.getElementById("formSub").textContent = "You don't have permission to edit forms.";
+      return;
+    }
+    if (!formId) {
+      showBanner("No form selected.", "error");
+      return;
+    }
+
+    document.getElementById("headActions").style.display = "flex";
+    await loadSupportingData();
+
+    try {
+      const result = await App.apiJson(`/api/forms/${formId}`);
+      form = result.form;
+      fields = result.fields.map(f => ({ ...f }));
+    } catch (err) {
+      showBanner(err.message, "error");
+      return;
+    }
+
+    applyFormMeta();
+    renderPalette();
+    renderAll();
+  }
+
+  document.getElementById("saveBtn").addEventListener("click", async () => {
+    try {
+      await App.apiJson(`/api/forms/${formId}`, {
+        method: "PUT",
+        body: { name: document.getElementById("metaName").value.trim(), description: document.getElementById("metaDescription").value.trim(), fields: fieldsPayload() },
+      });
+      showBanner("Draft saved.", "success");
+      const result = await App.apiJson(`/api/forms/${formId}`);
+      form = result.form;
+      fields = result.fields.map(f => ({ ...f }));
+      applyFormMeta();
+      renderAll();
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  });
+
+  document.getElementById("publishBtn").addEventListener("click", async () => {
+    try {
+      await App.apiJson(`/api/forms/${formId}`, {
+        method: "PUT",
+        body: { name: document.getElementById("metaName").value.trim(), description: document.getElementById("metaDescription").value.trim(), fields: fieldsPayload() },
+      });
+      await App.apiJson(`/api/forms/${formId}/publish`, { method: "POST" });
+      showBanner("Form published.", "success");
+      await load();
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  });
+
+  document.getElementById("archiveBtn").addEventListener("click", async () => {
+    if (!confirm("Archive this form? It stops being used by Add Customer / its public link, but past submissions stay intact.")) return;
+    try {
+      await App.apiJson(`/api/forms/${formId}/archive`, { method: "POST" });
+      showBanner("Form archived.", "success");
+      await load();
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  });
+
+  document.getElementById("setDefaultBtn").addEventListener("click", async () => {
+    try {
+      await App.apiJson(`/api/forms/${formId}/set-default`, { method: "POST" });
+      showBanner("Set as the default Add Customer form.", "success");
+      await load();
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  });
+
+  document.getElementById("previewBtn").addEventListener("click", openPreview);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.getElementById("modalRoot").innerHTML.trim()) closeModal(); });
+
+  load();
+</script>
+</body>
+</html>

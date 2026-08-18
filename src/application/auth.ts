@@ -19,8 +19,9 @@ import {
   REFRESH_TOKEN_TTL_SECONDS,
   signAccessToken,
 } from "../infrastructure/auth/tokens";
-import { INDUSTRY_KEYS, type IndustryKey } from "../domain/industryTemplates";
+import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
 import { ALL_PERMISSIONS } from "../domain/permissions";
+import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 
 /** The built-in Owner role is documented as "always holds every
  * permission, cannot be edited" - but its `permissions` column is a
@@ -107,6 +108,19 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     passwordHash,
     fullName: input.fullName,
   });
+
+  // Auto-provision the company's default Forms (one published+default
+  // internal form, one draft public form) straight from the industry
+  // template - see provisionDefaultForms() for why. Best-effort: a failure
+  // here must never block account creation itself (the company/user rows
+  // above are already committed) - public/pipeline.html's Add Customer
+  // flow falls back to its built-in fixed fields whenever no default
+  // internal form exists, so a missing form is degraded, not broken.
+  try {
+    await provisionDefaultForms(company.id, getIndustryTemplate(industryTemplate), user.id);
+  } catch (err) {
+    console.error("[auth/register] Failed to provision default forms:", err);
+  }
 
   return { company, user, role: ownerRole };
 }

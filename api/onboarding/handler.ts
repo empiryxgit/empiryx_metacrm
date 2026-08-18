@@ -5,8 +5,10 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
-import { completeOnboarding, updateCompanyProfile } from "../../src/infrastructure/db/repositories/tenancy";
+import { completeOnboarding, getCompanyById, updateCompanyProfile } from "../../src/infrastructure/db/repositories/tenancy";
 import { PERMISSIONS } from "../../src/domain/permissions";
+import { getIndustryTemplate } from "../../src/domain/industryTemplates";
+import { listForms, provisionDefaultForms } from "../../src/infrastructure/db/repositories/forms";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -60,6 +62,22 @@ async function handleComplete(req: VercelRequest, res: VercelResponse) {
 
   const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
   if (!auth) return;
+
+  // Safety net for any company that predates the Forms module (registration
+  // itself already provisions default forms for every new signup - see
+  // registerCompanyAndOwner in src/application/auth.ts) - never leaves an
+  // existing tenant without a working "Add Customer" form.
+  try {
+    const existing = await listForms(auth.companyId, "internal");
+    if (existing.length === 0) {
+      const company = await getCompanyById(auth.companyId);
+      if (company) {
+        await provisionDefaultForms(auth.companyId, getIndustryTemplate(company.industryTemplate));
+      }
+    }
+  } catch (err) {
+    console.error("[onboarding/complete] Failed to backfill default forms:", err);
+  }
 
   await completeOnboarding(auth.companyId);
   res.status(200).json({ completed: true });

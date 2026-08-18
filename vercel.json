@@ -9,6 +9,7 @@
     "api/campaigns/handler.ts": { "maxDuration": 15 },
     "api/admin/roles/handler.ts": { "maxDuration": 15 },
     "api/admin/users/handler.ts": { "maxDuration": 15 },
+    "api/forms/handler.ts": { "maxDuration": 15 },
     "api/auth/handler.ts": { "maxDuration": 10 },
     "api/onboarding/handler.ts": { "maxDuration": 10 },
     "api/system.ts": { "maxDuration": 15 }
@@ -45,6 +46,18 @@
 
     { "source": "/api/admin/users", "destination": "/api/admin/users/handler" },
     { "source": "/api/admin/users/:userId", "destination": "/api/admin/users/handler?userId=:userId" },
+
+    { "source": "/api/forms/default-internal", "destination": "/api/forms/handler?sub=default-internal" },
+    { "source": "/api/forms/:formId/publish", "destination": "/api/forms/handler?formId=:formId&sub=publish" },
+    { "source": "/api/forms/:formId/archive", "destination": "/api/forms/handler?formId=:formId&sub=archive" },
+    { "source": "/api/forms/:formId/set-default", "destination": "/api/forms/handler?formId=:formId&sub=set-default" },
+    { "source": "/api/forms/:formId/submit", "destination": "/api/forms/handler?formId=:formId&sub=submit" },
+    { "source": "/api/forms/:formId/submissions", "destination": "/api/forms/handler?formId=:formId&sub=submissions" },
+    { "source": "/api/forms/:formId", "destination": "/api/forms/handler?formId=:formId" },
+    { "source": "/api/forms", "destination": "/api/forms/handler" },
+
+    { "source": "/api/public/forms/:publicKey/submit", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-submit" },
+    { "source": "/api/public/forms/:publicKey", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-get" },
 
     { "source": "/api/webhooks/meta/:slug", "destination": "/api/webhooks/meta/handler?slug=:slug" },
 

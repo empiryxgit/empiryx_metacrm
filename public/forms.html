@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Forms — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Forms</h1>
+        <p class="page-sub">Build the forms your team and your leads fill in — Add Customer, and public lead capture.</p>
+      </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="ctaCreate">+ New form</button>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New form</h2>
+      <form id="createForm">
+        <div class="grid-2">
+          <div>
+            <label for="name">Form name</label>
+            <input id="name" required placeholder="e.g. Site Visit Intake" />
+          </div>
+          <div>
+            <label for="type">Type</label>
+            <select id="type">
+              <option value="internal">Internal (used inside the CRM)</option>
+              <option value="public">Public (external lead capture)</option>
+            </select>
+          </div>
+        </div>
+        <label for="description">Description (optional)</label>
+        <input id="description" placeholder="Shown to your team in the builder only" />
+        <button class="btn" type="submit" style="margin-top:14px">Create &amp; open builder</button>
+      </form>
+    </div>
+
+    <div class="segmented" id="typeToggle" role="tablist" aria-label="Form type" style="margin-bottom:var(--space-4)">
+      <button type="button" data-type="" role="tab" class="active">All</button>
+      <button type="button" data-type="internal" role="tab">Internal</button>
+      <button type="button" data-type="public" role="tab">Public</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, canManage;
+  let allForms = [];
+  let typeFilter = "";
+
+  function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"; }
+
+  function statusPill(status){
+    const cls = status === "published" ? "processed" : status === "archived" ? "failed" : "pending";
+    return `<span class="pill ${cls}">${App.escapeHtml(status)}</span>`;
+  }
+
+  function renderRows(){
+    const rows = document.getElementById("rows");
+    const filtered = typeFilter ? allForms.filter(f => f.type === typeFilter) : allForms;
+
+    if (!filtered.length) {
+      rows.innerHTML = `<tr><td colspan="5">
+        <div class="state-block">
+          <p class="state-title">No forms yet</p>
+          <p class="state-desc">${canManage ? "Create your first form — the builder walks you through fields, then publish." : "Ask an admin to set up a form."}</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+
+    rows.innerHTML = filtered.map(f => `
+      <tr>
+        <td>
+          <div class="lead-identity">
+            <div class="lead-name">${App.escapeHtml(f.name)}${f.isDefault ? ' <span class="pill processed" style="margin-left:6px">Default</span>' : ""}</div>
+            ${f.description ? `<div class="lead-meta-id">${App.escapeHtml(f.description)}</div>` : ""}
+          </div>
+        </td>
+        <td>${f.type === "public" ? "Public" : "Internal"}</td>
+        <td>${statusPill(f.status)}</td>
+        <td>${fmt(f.updatedAt || f.createdAt)}</td>
+        <td style="white-space:nowrap; text-align:right">
+          <a href="/forms/builder.html?id=${f.id}">Edit</a>
+          ${App.hasPermission(me, "submissions.view") ? ` · <a href="/submissions.html?formId=${f.id}">Submissions</a>` : ""}
+          ${f.type === "public" && f.status === "published" && f.publicKey ? ` · <a href="/form.html?key=${f.publicKey}" target="_blank" rel="noopener">Open link ↗</a>` : ""}
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function load(){
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/forms.html");
+    canManage = App.hasPermission(me, "forms.manage");
+    if (canManage) {
+      document.getElementById("createCard").style.display = "block";
+      document.getElementById("headActions").style.display = "flex";
+    }
+
+    const rows = document.getElementById("rows");
+    try {
+      ({ forms: allForms } = await App.apiJson("/api/forms"));
+    } catch (err) {
+      rows.innerHTML = `<tr><td colspan="5">
+        <div class="state-block">
+          <p class="state-title">Unable to load forms</p>
+          <p class="state-desc">${App.escapeHtml(err.message)}</p>
+          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+        </div>
+      </td></tr>`;
+      document.getElementById("retryBtn")?.addEventListener("click", load);
+      return;
+    }
+    renderRows();
+  }
+
+  document.getElementById("typeToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-type]");
+    if (!btn) return;
+    typeFilter = btn.dataset.type;
+    document.querySelectorAll("#typeToggle button").forEach(b => b.classList.toggle("active", b === btn));
+    renderRows();
+  });
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { form } = await App.apiJson("/api/forms", {
+        method: "POST",
+        body: {
+          name: document.getElementById("name").value.trim(),
+          type: document.getElementById("type").value,
+          description: document.getElementById("description").value.trim(),
+          fields: [],
+        },
+      });
+      window.location.href = `/forms/builder.html?id=${form.id}`;
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("name").focus();
+  });
+
+  load();
+</script>
+</body>
+</html>

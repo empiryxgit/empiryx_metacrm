@@ -40,7 +40,11 @@ const App = (() => {
     const res = await api(path, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || `Request failed (${res.status})`);
+      // fieldErrors (per-field validation messages) is carried through when
+      // present - see src/domain/formValidation.ts / api/forms/handler.ts -
+      // so a caller can highlight individual inputs instead of just showing
+      // one generic banner message.
+      throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { fieldErrors: data.fieldErrors });
     }
     return data;
   }
@@ -101,6 +105,8 @@ const App = (() => {
   ];
 
   const ADMIN_LINKS = [
+    { href: "/forms.html", label: "Forms", perm: "forms.view" },
+    { href: "/submissions.html", label: "Submissions", perm: "submissions.view" },
     { href: "/admin/users.html", label: "Users", perm: "users.manage" },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage" },
   ];

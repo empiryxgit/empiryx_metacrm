@@ -66,8 +66,16 @@
   </div>
 
 <script src="/assets/app.js"></script>
+<script src="/assets/formRenderer.js"></script>
 <script>
   let me, canManage, canManageLeads;
+  // The company's configured internal form (Add Customer / Not Interested ->
+  // Add to CRM), if one exists - see /api/forms/default-internal. Populated
+  // once at load; null (and internalFormFields empty) means "no configured
+  // form yet", in which case customerModalHtml/submitCustomerModal fall back
+  // to their original hard-coded fields/endpoints below, unchanged - a
+  // company with no form provisioned yet can never lose this feature.
+  let internalForm = null, internalFormFields = [], campaignsList = [];
   let template = null, stages = [], sources = [], owners = [];
   let allRows = [];
   let campaignName = "";
@@ -312,7 +320,7 @@
     return `<input type="text" data-field="${field.key}" value="${App.escapeHtml(String(val))}" />`;
   }
 
-  function customerModalHtml(mode, lead){
+  function customerModalHtmlLegacy(mode, lead){
     const isConvert = mode === "convert";
     const sourceOptions = isConvert
       ? `<option value="${lead.source}" selected>${App.escapeHtml(sourceLabel(lead.source))}</option>`
@@ -365,11 +373,119 @@
       </div>`;
   }
 
+  // ---- Form-driven variant - used whenever the company has a configured
+  // default internal form (see /api/forms/default-internal, fetched once at
+  // startup below). Renders EVERY field (system + custom) from that form via
+  // the shared FormRenderer, instead of the fixed cf_* inputs above.
+  function valuesFromLead(fields, lead){
+    if (!lead) return {};
+    const values = {};
+    fields.forEach(f => {
+      if (f.mappingType === "system") {
+        switch (f.systemField) {
+          case "fullName": values[f.key] = lead.fullName || ""; break;
+          case "phoneNumber": values[f.key] = lead.phoneNumber || ""; break;
+          case "email": values[f.key] = lead.email || ""; break;
+          case "source": values[f.key] = lead.source || ""; break;
+          case "ownerId": values[f.key] = lead.ownerId || ""; break;
+          case "pipelineStage": values[f.key] = lead.pipelineStage || ""; break;
+          case "nextFollowUpAt": values[f.key] = lead.nextFollowUpAt ? lead.nextFollowUpAt.slice(0, 10) : ""; break;
+          case "notes": values[f.key] = lead.notes || ""; break;
+          default: break;
+        }
+      } else {
+        values[f.key] = lead.customFields ? lead.customFields[f.key] : undefined;
+      }
+    });
+    return values;
+  }
+
+  function customerModalHtmlFromForm(mode, lead){
+    const isConvert = mode === "convert";
+    const dynOpts = {
+      dynamicOptions: {
+        source: sources.map(s => ({ value: s.key, label: s.label })),
+        ownerId: owners.map(o => ({ value: o.id, label: o.fullName })),
+        pipelineStage: stages.map(s => ({ value: s.key, label: s.label })),
+        crmCampaignId: campaignsList.map(c => ({ value: c.id, label: c.name })),
+      },
+    };
+    if (isConvert) {
+      const sourceField = internalFormFields.find(f => f.systemField === "source");
+      if (sourceField) dynOpts.disabledFields = [sourceField.key];
+    }
+    const bodyHtml = FormRenderer.renderFields(internalFormFields, valuesFromLead(internalFormFields, lead), dynOpts);
+
+    return `
+      <div class="modal-overlay" id="customerModalOverlay">
+        <div class="modal">
+          <div class="modal-header">
+            <div>
+              <h2>${isConvert ? "Add to CRM" : "Add Customer"}</h2>
+              <p>${isConvert ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing." : "Create a customer and place them in the pipeline."}</p>
+            </div>
+            <button class="modal-close" type="button" id="customerModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="customerModalError"></div>
+            <form id="customerModalForm">${bodyHtml}</form>
+            ${isConvert && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
+          </div>
+          <div class="modal-footer">
+            <button class="btn secondary" type="button" id="customerModalCancel">Cancel</button>
+            <button class="btn" type="button" id="customerModalSave">${isConvert ? "Save Customer" : "Add Customer"}</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async function submitCustomerModalFromForm(mode, leadId){
+    const errBox = document.getElementById("customerModalError");
+    errBox.innerHTML = "";
+    const formEl = document.getElementById("customerModalForm");
+    const values = FormRenderer.collectValues(formEl, internalFormFields);
+    const errors = FormRenderer.validate(internalFormFields, values);
+    if (Object.keys(errors).length > 0) {
+      FormRenderer.showErrors(formEl, errors);
+      return;
+    }
+    FormRenderer.clearErrors(formEl);
+
+    const saveBtn = document.getElementById("customerModalSave");
+    saveBtn.disabled = true;
+    try {
+      const body = { values };
+      if (mode === "convert") body.leadId = leadId;
+      await App.apiJson(`/api/forms/${internalForm.id}/submit`, { method: "POST", body });
+      closeModal();
+      load();
+    } catch (err) {
+      if (err.fieldErrors) FormRenderer.showErrors(formEl, err.fieldErrors);
+      errBox.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      saveBtn.disabled = false;
+    }
+  }
+
+  // ---- Dispatchers -----------------------------------------------------
+
+  function customerModalHtml(mode, lead){
+    return (internalForm && internalFormFields.length > 0)
+      ? customerModalHtmlFromForm(mode, lead)
+      : customerModalHtmlLegacy(mode, lead);
+  }
+
+  function submitCustomerModal(mode, leadId){
+    return (internalForm && internalFormFields.length > 0)
+      ? submitCustomerModalFromForm(mode, leadId)
+      : submitCustomerModalLegacy(mode, leadId);
+  }
+
   function closeModal(){
     document.getElementById("modalRoot").innerHTML = "";
   }
 
   function openCustomerModal({ mode, lead }){
+    const usingForm = internalForm && internalFormFields.length > 0;
     document.getElementById("modalRoot").innerHTML = customerModalHtml(mode, lead || null);
     document.getElementById("customerModalClose").addEventListener("click", closeModal);
     document.getElementById("customerModalCancel").addEventListener("click", closeModal);
@@ -377,10 +493,15 @@
       if (e.target.id === "customerModalOverlay") closeModal();
     });
     document.getElementById("customerModalSave").addEventListener("click", () => submitCustomerModal(mode, lead?.id));
-    document.getElementById("cf_name").focus();
+    if (usingForm) {
+      FormRenderer.wireConditionals(document.getElementById("customerModalForm"), internalFormFields);
+      document.querySelector("#customerModalForm input, #customerModalForm select, #customerModalForm textarea")?.focus();
+    } else {
+      document.getElementById("cf_name").focus();
+    }
   }
 
-  async function submitCustomerModal(mode, leadId){
+  async function submitCustomerModalLegacy(mode, leadId){
     const errBox = document.getElementById("customerModalError");
     errBox.innerHTML = "";
     const fullName = document.getElementById("cf_name").value.trim();
@@ -473,10 +594,27 @@
     const select = document.getElementById("campaignSelect");
     try {
       const { campaigns } = await App.apiJson("/api/campaigns");
+      campaignsList = campaigns;
       select.innerHTML = `<option value="">All campaigns</option>` + campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
     } catch {
       select.innerHTML = `<option value="">All campaigns</option>`;
     }
+  }
+
+  /** Loads the company's configured internal form (Add Customer / Not
+   * Interested -> Add to CRM), if any - see /api/forms/default-internal.
+   * Any failure (network error, no form provisioned yet) is swallowed;
+   * internalForm stays null and customerModalHtml/submitCustomerModal fall
+   * back to their original hard-coded fields, exactly as before this
+   * feature existed. */
+  async function loadInternalForm(){
+    try {
+      const result = await App.apiJson("/api/forms/default-internal");
+      if (result.form && Array.isArray(result.fields) && result.fields.length > 0) {
+        internalForm = result.form;
+        internalFormFields = result.fields;
+      }
+    } catch { /* fall back to legacy fields */ }
   }
 
   async function load(){
@@ -532,7 +670,10 @@
     App.renderNav(me, "/pipeline.html");
     canManage = App.hasPermission(me, "pipeline.manage");
     canManageLeads = App.hasPermission(me, "leads.manage");
-    if (canManageLeads) document.getElementById("addCustomerBtn").style.display = "inline-flex";
+    if (canManageLeads) {
+      document.getElementById("addCustomerBtn").style.display = "inline-flex";
+      await loadInternalForm();
+    }
 
     await loadCampaignOptions();
     document.getElementById("campaignSelect").addEventListener("change", load);

@@ -243,6 +243,60 @@ export async function insertManualLead(input: InsertManualLeadInput) {
   return firstOrThrow(rows);
 }
 
+export interface InsertFormLeadInput {
+  companyId: string;
+  fullName: string;
+  phoneNumber?: string;
+  email?: string;
+  source: string;
+  // "manual_customer" for a form filled internally by a salesperson (Add
+  // Customer using the configured internal form), "digital_lead" for a
+  // public-form submission - an automatic, unattended inbound capture just
+  // like a Meta lead, just not routed through the Meta webhook. See
+  // api/forms/handler.ts for both callers.
+  leadType: "digital_lead" | "manual_customer";
+  ownerId?: string;
+  pipelineStage: string;
+  nextFollowUpAt?: Date;
+  notes?: string;
+  customFields: Record<string, unknown>;
+  formResponses?: unknown;
+}
+
+/** The Forms module's single lead-write path - used by BOTH the internal
+ * "Add Customer" form submission and the public lead-capture form
+ * submission (see api/forms/handler.ts). Deliberately generalizes
+ * insertManualLead() above (same synthetic-metaLeadId technique, same
+ * table) rather than duplicating it, so every non-Meta origin (internal
+ * form, public form, and the pre-existing manual "+Add Customer" fallback)
+ * ends up as the exact same kind of `leads` row - there is no separate
+ * "form submission" entity for a lead to live in. */
+export async function insertFormLead(input: InsertFormLeadInput) {
+  const db = await getDb();
+  const rows = await db
+    .insert(leads)
+    .values({
+      companyId: input.companyId,
+      metaLeadId: `form:${randomUUID()}`,
+      leadType: input.leadType,
+      source: input.source,
+      fullName: input.fullName,
+      phoneNumber: input.phoneNumber,
+      email: input.email,
+      ownerId: input.ownerId,
+      pipelineStage: input.pipelineStage,
+      nextFollowUpAt: input.nextFollowUpAt,
+      notes: input.notes,
+      customFields: input.customFields,
+      formResponses: (input.formResponses ?? []) as object,
+      metaCreatedAt: new Date(),
+      status: "processed",
+      processedAt: new Date(),
+    })
+    .returning();
+  return firstOrThrow(rows);
+}
+
 export interface UpdateLeadCrmFieldsInput {
   fullName?: string;
   email?: string;

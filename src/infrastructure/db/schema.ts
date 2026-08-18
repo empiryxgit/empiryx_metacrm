@@ -295,6 +295,157 @@ export const leadProcessingLog = crm.table(
   }),
 );
 
+// ---------------------------------------------------------------------------
+// Forms & Lead Capture
+// ---------------------------------------------------------------------------
+//
+// A "form" is a company-defined, industry-agnostic field list - never a
+// per-industry component (there is no RealEstateForm/SolarForm anywhere in
+// this codebase; see src/domain/industryTemplates.ts). Two form `type`s
+// share this exact same shape:
+//   "internal" - used by the CRM's own "Add Customer" / "Not interested ->
+//                Add to CRM" flows on the Pipeline page.
+//   "public"   - published to an unguessable public URL (see `publicKey`)
+//                for external lead capture (embeds, landing pages, ...).
+// Every field on a form is EITHER a system field (maps to a real `leads`
+// column, e.g. fullName/phoneNumber/pipelineStage) OR a custom field (maps
+// into `leads.customFields` jsonb by key) - see formFields.mappingType. This
+// is the same system-vs-custom split the rest of the app already uses
+// (BASE_FIELD_KEYS vs template.fields in industryTemplates.ts); forms just
+// let a company additionally control the ORDER, labels, requiredness and
+// which of those fields actually appear on a given form.
+
+export const forms = crm.table(
+  "forms",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    // "internal" | "public" - see comment above.
+    type: text("type").notNull().default("internal"),
+    // "draft" | "published" | "archived". A draft is only visible/usable in
+    // the builder; only a published form can be used by Add Customer / Not
+    // Interested, or (for type=public) reached at its public URL. Archiving
+    // never deletes the form or its past submissions - see formSubmissions
+    // below for why old submissions must always stay readable.
+    status: text("status").notNull().default("draft"),
+    // Unguessable routing key for a published public form's URL
+    // (/form.html?key=...), same pattern as webhookConfigs.slug - safe to
+    // display/share, NOT a secret credential. Null for internal forms and
+    // for public forms that have never been published.
+    publicKey: text("public_key"),
+    // Bumped every time this form's field list changes after its first
+    // publish. Each submission stores the schemaVersion it was submitted
+    // against (see formSubmissions.schemaVersion) plus a full field-list
+    // snapshot, so editing a form later can never make an old submission
+    // unreadable or mis-attributed to the wrong fields.
+    schemaVersion: integer("schema_version").notNull().default(1),
+    // At most one form per (companyId, type="internal") should have this
+    // set - the form Pipeline's "Add Customer" / "Not interested -> Add to
+    // CRM" load automatically. Enforced at the application layer
+    // (setDefaultInternalForm), not a DB constraint, so a company is never
+    // left with zero usable forms mid-transition.
+    isDefault: boolean("is_default").notNull().default(false),
+    // Free-form per-form UI settings (e.g. successMessage, redirectUrl,
+    // submitButtonLabel) - deliberately jsonb rather than new columns per
+    // setting, consistent with leads.customFields.
+    settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+  },
+  (t) => ({
+    companyIdx: index("ix_forms_company_id").on(t.companyId),
+    publicKeyIdx: uniqueIndex("ux_forms_public_key").on(t.publicKey),
+    companyTypeIdx: index("ix_forms_company_id_type").on(t.companyId, t.type),
+  }),
+);
+
+export const formFields = crm.table(
+  "form_fields",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    formId: uuid("form_id").notNull().references(() => forms.id, { onDelete: "cascade" }),
+    // Stable identifier for this field within the form. For a system field
+    // this is one of BASE_FIELD_KEYS-ish leads columns (see systemField
+    // below, which carries the actual column name); for a custom field this
+    // IS the key written into leads.customFields.
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    // text | textarea | number | currency | email | phone | date | datetime
+    // | select | radio | checkbox | multiselect
+    fieldType: text("field_type").notNull(),
+    // "system" | "custom" - see the forms table comment above.
+    mappingType: text("mapping_type").notNull().default("custom"),
+    // Only set when mappingType="system" - the exact leads.* column (or
+    // "customFields" pseudo-target is never used here, that's the "custom"
+    // path) this field writes to: fullName | phoneNumber | email | source |
+    // crmCampaignId | ownerId | pipelineStage | nextFollowUpAt | notes.
+    systemField: text("system_field"),
+    options: jsonb("options").$type<string[]>().notNull().default(sql`'[]'::jsonb`), // for select/radio/multiselect
+    placeholder: text("placeholder"),
+    helpText: text("help_text"),
+    defaultValue: text("default_value"),
+    required: boolean("required").notNull().default(false),
+    position: integer("position").notNull().default(0),
+    // Basic conditional visibility: { fieldKey, operator: "equals"|"not_equals", value }
+    // - shows/hides this field client-side based on another field's current
+    // value. Null means always shown. Never enforced as a hard requirement
+    // server-side (a hidden field is simply optional), so a stale rule can
+    // never block a legitimate submission.
+    conditional: jsonb("conditional").$type<{ fieldKey: string; operator: string; value: string }>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    formIdx: index("ix_form_fields_form_id").on(t.formId),
+    formPositionIdx: index("ix_form_fields_form_id_position").on(t.formId, t.position),
+  }),
+);
+
+export const formSubmissions = crm.table(
+  "form_submissions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    formId: uuid("form_id").notNull().references(() => forms.id, { onDelete: "cascade" }),
+    // Denormalized alongside formId so every tenant-isolation check on this
+    // table can filter on company_id directly, without a join back through
+    // forms - the same defense-in-depth pattern leads.companyId already
+    // uses relative to crmCampaignId.
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // The Lead/Customer record this submission created or enriched. Null
+    // only in the rare case a submission was received but Lead creation
+    // itself failed server-side (status will be "rejected" then).
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    // The form's schemaVersion at the moment of this submission - together
+    // with fieldsSnapshot below, guarantees this submission stays fully
+    // readable (correct labels/types/order) even after the form is edited
+    // or fields are removed later.
+    schemaVersion: integer("schema_version").notNull(),
+    fieldsSnapshot: jsonb("fields_snapshot").$type<unknown[]>().notNull(),
+    values: jsonb("values").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`), // { [field.key]: submittedValue }
+    // "internal" | "public" | "manual_prefill" - how this submission was
+    // captured, independent of the form's own type (an internal form can
+    // still be filled by a salesperson working a public-form lead).
+    channel: text("channel").notNull().default("internal"),
+    // Only meaningful for public submissions - basic abuse-visibility, never
+    // used for anything beyond that.
+    submitterIp: text("submitter_ip"),
+    submitterUserAgent: text("submitter_user_agent"),
+    status: text("status").notNull().default("received"), // received | rejected
+    rejectionReason: text("rejection_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    formIdx: index("ix_form_submissions_form_id").on(t.formId),
+    companyIdx: index("ix_form_submissions_company_id").on(t.companyId),
+    createdAtIdx: index("ix_form_submissions_created_at").on(t.createdAt),
+  }),
+);
+
 export const reconciliationRuns = crm.table("reconciliation_runs", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),

@@ -17,6 +17,9 @@ export const PERMISSIONS = {
   LEADS_VIEW: "leads.view",
   LEADS_EXPORT: "leads.export",
   LEADS_MANAGE: "leads.manage", // manually add a customer / edit lead-owned fields
+  FORMS_VIEW: "forms.view", // see the Forms list + individual form definitions
+  FORMS_MANAGE: "forms.manage", // create/edit/publish/archive forms in the builder
+  SUBMISSIONS_VIEW: "submissions.view", // view the Submissions list/detail for this company's forms
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -36,6 +39,9 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.LEADS_VIEW, label: "View leads", category: "Leads" },
   { code: PERMISSIONS.LEADS_EXPORT, label: "Export lead data", category: "Leads" },
   { code: PERMISSIONS.LEADS_MANAGE, label: "Manually add customers", category: "Leads" },
+  { code: PERMISSIONS.FORMS_VIEW, label: "View forms", category: "Forms" },
+  { code: PERMISSIONS.FORMS_MANAGE, label: "Create and manage forms", category: "Forms" },
+  { code: PERMISSIONS.SUBMISSIONS_VIEW, label: "View form submissions", category: "Forms" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

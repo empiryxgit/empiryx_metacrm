@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Submissions — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Submissions</h1>
+        <p class="page-sub">Every entry captured through a form — internal Add Customer or public lead capture.</p>
+      </div>
+    </div>
+
+    <div class="board-toolbar">
+      <div class="field-inline">
+        <label for="formSelect">Form</label>
+        <select id="formSelect"></select>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+    <div id="modalRoot"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Submitted</th><th>Channel</th><th>Name</th><th>Contact</th><th>Status</th><th>Lead</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="6" class="empty">Select a form to view its submissions.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me;
+  let forms = [];
+  let submissions = [];
+  const preselectFormId = new URLSearchParams(window.location.search).get("formId");
+
+  function fmtDateTime(iso){
+    if (!iso) return "—";
+    return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  function channelLabel(c){
+    return c === "public" ? "Public form" : c === "manual_prefill" ? "Prefilled" : "Internal";
+  }
+
+  function valueFor(sub, key){
+    const v = sub.values && sub.values[key];
+    if (v === undefined || v === null || v === "") return "—";
+    if (Array.isArray(v)) return v.join(", ");
+    if (typeof v === "boolean") return v ? "Yes" : "No";
+    return String(v);
+  }
+
+  function findByMapping(sub, systemField){
+    const field = (sub.fieldsSnapshot || []).find(f => f.systemField === systemField);
+    return field ? valueFor(sub, field.key) : "—";
+  }
+
+  function closeModal(){ document.getElementById("modalRoot").innerHTML = ""; }
+
+  function openDetail(sub){
+    const rowsHtml = (sub.fieldsSnapshot || []).map(f => `
+      <div class="detail-row"><span class="detail-label">${App.escapeHtml(f.label)}</span><span class="detail-value">${App.escapeHtml(valueFor(sub, f.key))}</span></div>
+    `).join("");
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="detailOverlay">
+        <div class="modal">
+          <div class="modal-header">
+            <div><h2>Submission</h2><p>${fmtDateTime(sub.createdAt)} · ${App.escapeHtml(channelLabel(sub.channel))}</p></div>
+            <button class="modal-close" type="button" id="detailClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            ${rowsHtml || '<p class="hint">No field data recorded.</p>'}
+            ${sub.leadId ? `<p class="hint" style="margin-top:12px"><a href="/pipeline.html">View in Pipeline →</a></p>` : ""}
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("detailClose").addEventListener("click", closeModal);
+    document.getElementById("detailOverlay").addEventListener("click", (e) => { if (e.target.id === "detailOverlay") closeModal(); });
+  }
+
+  function renderRows(){
+    const rows = document.getElementById("rows");
+    if (!submissions.length) {
+      rows.innerHTML = `<tr><td colspan="6"><div class="state-block"><p class="state-title">No submissions yet</p><p class="state-desc">Submissions will appear here as this form is used.</p></div></td></tr>`;
+      return;
+    }
+    rows.innerHTML = submissions.map(s => `
+      <tr class="clickable-row" data-id="${s.id}" style="cursor:pointer">
+        <td>${fmtDateTime(s.createdAt)}</td>
+        <td>${App.escapeHtml(channelLabel(s.channel))}</td>
+        <td>${App.escapeHtml(findByMapping(s, "fullName"))}</td>
+        <td>${App.escapeHtml(findByMapping(s, "phoneNumber"))}</td>
+        <td><span class="pill ${s.status === "received" ? "processed" : "failed"}">${App.escapeHtml(s.status)}</span></td>
+        <td>${s.leadId ? '<span class="pill pending">Linked</span>' : "—"}</td>
+      </tr>
+    `).join("");
+    rows.querySelectorAll("tr[data-id]").forEach(tr => {
+      tr.addEventListener("click", () => {
+        const sub = submissions.find(s => s.id === tr.dataset.id);
+        if (sub) openDetail(sub);
+      });
+    });
+  }
+
+  async function loadSubmissionsFor(formId){
+    const rows = document.getElementById("rows");
+    rows.innerHTML = `<tr><td colspan="6" class="empty">Loading…</td></tr>`;
+    try {
+      ({ submissions } = await App.apiJson(`/api/forms/${formId}/submissions`));
+    } catch (err) {
+      rows.innerHTML = `<tr><td colspan="6"><div class="state-block"><p class="state-title">Unable to load submissions</p><p class="state-desc">${App.escapeHtml(err.message)}</p></div></td></tr>`;
+      return;
+    }
+    renderRows();
+  }
+
+  async function load(){
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/submissions.html");
+
+    const select = document.getElementById("formSelect");
+    try {
+      ({ forms } = await App.apiJson("/api/forms"));
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      return;
+    }
+
+    if (!forms.length) {
+      select.innerHTML = `<option value="">No forms yet</option>`;
+      document.getElementById("rows").innerHTML = `<tr><td colspan="6"><div class="state-block"><p class="state-title">No forms yet</p><p class="state-desc">Create a form first — submissions will show up here once it's in use.</p></div></td></tr>`;
+      return;
+    }
+
+    select.innerHTML = forms.map(f => `<option value="${f.id}">${App.escapeHtml(f.name)} (${f.type === "public" ? "Public" : "Internal"})</option>`).join("");
+    const initial = (preselectFormId && forms.some(f => f.id === preselectFormId)) ? preselectFormId : forms[0].id;
+    select.value = initial;
+    await loadSubmissionsFor(initial);
+  }
+
+  document.getElementById("formSelect").addEventListener("change", (e) => loadSubmissionsFor(e.target.value));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.getElementById("modalRoot").innerHTML.trim()) closeModal(); });
+
+  load();
+</script>
+</body>
+</html>

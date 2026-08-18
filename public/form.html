@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Form — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body class="public-form-body">
+  <div class="public-form-wrap">
+    <div class="card public-form-card" id="formCard">
+      <p class="state-desc">Loading form…</p>
+    </div>
+    <p class="public-form-footer">Powered by Setu CRM · Empiryx</p>
+  </div>
+
+<!-- Loaded for App.escapeHtml only - this page never calls App.apiJson/App.requireAuth
+     (no session exists here; those helpers redirect to /login.html on a 401, which
+     would be wrong on an anonymous public page). All network calls below use a plain
+     local fetch instead. -->
+<script src="/assets/app.js"></script>
+<script src="/assets/formRenderer.js"></script>
+<script>
+  const publicKey = new URLSearchParams(window.location.search).get("key");
+  let formDef = null, fieldDefs = [];
+
+  async function publicApiJson(path, opts){
+    opts = opts || {};
+    const res = await fetch(path, {
+      method: opts.method || "GET",
+      headers: { "Content-Type": "application/json" },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { fieldErrors: data.fieldErrors });
+    return data;
+  }
+
+  function renderUnavailable(message){
+    document.getElementById("formCard").innerHTML = `
+      <div class="state-block">
+        <p class="state-title">This form isn't available</p>
+        <p class="state-desc">${App.escapeHtml(message || "The link may be incorrect, or the form may have been unpublished.")}</p>
+      </div>`;
+  }
+
+  function renderForm(){
+    const card = document.getElementById("formCard");
+    card.innerHTML = `
+      <h1 class="page-title" style="font-size:22px">${App.escapeHtml(formDef.name)}</h1>
+      ${formDef.description ? `<p class="page-sub">${App.escapeHtml(formDef.description)}</p>` : ""}
+      <div id="submitBanner"></div>
+      <form id="publicForm">
+        ${FormRenderer.renderFields(fieldDefs, {}, {})}
+        <button class="btn" type="submit" id="submitBtn" style="width:100%; margin-top:8px">${App.escapeHtml(formDef.settings?.submitButtonLabel || "Submit")}</button>
+      </form>`;
+
+    const formEl = document.getElementById("publicForm");
+    FormRenderer.wireConditionals(formEl, fieldDefs);
+
+    formEl.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const values = FormRenderer.collectValues(formEl, fieldDefs);
+      const errors = FormRenderer.validate(fieldDefs, values);
+      if (Object.keys(errors).length > 0) {
+        FormRenderer.showErrors(formEl, errors);
+        return;
+      }
+      FormRenderer.clearErrors(formEl);
+      const submitBtn = document.getElementById("submitBtn");
+      submitBtn.disabled = true;
+      try {
+        const result = await publicApiJson(`/api/public/forms/${encodeURIComponent(publicKey)}/submit`, { method: "POST", body: { values } });
+        card.innerHTML = `
+          <div class="state-block">
+            <p class="state-title">Thank you!</p>
+            <p class="state-desc">${App.escapeHtml(result.message || "We've received your details and will be in touch shortly.")}</p>
+          </div>`;
+      } catch (err) {
+        if (err.fieldErrors) FormRenderer.showErrors(formEl, err.fieldErrors);
+        document.getElementById("submitBanner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        submitBtn.disabled = false;
+      }
+    });
+  }
+
+  (async () => {
+    if (!publicKey) {
+      renderUnavailable("No form specified.");
+      return;
+    }
+    try {
+      const data = await publicApiJson(`/api/public/forms/${encodeURIComponent(publicKey)}`);
+      formDef = data.form;
+      fieldDefs = data.fields;
+      renderForm();
+    } catch (err) {
+      renderUnavailable(err.message);
+    }
+  })();
+</script>
+</body>
+</html>

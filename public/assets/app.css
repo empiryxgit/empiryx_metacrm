@@ -629,6 +629,86 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
 }
 
 /* =============================================================================
+   Forms & Lead Capture (Form Builder, public form, submissions)
+============================================================================= */
+
+.clickable-row:hover{ background:var(--surface-sunken); }
+
+/* -- Builder 3-column shell ------------------------------------------- */
+.builder-shell{
+  display:grid;
+  grid-template-columns:220px minmax(0, 1fr) 300px;
+  gap:var(--space-4);
+  align-items:start;
+}
+.builder-col{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:16px;
+}
+.builder-col-canvas{ min-height:420px; }
+.builder-col-settings{ position:sticky; top:calc(64px + var(--space-4)); max-height:calc(100vh - 96px); overflow-y:auto; }
+.builder-col-title{ font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); font-weight:700; margin-bottom:10px; }
+
+/* -- Palette ----------------------------------------------------------- */
+.palette-item{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:9px 11px; margin-bottom:6px;
+  border:1px solid var(--border); border-radius:var(--radius-md);
+  background:var(--surface-alt); cursor:grab; font-size:12.5px; font-weight:600; color:var(--text-primary);
+  transition:border-color .12s, background .12s;
+}
+.palette-item:hover{ border-color:var(--brand-primary); background:var(--brand-primary-soft); }
+.palette-item:active{ cursor:grabbing; }
+.palette-item-plus{ color:var(--text-muted); font-weight:700; }
+
+/* -- Canvas / field rows ------------------------------------------------ */
+.builder-canvas{ min-height:200px; border-radius:var(--radius-md); transition:background .12s; }
+.builder-canvas.dragover{ background:var(--brand-primary-soft); outline:2px dashed var(--brand-primary); outline-offset:-2px; }
+.builder-field-row{
+  border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:10px 12px; margin-bottom:10px; background:var(--surface);
+  cursor:pointer;
+}
+.builder-field-row.selected{ border-color:var(--brand-primary); box-shadow:0 0 0 3px var(--brand-primary-soft); }
+.builder-field-row-head{ display:flex; align-items:center; gap:7px; margin-bottom:8px; }
+.drag-handle{ cursor:grab; color:var(--text-muted); font-size:13px; line-height:1; }
+.builder-field-type-badge{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); background:var(--surface-sunken); border-radius:4px; padding:2px 6px; }
+.builder-field-row-actions{ margin-left:auto; display:flex; gap:4px; }
+.builder-field-row-body{ pointer-events:none; opacity:.9; } /* preview-only inside the builder - editing happens in the settings panel */
+.builder-field-row-body input, .builder-field-row-body select, .builder-field-row-body textarea{ background:var(--surface-alt); }
+
+/* -- Field settings panel ------------------------------------------------ */
+.field-settings label{ margin-top:12px; }
+.field-settings label:first-child{ margin-top:0; }
+.required-mark{ color:var(--danger); margin-left:3px; }
+.field-help{ margin-top:4px; font-size:11.5px; color:var(--text-muted); }
+.field-error{ margin-top:4px; font-size:11.5px; color:var(--danger); min-height:0; }
+.form-field{ margin-bottom:14px; }
+.form-field.has-error input, .form-field.has-error select, .form-field.has-error textarea{ border-color:var(--danger); }
+.option-row{ display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+.option-row .option-input{ flex:1; }
+.radio-group, .checkbox-group{ display:flex; flex-direction:column; gap:6px; margin-top:2px; }
+.radio-option, .checkbox-option{ display:flex; align-items:center; gap:7px; font-size:13px; color:var(--text-primary); font-weight:500; }
+.radio-option input, .checkbox-option input{ width:15px; height:15px; accent-color:var(--brand-primary); margin:0; }
+
+/* -- Preview modal viewport toggle --------------------------------------- */
+.preview-frame{ margin:0 auto; }
+.preview-frame.mobile{ max-width:340px; border:1px solid var(--border); border-radius:var(--radius-lg); padding:16px; background:var(--surface-alt); }
+
+/* -- Public lead-capture page --------------------------------------------- */
+.public-form-body{ background:var(--surface-alt); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px 16px; }
+.public-form-wrap{ width:100%; max-width:480px; }
+.public-form-card{ padding:28px 26px; }
+.public-form-footer{ text-align:center; font-size:11.5px; color:var(--text-muted); margin-top:16px; }
+
+@media (max-width:1080px){
+  .builder-shell{ grid-template-columns:1fr; }
+  .builder-col-settings{ position:static; max-height:none; }
+}
+
+/* =============================================================================
    Responsive
 ============================================================================= */
 @media (max-width:1080px){
@@ -663,6 +743,8 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
   .funnel-row{ grid-template-columns:84px 1fr 34px; gap:6px; }
   .donut-row{ flex-direction:column; align-items:flex-start; }
   .followup-when{ font-size:11px; }
+  .public-form-card{ padding:20px 16px; }
+  .preview-frame.mobile{ max-width:100%; padding:12px; }
 }
 
 @media (max-width:480px){

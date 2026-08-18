@@ -56,6 +56,86 @@ export interface IndustryTemplate {
   // Visits" / "Site Surveys") - distinct from that stage's own singular
   // pipeline-column label ("Site Visit" / "Site Survey").
   milestoneLabel: string;
+  // The field list a brand-new company's default Forms (one internal, one
+  // public) are auto-provisioned with at onboarding - see
+  // provisionDefaultForms() in src/infrastructure/db/repositories/forms.ts.
+  // This is the ONLY place industry drives form content; nothing downstream
+  // ever branches on industry again - the Forms module only ever reads
+  // src/infrastructure/db/schema.ts's forms/formFields rows from here on.
+  defaultFormFields: FormFieldTemplateDef[];
+}
+
+export type FormFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "currency"
+  | "email"
+  | "phone"
+  | "date"
+  | "datetime"
+  | "select"
+  | "radio"
+  | "checkbox"
+  | "multiselect";
+
+// Runtime-checkable companion to FormFieldType/SystemFieldKey above - a
+// type alone can't be validated against an untrusted request body, so the
+// Forms API (api/forms/handler.ts) checks incoming field definitions
+// against these arrays.
+export const FORM_FIELD_TYPES: FormFieldType[] = [
+  "text",
+  "textarea",
+  "number",
+  "currency",
+  "email",
+  "phone",
+  "date",
+  "datetime",
+  "select",
+  "radio",
+  "checkbox",
+  "multiselect",
+];
+
+// A system field's leads.* target. "source" | "ownerId" | "pipelineStage" |
+// "crmCampaignId" carry no static `options` here - the form renderer always
+// resolves their choices at render time from the company's live data (the
+// same sources/owners/stages/campaigns the Pipeline board already fetches),
+// so a stale static list can never drift from what Pipeline itself offers.
+export type SystemFieldKey =
+  | "fullName"
+  | "phoneNumber"
+  | "email"
+  | "source"
+  | "ownerId"
+  | "pipelineStage"
+  | "crmCampaignId"
+  | "nextFollowUpAt"
+  | "notes";
+
+export const SYSTEM_FIELD_KEYS: SystemFieldKey[] = [
+  "fullName",
+  "phoneNumber",
+  "email",
+  "source",
+  "ownerId",
+  "pipelineStage",
+  "crmCampaignId",
+  "nextFollowUpAt",
+  "notes",
+];
+
+export interface FormFieldTemplateDef {
+  key: string;
+  label: string;
+  fieldType: FormFieldType;
+  mappingType: "system" | "custom";
+  systemField?: SystemFieldKey; // required when mappingType === "system"
+  options?: string[]; // for select/radio/multiselect custom fields only
+  required?: boolean;
+  placeholder?: string;
+  helpText?: string;
 }
 
 // Universal fields every lead/customer has regardless of industry - these
@@ -80,6 +160,10 @@ export const BASE_FIELD_KEYS = [
 // the exact picklist for that form.
 export const LEAD_SOURCES: Array<{ key: string; label: string }> = [
   { key: "meta_lead_ads", label: "Meta Lead Ads" },
+  // Set automatically by a public form submission (see api/forms/handler.ts
+  // handlePublicSubmit) - never offered as a manual choice, same as
+  // meta_lead_ads above.
+  { key: "public_form", label: "Website Form" },
   { key: "facebook", label: "Facebook" },
   { key: "instagram", label: "Instagram" },
   { key: "referral", label: "Referral" },
@@ -99,6 +183,26 @@ export const LEAD_TYPES = {
   DIGITAL_LEAD: "digital_lead",
   MANUAL_CUSTOMER: "manual_customer",
 } as const;
+
+// Shared by every industry's default form - the universal, non-industry
+// fields every form starts with (name/phone/email) and ends with
+// (source/owner/stage/follow-up/notes), matching exactly what the Add
+// Customer / Not Interested modals already collect today (see
+// public/pipeline.html customerModalHtml) so a freshly-provisioned default
+// form changes nothing about the fields a salesperson sees, only that they
+// are now data-driven instead of hard-coded.
+const SYSTEM_FIELDS_LEAD: FormFieldTemplateDef[] = [
+  { key: "fullName", label: "Customer Name", fieldType: "text", mappingType: "system", systemField: "fullName", required: true },
+  { key: "phoneNumber", label: "Phone", fieldType: "phone", mappingType: "system", systemField: "phoneNumber", required: true },
+  { key: "email", label: "Email", fieldType: "email", mappingType: "system", systemField: "email" },
+];
+const SYSTEM_FIELDS_CRM: FormFieldTemplateDef[] = [
+  { key: "source", label: "Source", fieldType: "select", mappingType: "system", systemField: "source" },
+  { key: "ownerId", label: "Owner", fieldType: "select", mappingType: "system", systemField: "ownerId" },
+  { key: "pipelineStage", label: "Pipeline Stage", fieldType: "select", mappingType: "system", systemField: "pipelineStage" },
+  { key: "nextFollowUpAt", label: "Next Follow-up", fieldType: "date", mappingType: "system", systemField: "nextFollowUpAt" },
+  { key: "notes", label: "Requirement / Notes", fieldType: "textarea", mappingType: "system", systemField: "notes" },
+];
 
 const REAL_ESTATE_TEMPLATE: IndustryTemplate = {
   key: "real_estate",
@@ -122,6 +226,14 @@ const REAL_ESTATE_TEMPLATE: IndustryTemplate = {
     { key: "location", label: "Preferred Location", type: "text" },
   ],
   milestoneLabel: "Site Visits",
+  defaultFormFields: [
+    ...SYSTEM_FIELDS_LEAD,
+    { key: "property", label: "Property / Project", fieldType: "text", mappingType: "custom" },
+    { key: "propertyType", label: "Property Type", fieldType: "select", mappingType: "custom", options: ["Apartment", "Villa", "Plot", "Commercial", "Other"] },
+    { key: "budget", label: "Budget", fieldType: "currency", mappingType: "custom" },
+    { key: "location", label: "Preferred Location", fieldType: "text", mappingType: "custom" },
+    ...SYSTEM_FIELDS_CRM,
+  ],
 };
 
 const SOLAR_TEMPLATE: IndustryTemplate = {
@@ -147,6 +259,14 @@ const SOLAR_TEMPLATE: IndustryTemplate = {
     { key: "location", label: "Location", type: "text" },
   ],
   milestoneLabel: "Site Surveys",
+  defaultFormFields: [
+    ...SYSTEM_FIELDS_LEAD,
+    { key: "propertyType", label: "Property Type", fieldType: "select", mappingType: "custom", options: ["Residential", "Commercial"] },
+    { key: "monthlyBill", label: "Monthly Electricity Bill", fieldType: "currency", mappingType: "custom" },
+    { key: "systemCapacity", label: "Required System Capacity (kW)", fieldType: "number", mappingType: "custom" },
+    { key: "location", label: "Location", fieldType: "text", mappingType: "custom" },
+    ...SYSTEM_FIELDS_CRM,
+  ],
 };
 
 export const INDUSTRY_TEMPLATES: Record<IndustryKey, IndustryTemplate> = {
