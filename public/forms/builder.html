@@ -22,6 +22,7 @@
         <button class="btn secondary" type="button" id="saveBtn">Save draft</button>
         <button class="btn" type="button" id="publishBtn">Publish</button>
         <button class="btn secondary" type="button" id="setDefaultBtn" style="display:none">Set as default</button>
+        <button class="btn secondary" type="button" id="resetDefaultBtn" style="display:none">Reset to original</button>
         <button class="btn secondary" type="button" id="archiveBtn" style="display:none">Archive</button>
       </div>
     </div>
@@ -100,6 +101,55 @@
     { systemField: "notes", label: "Notes", fieldType: "textarea" },
   ];
   const FIELD_TYPE_LABELS = Object.fromEntries(FIELD_TYPE_PALETTE.map(f => [f.fieldType, f.label]));
+
+  // ---- "Reset to original" for the default form --------------------------
+  // Mirrors SYSTEM_FIELDS_LEAD / SYSTEM_FIELDS_CRM / REAL_ESTATE_TEMPLATE and
+  // SOLAR_TEMPLATE.defaultFormFields in src/domain/industryTemplates.ts -
+  // the exact fields (and order) a company's default Add Customer form is
+  // provisioned with at onboarding. Keep in sync with that file. Used only
+  // to let an admin restore the default form to that pristine state after
+  // it's been edited - see resetDefaultBtn below.
+  const INDUSTRY_NAMES = { real_estate: "Real Estate", solar: "Solar" };
+  const SYSTEM_FIELDS_LEAD_DEFS = [
+    { key: "fullName", label: "Customer Name", fieldType: "text", mappingType: "system", systemField: "fullName", required: true },
+    { key: "phoneNumber", label: "Phone", fieldType: "phone", mappingType: "system", systemField: "phoneNumber", required: true },
+    { key: "email", label: "Email", fieldType: "email", mappingType: "system", systemField: "email" },
+  ];
+  const SYSTEM_FIELDS_CRM_DEFS = [
+    { key: "source", label: "Source", fieldType: "select", mappingType: "system", systemField: "source" },
+    { key: "ownerId", label: "Owner", fieldType: "select", mappingType: "system", systemField: "ownerId" },
+    { key: "pipelineStage", label: "Pipeline Stage", fieldType: "select", mappingType: "system", systemField: "pipelineStage" },
+    { key: "nextFollowUpAt", label: "Next Follow-up", fieldType: "date", mappingType: "system", systemField: "nextFollowUpAt" },
+    { key: "notes", label: "Requirement / Notes", fieldType: "textarea", mappingType: "system", systemField: "notes" },
+  ];
+  const INDUSTRY_DEFAULT_FORM_FIELD_DEFS = {
+    real_estate: [
+      ...SYSTEM_FIELDS_LEAD_DEFS,
+      { key: "property", label: "Property / Project", fieldType: "text", mappingType: "custom" },
+      { key: "propertyType", label: "Property Type", fieldType: "select", mappingType: "custom", options: ["Apartment", "Villa", "Plot", "Commercial", "Other"] },
+      { key: "budget", label: "Budget", fieldType: "currency", mappingType: "custom" },
+      { key: "location", label: "Preferred Location", fieldType: "text", mappingType: "custom" },
+      ...SYSTEM_FIELDS_CRM_DEFS,
+    ],
+    solar: [
+      ...SYSTEM_FIELDS_LEAD_DEFS,
+      { key: "propertyType", label: "Property Type", fieldType: "select", mappingType: "custom", options: ["Residential", "Commercial"] },
+      { key: "monthlyBill", label: "Monthly Electricity Bill", fieldType: "currency", mappingType: "custom" },
+      { key: "systemCapacity", label: "Required System Capacity (kW)", fieldType: "number", mappingType: "custom" },
+      { key: "location", label: "Location", fieldType: "text", mappingType: "custom" },
+      ...SYSTEM_FIELDS_CRM_DEFS,
+    ],
+  };
+
+  function defaultFormFieldsForIndustry(industryKey){
+    const defs = INDUSTRY_DEFAULT_FORM_FIELD_DEFS[industryKey] || INDUSTRY_DEFAULT_FORM_FIELD_DEFS.real_estate;
+    return defs.map(def => ({
+      key: def.key, label: def.label, fieldType: def.fieldType, mappingType: def.mappingType,
+      systemField: def.mappingType === "system" ? def.systemField : null,
+      options: def.options || [], placeholder: null, helpText: null, defaultValue: null,
+      required: Boolean(def.required), conditional: null,
+    }));
+  }
 
   function showBanner(message, kind){
     document.getElementById("banner").innerHTML = `<div class="banner ${kind === "success" ? "success" : "error"}">${App.escapeHtml(message)}</div>`;
@@ -457,6 +507,7 @@
     document.getElementById("publishBtn").style.display = form.status === "draft" ? "inline-flex" : "none";
     document.getElementById("archiveBtn").style.display = form.status === "published" ? "inline-flex" : "none";
     document.getElementById("setDefaultBtn").style.display = form.type === "internal" && form.status === "published" && !form.isDefault ? "inline-flex" : "none";
+    document.getElementById("resetDefaultBtn").style.display = form.isDefault ? "inline-flex" : "none";
   }
 
   async function loadSupportingData(){
@@ -532,6 +583,17 @@
     } catch (err) {
       showBanner(err.message, "error");
     }
+  });
+
+  document.getElementById("resetDefaultBtn").addEventListener("click", () => {
+    if (!confirm("Reset this form to exactly how it was originally created — Name, Phone, Email, your industry's fields, then Source, Owner, Pipeline Stage, Next Follow-up and Notes, in that order? Any fields you've added since will be removed from this draft. This only changes what's shown here — click Save draft or Publish to make it live again.")) return;
+    const industryKey = me?.company?.industry;
+    fields = defaultFormFieldsForIndustry(industryKey);
+    document.getElementById("metaName").value = `${INDUSTRY_NAMES[industryKey] || form.name} - Add Customer`;
+    document.getElementById("metaDescription").value = "Default internal form used by Add Customer and Not Interested → Add to CRM on the Pipeline board.";
+    selectedKey = null;
+    renderAll();
+    showBanner("Fields reset to the original default form. Click Save draft or Publish to make it live.", "success");
   });
 
   document.getElementById("archiveBtn").addEventListener("click", async () => {
