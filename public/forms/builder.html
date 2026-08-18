@@ -173,17 +173,28 @@
 
   // ---- Canvas (live preview + reorder) -----------------------------------
 
+  // On the default Add Customer form, the built-in CRM fields stay exactly
+  // where they are (can't be dragged, reordered or removed) so the form a
+  // salesperson already relies on never shifts under them. Admins can still
+  // drag new fields in anywhere around/between them. Custom fields, and any
+  // field on a non-default form, remain fully draggable/removable as before.
+  function isFieldLocked(field){
+    return Boolean(form && form.isDefault && field.mappingType === "system");
+  }
+
   function fieldRowHtml(field){
+    const locked = isFieldLocked(field);
     const bodyHtml = FormRenderer.renderFields([field], {}, { dynamicOptions: dynamicOptionsMap(), disabledFields: fields.map(f => f.key) });
-    return `<div class="builder-field-row ${selectedKey === field.key ? "selected" : ""}" draggable="true" data-key="${field.key}">
+    return `<div class="builder-field-row ${selectedKey === field.key ? "selected" : ""} ${locked ? "locked" : ""}" draggable="${locked ? "false" : "true"}" data-key="${field.key}">
       <div class="builder-field-row-head">
-        <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="drag-handle ${locked ? "locked" : ""}" title="${locked ? "Locked in place on the default form" : "Drag to reorder"}">${locked ? "🔒" : "⋮⋮"}</span>
         <span class="builder-field-type-badge">${App.escapeHtml(FIELD_TYPE_LABELS[field.fieldType] || field.fieldType)}</span>
-        ${field.mappingType === "system" ? '<span class="pill pending">CRM field</span>' : ""}
+        ${field.mappingType === "system" ? '<span class="pill system">CRM field</span>' : ""}
         ${field.required ? '<span class="pill failed">Required</span>' : ""}
+        ${locked ? '<span class="pill pending">Locked</span>' : ""}
         <span class="builder-field-row-actions">
           <button type="button" class="icon-action" data-dup="${field.key}" title="Duplicate">⧉</button>
-          <button type="button" class="icon-action" data-del="${field.key}" title="Delete">✕</button>
+          ${locked ? "" : `<button type="button" class="icon-action" data-del="${field.key}" title="Delete">✕</button>`}
         </span>
       </div>
       <div class="builder-field-row-body">${bodyHtml}</div>
@@ -203,6 +214,8 @@
         renderAll();
       });
       row.addEventListener("dragstart", (e) => {
+        const field = fields.find(f => f.key === row.dataset.key);
+        if (field && isFieldLocked(field)) { e.preventDefault(); return; }
         dragState = { kind: "field", key: row.dataset.key };
         e.dataTransfer.effectAllowed = "move";
       });
@@ -254,6 +267,8 @@
   }
 
   function deleteField(key){
+    const field = fields.find(f => f.key === key);
+    if (field && isFieldLocked(field)) return; // built-in CRM fields on the default form can't be removed
     fields = fields.filter(f => f.key !== key);
     if (selectedKey === key) selectedKey = null;
     renderAll();
