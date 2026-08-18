@@ -505,6 +505,11 @@
     document.getElementById("metaName").value = form.name;
     document.getElementById("metaDescription").value = form.description || "";
     document.getElementById("publishBtn").style.display = form.status === "draft" ? "inline-flex" : "none";
+    // For a published form (always true for the default form - it can only
+    // be flagged default while published, see setDefaultInternalForm) this
+    // button applies changes immediately, there's no separate publish step,
+    // so "Save draft" would be misleading.
+    document.getElementById("saveBtn").textContent = form.status === "draft" ? "Save draft" : "Save changes";
     document.getElementById("archiveBtn").style.display = form.status === "published" ? "inline-flex" : "none";
     document.getElementById("setDefaultBtn").style.display = form.type === "internal" && form.status === "published" && !form.isDefault ? "inline-flex" : "none";
     document.getElementById("resetDefaultBtn").style.display = form.isDefault ? "inline-flex" : "none";
@@ -586,14 +591,18 @@
   });
 
   document.getElementById("resetDefaultBtn").addEventListener("click", () => {
-    if (!confirm("Reset this form to exactly how it was originally created — Name, Phone, Email, your industry's fields, then Source, Owner, Pipeline Stage, Next Follow-up and Notes, in that order? Any fields you've added since will be removed from this draft. This only changes what's shown here — click Save draft or Publish to make it live again.")) return;
+    // The default form is always status "published" (it can only be flagged
+    // default while published - see setDefaultInternalForm), so the Publish
+    // button never appears here; saving applies the change immediately.
+    const saveLabel = form.status === "draft" ? "Save draft" : "Save changes";
+    if (!confirm(`Reset this form to exactly how it was originally created — Name, Phone, Email, your industry's fields, then Source, Owner, Pipeline Stage, Next Follow-up and Notes, in that order? Any fields you've added since will be removed from this draft. This only changes what's shown here — click "${saveLabel}" to make it live again.`)) return;
     const industryKey = me?.company?.industry;
     fields = defaultFormFieldsForIndustry(industryKey);
     document.getElementById("metaName").value = `${INDUSTRY_NAMES[industryKey] || form.name} - Add Customer`;
     document.getElementById("metaDescription").value = "Default internal form used by Add Customer and Not Interested → Add to CRM on the Pipeline board.";
     selectedKey = null;
     renderAll();
-    showBanner("Fields reset to the original default form. Click Save draft or Publish to make it live.", "success");
+    showBanner(`Fields reset to the original default form. Click "${saveLabel}" to make it live.`, "success");
   });
 
   document.getElementById("archiveBtn").addEventListener("click", async () => {
