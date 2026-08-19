@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, eq, gte, lt, or, sql as rawSql } from "drizzle-orm";
+import { and, eq, gte, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
 import { leadProcessingLog, leads, rawMetaEvents, reconciliationRuns } from "./schema";
 import { firstOrThrow } from "./util";
@@ -191,12 +191,25 @@ export async function incrementRetryCount(metaLeadId: string, error: string) {
     .where(eq(leads.metaLeadId, metaLeadId));
 }
 
-export async function updateLeadPipelineStage(companyId: string, leadId: string, stage: string) {
+/**
+ * `branchCondition` (see branchAccessCondition) is folded directly into the
+ * UPDATE's own WHERE clause rather than checked in a separate SELECT first -
+ * one atomic query, no read-then-write race, and a lead outside the
+ * caller's branch access simply matches zero rows (returns false) instead
+ * of ever being touched. Omit it for internal/system callers that already
+ * have their own scoping (there are none today - every API caller passes
+ * one, see api/leads/handler.ts).
+ */
+export async function updateLeadPipelineStage(companyId: string, leadId: string, stage: string, branchCondition?: SQL): Promise<boolean> {
   const db = await getDb();
-  await db
+  const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
+  if (branchCondition) conditions.push(branchCondition);
+  const rows = await db
     .update(leads)
     .set({ pipelineStage: stage, updatedAt: new Date() })
-    .where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)));
+    .where(and(...conditions))
+    .returning();
+  return rows.length > 0;
 }
 
 // ---- Manual customers (Flow B) -----------------------------------------
@@ -249,6 +262,7 @@ export async function insertManualLead(input: InsertManualLeadInput) {
 export interface InsertFormLeadInput {
   companyId: string;
   branchId?: string | null;
+  crmCampaignId?: string | null;
   fullName: string;
   phoneNumber?: string;
   email?: string;
@@ -282,6 +296,7 @@ export async function insertFormLead(input: InsertFormLeadInput) {
     .values({
       companyId: input.companyId,
       branchId: input.branchId ?? null,
+      crmCampaignId: input.crmCampaignId ?? null,
       metaLeadId: `form:${randomUUID()}`,
       leadType: input.leadType,
       source: input.source,
@@ -319,12 +334,16 @@ export interface UpdateLeadCrmFieldsInput {
  * never touches source/leadType/metaLeadId/crmCampaignId/campaignName -
  * a record's original acquisition source is preserved for the life of the
  * record regardless of how the CRM data around it is enriched later. */
-export async function updateLeadCrmFields(companyId: string, leadId: string, input: UpdateLeadCrmFieldsInput) {
+/** Same branchCondition-in-the-WHERE-clause approach as
+ * updateLeadPipelineStage above - see its comment. */
+export async function updateLeadCrmFields(companyId: string, leadId: string, input: UpdateLeadCrmFieldsInput, branchCondition?: SQL) {
   const db = await getDb();
+  const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
+  if (branchCondition) conditions.push(branchCondition);
   const rows = await db
     .update(leads)
     .set({ ...input, updatedAt: new Date() })
-    .where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)))
+    .where(and(...conditions))
     .returning();
   return rows[0] ?? null;
 }

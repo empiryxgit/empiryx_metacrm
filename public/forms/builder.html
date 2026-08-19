@@ -43,6 +43,12 @@
       </div>
     </div>
 
+    <div class="card" id="formSettingsCard" style="margin-bottom:var(--space-5)">
+      <h2 class="section-title" style="margin-top:0">Form settings</h2>
+      <p class="hint" style="margin-top:-6px; margin-bottom:14px">Every lead this form creates is tagged with these — independent of which fields the form actually asks the filler to fill in.</p>
+      <div id="formSettingsBody"></div>
+    </div>
+
     <div class="builder-shell">
       <div class="builder-col builder-col-palette">
         <div class="builder-col-title">Field types</div>
@@ -73,6 +79,24 @@
   let fields = []; // working copy: {key,label,fieldType,mappingType,systemField,options,placeholder,helpText,defaultValue,required,conditional}
   let selectedKey = null;
   let owners = [], stages = [], sources = [], campaigns = [];
+  // Full { key, name, pipelineName, stages, fields } object from
+  // /api/pipeline's own industry-template lookup - the SAME data
+  // getIndustryTemplate() in src/domain/industryTemplates.ts derives
+  // company.industryTemplate into. Reading name/pipelineName from here
+  // (rather than a hardcoded per-industry map) means a newly added industry
+  // template shows correctly with zero Form Builder changes.
+  let template = null;
+  let myBranches = null; // { scope, branches: [{id,name,code,isPrimary}] } from /api/branches/mine - scoped to what THIS user is permitted to manage
+  // Working copy of Form Settings (Branch Configuration + CRM defaults) -
+  // mirrors `fields` above: mutated locally by the panel below, sent
+  // alongside name/description/fields in the same PUT on Save/Publish (see
+  // saveBtn/publishBtn), so there is exactly one save flow for a form's
+  // meta, settings and fields together, not a separate save button per
+  // section.
+  let formSettings = {
+    branchMode: "all", branchId: null, branchFieldKey: null, branchFieldMap: {},
+    defaultPipelineStage: null, defaultCrmCampaignId: null, defaultSource: null, defaultOwnerId: null,
+  };
   let dragState = null;
 
   const FIELD_TYPE_PALETTE = [
@@ -109,7 +133,10 @@
   // provisioned with at onboarding. Keep in sync with that file. Used only
   // to let an admin restore the default form to that pristine state after
   // it's been edited - see resetDefaultBtn below.
-  const INDUSTRY_NAMES = { real_estate: "Real Estate", solar: "Solar" };
+  // Industry display name and Pipeline name are read live from the
+  // `template` object (see loadSupportingData) rather than a hardcoded
+  // per-industry map, so a newly added industry template needs zero Form
+  // Builder changes to display correctly.
   const SYSTEM_FIELDS_LEAD_DEFS = [
     { key: "fullName", label: "Customer Name", fieldType: "text", mappingType: "system", systemField: "fullName", required: true },
     { key: "phoneNumber", label: "Phone", fieldType: "phone", mappingType: "system", systemField: "phoneNumber", required: true },
@@ -481,6 +508,7 @@
   function renderAll(){
     renderCanvas();
     renderSettings();
+    renderFormSettingsPanel();
   }
 
   // ---- Preview modal (same FormRenderer as production) -----------------
@@ -547,12 +575,194 @@
       const data = await App.apiJson("/api/pipeline");
       sources = data.sources || [];
       owners = data.owners || [];
+      template = data.template || null;
       stages = (data.template && data.template.stages) || [];
     } catch { /* non-fatal - dynamic option lists just stay empty */ }
     try {
       const { campaigns: c } = await App.apiJson("/api/campaigns");
       campaigns = c || [];
     } catch { /* non-fatal */ }
+    try {
+      myBranches = await App.apiJson("/api/branches/mine");
+    } catch {
+      myBranches = { scope: "all", branches: [] }; // non-fatal - Branch Configuration just falls back to "All Branches" only
+    }
+  }
+
+  // "meta_lead_ads"/"public_form" are set automatically by ingestion/public
+  // submission and are never offered as a manual default - same picklist
+  // MANUAL_LEAD_SOURCES already restricts to in src/domain/industryTemplates.ts.
+  function manualSources(){
+    return sources.filter(s => s.key !== "meta_lead_ads" && s.key !== "public_form");
+  }
+
+  // ---- Form settings (Branch Configuration + CRM defaults) --------------
+
+  function initFormSettingsFromForm(){
+    formSettings = {
+      branchMode: form.branchMode || "all",
+      branchId: form.branchId || null,
+      branchFieldKey: form.branchFieldKey || null,
+      branchFieldMap: { ...(form.branchFieldMap || {}) },
+      defaultPipelineStage: form.defaultPipelineStage || null,
+      defaultCrmCampaignId: form.defaultCrmCampaignId || null,
+      defaultSource: form.defaultSource || null,
+      defaultOwnerId: form.defaultOwnerId || null,
+    };
+  }
+
+  function formSettingsPayload(){
+    return {
+      branchMode: formSettings.branchMode,
+      branchId: formSettings.branchMode === "specific" ? formSettings.branchId : null,
+      branchFieldKey: formSettings.branchMode === "field" ? formSettings.branchFieldKey : null,
+      branchFieldMap: formSettings.branchMode === "field" ? formSettings.branchFieldMap : {},
+      defaultPipelineStage: formSettings.defaultPipelineStage || null,
+      defaultCrmCampaignId: formSettings.defaultCrmCampaignId || null,
+      defaultSource: formSettings.defaultSource || null,
+      defaultOwnerId: formSettings.defaultOwnerId || null,
+    };
+  }
+
+  // Fields eligible to drive "Determine branch from form field" - a custom
+  // (not CRM) Dropdown or Radio field, since only those carry a fixed,
+  // enumerable option list to map from.
+  function branchEligibleFields(){
+    return fields.filter(f => f.mappingType === "custom" && ["select", "radio"].includes(f.fieldType) && (f.options || []).length > 0);
+  }
+
+  function branchOptionsHtml(selectedId, opts){
+    opts = opts || {};
+    const branches = (myBranches && myBranches.branches) || [];
+    return `<option value="">${opts.allLabel || "All branches (company-wide)"}</option>` +
+      branches.map(b => `<option value="${b.id}" ${b.id === selectedId ? "selected" : ""}>${App.escapeHtml(b.name)}</option>`).join("");
+  }
+
+  function renderFormSettingsPanel(){
+    const body = document.getElementById("formSettingsBody");
+    if (!form) { body.innerHTML = ""; return; }
+
+    const pipelineName = template?.pipelineName || "—";
+    const eligibleFields = branchEligibleFields();
+    const branches = (myBranches && myBranches.branches) || [];
+    const noBranchesYet = branches.length === 0;
+
+    body.innerHTML = `
+      <div class="grid-2">
+        <div>
+          <label>Industry</label>
+          <input value="${App.escapeHtml(template?.name || "—")}" disabled />
+        </div>
+        <div>
+          <label>Form type</label>
+          <input value="${form.type === "public" ? "Public (external lead capture)" : "Internal (used inside the CRM)"}" disabled />
+        </div>
+      </div>
+      <div class="grid-2">
+        <div>
+          <label>Pipeline</label>
+          <input value="${App.escapeHtml(pipelineName)}" disabled />
+        </div>
+        <div>
+          <label for="set_initialStage">Initial stage</label>
+          <select id="set_initialStage">
+            <option value="">Pipeline's own default</option>
+            ${stages.map(s => `<option value="${s.key}" ${formSettings.defaultPipelineStage === s.key ? "selected" : ""}>${App.escapeHtml(s.label)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <label style="margin-top:4px">Branch</label>
+      <div class="segmented" id="set_branchMode" role="tablist" aria-label="Branch configuration">
+        <button type="button" data-mode="specific" role="tab" class="${formSettings.branchMode === "specific" ? "active" : ""}">Specific Branch</button>
+        <button type="button" data-mode="all" role="tab" class="${formSettings.branchMode === "all" ? "active" : ""}">All Branches</button>
+        <button type="button" data-mode="field" role="tab" class="${formSettings.branchMode === "field" ? "active" : ""}">Determine from Form Field</button>
+      </div>
+
+      <div id="branchModeBody" style="margin-top:10px">
+        ${formSettings.branchMode === "specific" ? `
+          ${noBranchesYet ? `<p class="hint">No branches to choose from yet — set them up under Settings / Branches first.</p>` : `
+            <label for="set_branchId">Branch</label>
+            <select id="set_branchId">${branchOptionsHtml(formSettings.branchId)}</select>
+          `}
+        ` : ""}
+        ${formSettings.branchMode === "field" ? `
+          ${eligibleFields.length === 0
+            ? `<p class="hint">Add a Dropdown or Radio field with options first (e.g. "Which location are you interested in?"), then choose it here.</p>`
+            : `
+              <label for="set_branchFieldKey">Branch-determining field</label>
+              <select id="set_branchFieldKey">
+                <option value="">Select a field…</option>
+                ${eligibleFields.map(f => `<option value="${f.key}" ${formSettings.branchFieldKey === f.key ? "selected" : ""}>${App.escapeHtml(f.label)}</option>`).join("")}
+              </select>
+              <div id="branchFieldMapRows" style="margin-top:10px"></div>
+              <p class="hint">Each option's answer picks the branch a lead is assigned to. An option left on "All branches" stays company-wide.</p>
+            `}
+        ` : ""}
+      </div>
+
+      <div class="grid-2" style="margin-top:14px">
+        <div>
+          <label for="set_campaign">Campaign</label>
+          <select id="set_campaign">
+            <option value="">No campaign</option>
+            ${campaigns.map(c => `<option value="${c.id}" ${formSettings.defaultCrmCampaignId === c.id ? "selected" : ""}>${App.escapeHtml(c.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <label for="set_source">Lead source</label>
+          <select id="set_source">
+            <option value="">${form.type === "public" ? "Website Form (automatic)" : "No default"}</option>
+            ${manualSources().map(s => `<option value="${s.key}" ${formSettings.defaultSource === s.key ? "selected" : ""}>${App.escapeHtml(s.label)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <label for="set_owner">Default owner</label>
+      <select id="set_owner">
+        <option value="">Unassigned</option>
+        ${owners.map(o => `<option value="${o.id}" ${formSettings.defaultOwnerId === o.id ? "selected" : ""}>${App.escapeHtml(o.fullName)}</option>`).join("")}
+      </select>
+    `;
+
+    document.getElementById("set_initialStage").addEventListener("change", (e) => { formSettings.defaultPipelineStage = e.target.value || null; });
+    document.getElementById("set_campaign").addEventListener("change", (e) => { formSettings.defaultCrmCampaignId = e.target.value || null; });
+    document.getElementById("set_source").addEventListener("change", (e) => { formSettings.defaultSource = e.target.value || null; });
+    document.getElementById("set_owner").addEventListener("change", (e) => { formSettings.defaultOwnerId = e.target.value || null; });
+
+    document.getElementById("set_branchMode").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-mode]");
+      if (!btn) return;
+      formSettings.branchMode = btn.dataset.mode;
+      renderFormSettingsPanel();
+    });
+
+    document.getElementById("set_branchId")?.addEventListener("change", (e) => { formSettings.branchId = e.target.value || null; });
+
+    document.getElementById("set_branchFieldKey")?.addEventListener("change", (e) => {
+      formSettings.branchFieldKey = e.target.value || null;
+      renderBranchFieldMapRows();
+    });
+    renderBranchFieldMapRows();
+  }
+
+  function renderBranchFieldMapRows(){
+    const container = document.getElementById("branchFieldMapRows");
+    if (!container) return;
+    const field = branchEligibleFields().find(f => f.key === formSettings.branchFieldKey);
+    if (!field) { container.innerHTML = ""; return; }
+    container.innerHTML = (field.options || []).map((opt, i) => `
+      <div class="grid-2" style="margin-top:6px; align-items:center">
+        <label style="margin:0">${App.escapeHtml(opt)}</label>
+        <select data-map-option="${App.escapeHtml(opt)}">${branchOptionsHtml(formSettings.branchFieldMap[opt] || "")}</select>
+      </div>
+    `).join("");
+    container.querySelectorAll("[data-map-option]").forEach(sel => {
+      sel.addEventListener("change", () => {
+        const opt = sel.dataset.mapOption;
+        if (sel.value) formSettings.branchFieldMap[opt] = sel.value;
+        else delete formSettings.branchFieldMap[opt];
+      });
+    });
   }
 
   async function load(){
@@ -581,6 +791,7 @@
       return;
     }
 
+    initFormSettingsFromForm();
     applyFormMeta();
     renderPalette();
     renderAll();
@@ -590,12 +801,18 @@
     try {
       await App.apiJson(`/api/forms/${formId}`, {
         method: "PUT",
-        body: { name: document.getElementById("metaName").value.trim(), description: document.getElementById("metaDescription").value.trim(), fields: fieldsPayload() },
+        body: {
+          name: document.getElementById("metaName").value.trim(),
+          description: document.getElementById("metaDescription").value.trim(),
+          fields: fieldsPayload(),
+          ...formSettingsPayload(),
+        },
       });
       showBanner("Draft saved.", "success");
       const result = await App.apiJson(`/api/forms/${formId}`);
       form = result.form;
       fields = result.fields.map(f => ({ ...f }));
+      initFormSettingsFromForm();
       applyFormMeta();
       renderAll();
     } catch (err) {
@@ -607,7 +824,12 @@
     try {
       await App.apiJson(`/api/forms/${formId}`, {
         method: "PUT",
-        body: { name: document.getElementById("metaName").value.trim(), description: document.getElementById("metaDescription").value.trim(), fields: fieldsPayload() },
+        body: {
+          name: document.getElementById("metaName").value.trim(),
+          description: document.getElementById("metaDescription").value.trim(),
+          fields: fieldsPayload(),
+          ...formSettingsPayload(),
+        },
       });
       await App.apiJson(`/api/forms/${formId}/publish`, { method: "POST" });
       showBanner("Form published.", "success");
@@ -625,7 +847,7 @@
     if (!confirm(`Reset this form to exactly how it was originally created — Name, Phone, Email, your industry's fields, then Source, Owner, Pipeline Stage, Next Follow-up and Notes, in that order? Any fields you've added since will be removed from this draft. This only changes what's shown here — click "${saveLabel}" to make it live again.`)) return;
     const industryKey = me?.company?.industry;
     fields = defaultFormFieldsForIndustry(industryKey);
-    document.getElementById("metaName").value = `${INDUSTRY_NAMES[industryKey] || form.name} - Add Customer`;
+    document.getElementById("metaName").value = `${template?.name || form.name} - Add Customer`;
     document.getElementById("metaDescription").value = "Default internal form used by Add Customer and Not Interested → Add to CRM on the Pipeline board.";
     selectedKey = null;
     renderAll();

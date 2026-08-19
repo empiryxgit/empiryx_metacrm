@@ -18,7 +18,8 @@ import {
   upsertWebhookConfig,
 } from "../../src/infrastructure/db/repositories/campaigns";
 import { PERMISSIONS } from "../../src/domain/permissions";
-import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
+import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
+import { listBranches } from "../../src/infrastructure/db/repositories/branches";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -47,8 +48,25 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
     if (!auth) return;
-    const campaigns = await listCampaigns(auth.companyId, resolveBranchAccess(auth));
-    res.status(200).json({ campaigns });
+
+    const requestedBranchId = getQueryString(req, "branchId");
+    let access;
+    if (requestedBranchId !== undefined) {
+      const assertion = await assertBranchAccessible(auth, requestedBranchId);
+      if (!assertion.ok) {
+        res.status(assertion.status).json({ error: assertion.error });
+        return;
+      }
+      access = { scope: "restricted" as const, branchIds: assertion.branchId ? [assertion.branchId] : [] };
+    } else {
+      access = resolveBranchAccess(auth);
+    }
+
+    const [campaigns, branches] = await Promise.all([listCampaigns(auth.companyId, access), listBranches(auth.companyId)]);
+    const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+    res.status(200).json({
+      campaigns: campaigns.map((c) => ({ ...c, branchName: c.branchId ? branchNameById.get(c.branchId) ?? null : null })),
+    });
     return;
   }
 
@@ -91,6 +109,14 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
+    // Tenant isolation (companyId, above) is not enough on its own - a
+    // branch-restricted viewer must never read a campaign scoped to a
+    // branch outside their own access, same contract as every other
+    // branch-scoped resource (see src/application/branchAccess.ts).
+    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
+      res.status(403).json({ error: "You do not have access to this branch." });
+      return;
+    }
     res.status(200).json({ campaign });
     return;
   }
@@ -98,6 +124,21 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
   if (req.method === "PATCH") {
     const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
     if (!auth) return;
+
+    const existingCampaign = await getCampaign(auth.companyId, campaignId);
+    if (!existingCampaign) {
+      res.status(404).json({ error: "Campaign not found." });
+      return;
+    }
+    // Guards the campaign's CURRENT branch - a branch-restricted manager can
+    // never edit a campaign already scoped outside their access, regardless
+    // of what's being changed (mirrors the same gate on GET above; the NEW
+    // branchId, if one is being set, is separately validated below).
+    if (!canAccessBranch(resolveBranchAccess(auth), existingCampaign.branchId)) {
+      res.status(403).json({ error: "You do not have access to this branch." });
+      return;
+    }
+
     const { name, platform, status, branchId } = (req.body ?? {}) as {
       name?: string;
       platform?: string;
@@ -138,6 +179,10 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
+    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
+      res.status(403).json({ error: "You do not have access to this branch." });
+      return;
+    }
     const config = await getWebhookConfigForCampaign(auth.companyId, campaignId, getBaseUrl(req));
     res.status(200).json({ webhook: config });
     return;
@@ -150,6 +195,13 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
     const campaign = await getCampaign(auth.companyId, campaignId);
     if (!campaign) {
       res.status(404).json({ error: "Campaign not found." });
+      return;
+    }
+    // Without this, a branch-restricted user holding webhooks.manage could
+    // rotate another branch's campaign's Meta secrets (appSecret/
+    // accessToken) purely because it shares their company.
+    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
+      res.status(403).json({ error: "You do not have access to this branch." });
       return;
     }
 

@@ -8,7 +8,7 @@
 // on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requirePermission } from "../../../src/infrastructure/auth/context";
+import { requireAuth, requirePermission } from "../../../src/infrastructure/auth/context";
 import {
   countOtherActiveUsersWithRole,
   createUser,
@@ -22,14 +22,17 @@ import {
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
 import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
+import { resolveBranchAccess } from "../../../src/application/branchAccess";
 import {
   addUserToBranch,
   archiveBranch,
   codeExists,
+  countBranchUsersByBranch,
   createBranch,
   getBranchById,
   listBranches,
   listBranchUsers,
+  listUserBranches,
   removeUserFromBranch,
   setPrimaryBranch,
   updateBranch,
@@ -232,6 +235,12 @@ async function handleBranchesResource(req: VercelRequest, res: VercelResponse) {
   const branchUserId = getQueryString(req, "branchUserId");
   const isPrimaryAction = getQueryString(req, "sub") === "primary";
 
+  // These two have no branchId segment at all (/api/branches/mine,
+  // /api/branches/company-users) - checked before the branchId branch below
+  // so they're never mistaken for a literal branchId value.
+  if (!branchId && action === "mine") return handleMyBranches(req, res);
+  if (!branchId && action === "company-users") return handleBranchesCompanyUsers(req, res);
+
   if (!branchId) return handleBranchCollection(req, res);
 
   if (action === "archive") return handleBranchArchive(req, res, branchId);
@@ -247,12 +256,80 @@ async function handleBranchesResource(req: VercelRequest, res: VercelResponse) {
   res.status(404).json({ error: "Not found" });
 }
 
+// Self-serve lookup for ANY authenticated user (no branches.manage required)
+// - powers the global branch switcher in the app shell (see app.js). Not the
+// same endpoint as the admin collection above: this returns only ACTIVE
+// branches, narrowed to exactly what this user is allowed to see (every
+// active branch for an unrestricted/"all" user, or just their own
+// membership for a restricted one) - never the full admin list.
+async function handleMyBranches(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const access = resolveBranchAccess(auth);
+
+  if (access.scope === "all") {
+    const active = (await listBranches(auth.companyId)).filter((b) => b.status === "active");
+    res.status(200).json({
+      scope: "all",
+      branches: active.map((b) => ({ id: b.id, name: b.name, code: b.code, isPrimary: false })),
+    });
+    return;
+  }
+
+  // Restricted: go through the user's own membership rows (not the
+  // company-wide branch list filtered down) so isPrimary is available -
+  // that's what lets "+ Add Customer" default to a multi-branch user's
+  // primary branch instead of just the first one alphabetically.
+  const mine = await listUserBranches(auth.userId);
+  const active = mine.filter((b) => b.status === "active");
+  res.status(200).json({
+    scope: "restricted",
+    branches: active.map((b) => ({ id: b.branchId, name: b.name, code: b.code, isPrimary: Boolean(b.isPrimary) })),
+  });
+}
+
+// Minimal user picker for the branch admin UI (assigning a manager /
+// members) - gated on branches.manage rather than users.manage, so someone
+// who can administer branches doesn't also need separate user-management
+// rights just to see who they can assign. Deliberately projects only
+// id/fullName/email - never role, status, or anything users.manage's own
+// endpoint exposes.
+async function handleBranchesCompanyUsers(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
+  if (!auth) return;
+
+  const users = await listUsers(auth.companyId);
+  res.status(200).json({
+    users: users.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email })),
+  });
+}
+
 async function handleBranchCollection(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     const auth = await requirePermission(req, res, PERMISSIONS.BRANCHES_MANAGE);
     if (!auth) return;
-    const rows = await listBranches(auth.companyId);
-    res.status(200).json({ branches: rows });
+    const [rows, counts, companyUsers] = await Promise.all([
+      listBranches(auth.companyId),
+      countBranchUsersByBranch(auth.companyId),
+      listUsers(auth.companyId),
+    ]);
+    const userNameById = new Map(companyUsers.map((u) => [u.id, u.fullName]));
+    res.status(200).json({
+      branches: rows.map((b) => ({
+        ...b,
+        userCount: counts.get(b.id) ?? 0,
+        managerName: b.managerId ? userNameById.get(b.managerId) ?? null : null,
+      })),
+    });
     return;
   }
 
@@ -267,6 +344,7 @@ async function handleBranchCollection(req: VercelRequest, res: VercelResponse) {
       city?: string;
       state?: string;
       managerId?: string;
+      status?: string;
     };
     const name = body.name?.trim();
     const code = body.code?.trim();
@@ -301,6 +379,7 @@ async function handleBranchCollection(req: VercelRequest, res: VercelResponse) {
         city: body.city?.trim() || undefined,
         state: body.state?.trim() || undefined,
         managerId: body.managerId || undefined,
+        status: body.status === "inactive" ? "inactive" : "active",
       });
       res.status(201).json({ branch });
     } catch (err) {
@@ -371,7 +450,7 @@ async function handleBranchOne(req: VercelRequest, res: VercelResponse, branchId
       city: body.city?.trim(),
       state: body.state?.trim(),
       managerId: body.managerId === undefined ? undefined : body.managerId || null,
-      status: body.status,
+      status: body.status === undefined ? undefined : body.status === "inactive" ? "inactive" : "active",
     });
     if (!branch) {
       res.status(404).json({ error: "Branch not found." });

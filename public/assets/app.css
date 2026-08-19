@@ -158,6 +158,15 @@ h2.section-title:first-of-type{ margin-top:0; }
 .nav-sep{ width:1px; height:18px; background:var(--border); margin:0 6px; flex-shrink:0; }
 
 .shell-right{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.branch-switch{ flex-shrink:0; }
+.branch-switch-select{
+  width:auto; max-width:180px; padding:7px 28px 7px 11px; margin:0;
+  font-size:12.5px; font-weight:600; border-radius:var(--radius-sm);
+  border:1px solid var(--border-strong); background:var(--surface-sunken); color:var(--text-primary);
+}
+.branch-switch-select:focus{ background:#fff; }
+.branch-switch-mobile{ margin:0 0 14px; }
+.branch-switch-mobile .branch-switch-select{ max-width:none; width:100%; background:#fff; }
 .icon-btn{
   display:flex; align-items:center; justify-content:center;
   width:34px; height:34px; border-radius:var(--radius-sm);
@@ -491,6 +500,14 @@ th.sortable.active .sort-arrow{ opacity:1; color:var(--brand-primary); }
 .board-toolbar .field-inline{ max-width:280px; flex:1 1 220px; }
 .board-toolbar label{ margin:0 0 6px; }
 .board-toolbar-right{ display:flex; align-items:flex-end; gap:var(--space-3); margin-left:auto; }
+/* A branch filter mounted into a page toolbar (see App.mountBranchFilter)
+   should read like every other field in that toolbar, not like the compact
+   nav-bar switcher it shares functional CSS with. */
+.board-toolbar .branch-switch-select, .page-head-actions .branch-switch-select{
+  width:100%; max-width:none; padding:9px 11px; font-size:13.5px; font-weight:400; background:#fff;
+}
+.page-head-actions .field-inline{ display:flex; flex-direction:column; }
+.page-head-actions .field-inline label{ margin:0 0 6px; }
 
 .segmented{ display:inline-flex; padding:3px; background:var(--surface-sunken); border-radius:var(--radius-md); gap:2px; }
 .segmented button{
@@ -743,6 +760,12 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
   .status-refresh{ margin-left:0; width:100%; justify-content:space-between; }
   .range-picker{ width:100%; }
   .range-picker .segmented{ flex:1; }
+  /* Pipeline's custom date-range sub-panel (#filterDateCustom) - without
+     this it's a single flex item inside .board-toolbar that wraps as a
+     whole, but its own two date inputs + button never wrap and overflow
+     narrow phone widths. */
+  .range-custom{ flex-wrap:wrap; width:100%; }
+  .range-custom input[type="date"]{ flex:1 1 120px; min-width:0; }
   .funnel-row{ grid-template-columns:84px 1fr 34px; gap:6px; }
   .donut-row{ flex-direction:column; align-items:flex-start; }
   .followup-when{ font-size:11px; }

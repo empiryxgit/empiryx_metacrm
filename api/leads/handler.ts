@@ -147,7 +147,17 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
     return;
   }
 
-  await updateLeadPipelineStage(auth.companyId, leadId, stage);
+  // A branch-restricted user must never be able to move a card belonging to
+  // a lead outside their own branch access, even though it shares their
+  // company - folded into the UPDATE's own WHERE clause (see
+  // updateLeadPipelineStage), same "company_id + branch_id enforced on the
+  // backend" contract as every other branch-scoped write in this codebase.
+  const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+  const updated = await updateLeadPipelineStage(auth.companyId, leadId, stage, branchCondition);
+  if (!updated) {
+    res.status(404).json({ error: "Lead not found." });
+    return;
+  }
   res.status(200).json({ updated: true });
 }
 
@@ -280,7 +290,13 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: str
   }
 
   try {
-    const lead = await updateLeadCrmFields(auth.companyId, leadId, patch);
+    // Same branch-authorization gate as handleStage above - a lead the
+    // caller doesn't have branch access to matches zero rows regardless of
+    // what's in `patch`, including an attempted branchId reassignment (the
+    // NEW branchId is separately validated above via assertBranchAccessible;
+    // this guards the row's CURRENT branch instead).
+    const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+    const lead = await updateLeadCrmFields(auth.companyId, leadId, patch, branchCondition);
     if (!lead) {
       res.status(404).json({ error: "Lead not found." });
       return;

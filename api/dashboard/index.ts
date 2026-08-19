@@ -22,14 +22,17 @@
 // from reached-Qualified/reached-milestone so that bug can't happen.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositories/tenancy";
 import { listCampaigns } from "../../src/infrastructure/db/repositories/campaigns";
+import { listBranches } from "../../src/infrastructure/db/repositories/branches";
 import { getIndustryTemplate, resolveStageKey, LEAD_SOURCES, type IndustryTemplate } from "../../src/domain/industryTemplates";
+import { assertBranchAccessible, resolveBranchAccess, type BranchAccess } from "../../src/application/branchAccess";
+import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -129,15 +132,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const classify = buildClassifier(template);
   const { rangeKey, start, end, prevStart, prevEnd, days } = getRangeBounds(req);
 
+  // Branch scoping - identical contract to /api/leads and /api/pipeline: an
+  // explicit ?branchId= narrows to that one branch (still combined with
+  // company-wide rows, validated via assertBranchAccessible so a foreign or
+  // unauthorized branch id 404s/403s rather than silently falling back to
+  // "everything"); omitted, it falls back to the caller's full branch
+  // access. Every KPI/chart/funnel/source/campaign/activity/follow-up
+  // section below is derived from `allLeads`, so scoping that one query
+  // cascades correctly everywhere without touching each section - a
+  // restricted or branch-narrowed caller can never see another branch's
+  // numbers baked into a total.
+  const requestedBranchId = getQueryString(req, "branchId");
+  let access: BranchAccess;
+  if (requestedBranchId !== undefined) {
+    const assertion = await assertBranchAccessible(auth, requestedBranchId);
+    if (!assertion.ok) {
+      res.status(assertion.status).json({ error: assertion.error });
+      return;
+    }
+    access = { scope: "restricted", branchIds: assertion.branchId ? [assertion.branchId] : [] };
+  } else {
+    access = resolveBranchAccess(auth);
+  }
+  const branchCondition = branchAccessCondition(leads.branchId, access);
+
   const db = await getDb();
-  const [allLeads, campaigns, users] = await Promise.all([
-    db.select().from(leads).where(eq(leads.companyId, auth.companyId)).orderBy(desc(leads.createdAt)),
-    listCampaigns(auth.companyId),
+  const [allLeads, campaigns, users, branches] = await Promise.all([
+    db
+      .select()
+      .from(leads)
+      .where(branchCondition ? and(eq(leads.companyId, auth.companyId), branchCondition) : eq(leads.companyId, auth.companyId))
+      .orderBy(desc(leads.createdAt)),
+    listCampaigns(auth.companyId, access),
     listUsers(auth.companyId),
+    listBranches(auth.companyId),
   ]);
 
   const ownerNameById = new Map(users.map((u) => [u.id, u.fullName]));
   const campaignNameById = new Map(campaigns.map((c) => [c.id, c.name]));
+  // Every campaign here already passed through listCampaigns' own
+  // access-scoped query above, so this map is purely a display lookup
+  // (branchId -> name) - it never widens what campaigns/branches a
+  // restricted caller can see, it only labels a branchId they can already
+  // see on their own campaign rows.
+  const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+  const campaignBranchNameById = new Map(campaigns.map((c) => [c.id, c.branchId ? branchNameById.get(c.branchId) ?? null : null]));
 
   // ---- KPIs -----------------------------------------------------------
   const totalLeadsNow = allLeads.length;
@@ -241,6 +280,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return {
         id: campaignId,
         name: campaignNameById.get(campaignId) ?? "Unknown campaign",
+        branchName: campaignBranchNameById.get(campaignId) ?? null,
         leads: s.newLeads,
         qualified: s.qualified,
         won: s.won,

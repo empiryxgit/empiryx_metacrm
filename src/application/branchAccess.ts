@@ -71,3 +71,21 @@ export async function assertBranchAccessible(auth: AuthContext, requestedBranchI
 
   return { ok: true, branchId: requestedBranchId };
 }
+
+/**
+ * Checks a branchId already read back from our own database (e.g. an
+ * existing row's own branchId, fetched via a company-scoped query) against
+ * the caller's access - no DB round-trip, unlike assertBranchAccessible.
+ * Use this to gate read/update/delete of a single row already fetched by
+ * id (a campaign, a form, a lead) so a branch-restricted caller can never
+ * view or mutate a row that belongs to a branch outside their access, even
+ * though tenant isolation (companyId) alone would have let the fetch
+ * through. Use assertBranchAccessible instead for a branchId the CLIENT
+ * supplied directly (a query param or request body value), which still
+ * needs its own tenant-isolation + existence check via getBranchById.
+ */
+export function canAccessBranch(access: BranchAccess, branchId: string | null): boolean {
+  if (access.scope === "all") return true;
+  if (branchId === null) return true; // company-wide rows are visible to every branch-restricted caller too
+  return access.branchIds.includes(branchId);
+}

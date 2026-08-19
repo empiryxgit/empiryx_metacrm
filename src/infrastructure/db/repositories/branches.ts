@@ -21,6 +21,10 @@ export interface CreateBranchInput {
   city?: string;
   state?: string;
   managerId?: string;
+  // Optional - the column defaults to "active" itself, so omitting this
+  // still behaves exactly as it did before the create form exposed a
+  // Status field.
+  status?: string;
 }
 
 export async function createBranch(input: CreateBranchInput) {
@@ -32,6 +36,24 @@ export async function createBranch(input: CreateBranchInput) {
 export async function listBranches(companyId: string) {
   const db = await getDb();
   return db.select().from(branches).where(eq(branches.companyId, companyId));
+}
+
+/** Member counts for every branch in this company, keyed by branchId - one
+ * query, counted client-side rather than a SQL GROUP BY (matches this
+ * repo's existing simple-query style; branch_users rows per company are
+ * never large enough for this to matter). Powers the "Users" column on the
+ * branches admin page (see public/admin/branches.html) - never trusted for
+ * access control, purely a display count. */
+export async function countBranchUsersByBranch(companyId: string): Promise<Map<string, number>> {
+  const db = await getDb();
+  const rows = await db
+    .select({ branchId: branchUsers.branchId })
+    .from(branchUsers)
+    .innerJoin(branches, eq(branchUsers.branchId, branches.id))
+    .where(eq(branches.companyId, companyId));
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.branchId, (counts.get(row.branchId) ?? 0) + 1);
+  return counts;
 }
 
 /** THE tenant-isolation checkpoint for branches: returns null (never the

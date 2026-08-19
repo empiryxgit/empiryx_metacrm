@@ -26,9 +26,46 @@
     </div>
 
     <div class="board-toolbar">
+      <div class="field-inline" id="branchFilterField" style="display:none"></div>
+      <div class="field-inline">
+        <label for="filterStage">Stage</label>
+        <select id="filterStage"><option value="">All stages</option></select>
+      </div>
+      <div class="field-inline">
+        <label for="filterSource">Source</label>
+        <select id="filterSource"><option value="">All sources</option></select>
+      </div>
       <div class="field-inline">
         <label for="campaignSelect">Campaign</label>
         <select id="campaignSelect"></select>
+      </div>
+      <div class="field-inline">
+        <label for="filterOwner">Owner</label>
+        <select id="filterOwner"><option value="">All owners</option></select>
+      </div>
+      <div class="field-inline">
+        <label for="filterCustomerType">Customer type</label>
+        <select id="filterCustomerType">
+          <option value="">All types</option>
+          <option value="digital_lead">Digital Lead</option>
+          <option value="manual_customer">Manual Customer</option>
+        </select>
+      </div>
+      <div class="field-inline">
+        <label for="filterDateRange">Date</label>
+        <select id="filterDateRange">
+          <option value="">All time</option>
+          <option value="today">Today</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="custom">Custom range</option>
+        </select>
+      </div>
+      <div class="range-custom" id="filterDateCustom" style="display:none">
+        <input type="date" id="filterDateFrom" />
+        <span style="color:var(--text-muted); font-size:12px">to</span>
+        <input type="date" id="filterDateTo" />
+        <button class="btn secondary sm" type="button" id="filterDateApply">Apply</button>
       </div>
       <div class="board-toolbar-right">
         <div class="field-inline" style="max-width:260px">
@@ -121,9 +158,44 @@
     return stages.some(s => s.key === row.pipelineStage) ? row.pipelineStage : (stages.find(s => s.isInitial)?.key || stages[0]?.key);
   }
 
+  // Date filter state - a preset key ("today"/"7d"/"30d"/"custom") plus the
+  // custom from/to strings when "custom" is applied. Computed into an
+  // actual [from, to) range only at filter-time, same lazy-eval style as
+  // dashboard.html's range picker.
+  let dateFilter = { key: "", from: "", to: "" };
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  function dateFilterRange(){
+    if (!dateFilter.key) return null;
+    const now = new Date();
+    if (dateFilter.key === "today") return { from: new Date(now.getTime() - DAY_MS), to: now };
+    if (dateFilter.key === "7d") return { from: new Date(now.getTime() - 7 * DAY_MS), to: now };
+    if (dateFilter.key === "30d") return { from: new Date(now.getTime() - 30 * DAY_MS), to: now };
+    if (dateFilter.key === "custom" && dateFilter.from && dateFilter.to) {
+      const from = new Date(dateFilter.from);
+      const to = new Date(new Date(dateFilter.to).getTime() + DAY_MS); // inclusive of the "to" day
+      if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) return { from, to };
+    }
+    return null;
+  }
+
   function applyFilters(rows){
     let out = rows;
     if (stageFilter) out = out.filter(r => resolvedStage(r) === stageFilter);
+
+    const sourceFilter = document.getElementById("filterSource").value;
+    if (sourceFilter) out = out.filter(r => r.source === sourceFilter);
+
+    const ownerFilter = document.getElementById("filterOwner").value;
+    if (ownerFilter === "__unassigned__") out = out.filter(r => !r.ownerId);
+    else if (ownerFilter) out = out.filter(r => r.ownerId === ownerFilter);
+
+    const typeFilter = document.getElementById("filterCustomerType").value;
+    if (typeFilter) out = out.filter(r => r.leadType === typeFilter);
+
+    const range = dateFilterRange();
+    if (range) out = out.filter(r => { const t = new Date(r.createdAt); return t >= range.from && t < range.to; });
+
     const q = document.getElementById("searchInput").value.trim().toLowerCase();
     if (!q) return out;
     return out.filter(r =>
@@ -134,7 +206,13 @@
     );
   }
 
+  // Keeps the Stage <select> and the "Filtered by stage" chip (used for deep
+  // links from the Dashboard's pipeline funnel, e.g. /pipeline.html?stage=won)
+  // in sync with the single `stageFilter` source of truth, regardless of
+  // which control last changed it.
   function renderStageFilterChip(){
+    const select = document.getElementById("filterStage");
+    if (select) select.value = stageFilter || "";
     const box = document.getElementById("stageFilterChip");
     if (!stageFilter) { box.style.display = "none"; box.innerHTML = ""; return; }
     box.style.display = "block";
@@ -296,6 +374,67 @@
   document.getElementById("mobileStage").addEventListener("change", () => renderView());
   document.getElementById("searchInput").addEventListener("input", () => renderView());
 
+  // Stage select is a second entry point to the same `stageFilter` source of
+  // truth as the URL-driven chip (see renderStageFilterChip) - keep the URL
+  // in sync too, so a manually-picked stage filter is still shareable/
+  // reload-safe exactly like a ?stage= deep link from the Dashboard.
+  document.getElementById("filterStage").addEventListener("change", (e) => {
+    stageFilter = e.target.value || null;
+    const url = new URL(window.location.href);
+    if (stageFilter) url.searchParams.set("stage", stageFilter); else url.searchParams.delete("stage");
+    window.history.replaceState({}, "", url);
+    renderStageFilterChip();
+    renderView();
+  });
+  document.getElementById("filterSource").addEventListener("change", () => renderView());
+  document.getElementById("filterOwner").addEventListener("change", () => renderView());
+  document.getElementById("filterCustomerType").addEventListener("change", () => renderView());
+  document.getElementById("filterDateRange").addEventListener("change", (e) => {
+    const val = e.target.value;
+    const customBox = document.getElementById("filterDateCustom");
+    if (val === "custom") {
+      // Wait for Apply - a bare "Custom range" selection with no dates yet
+      // would otherwise fall through dateFilterRange()'s guard and filter
+      // nothing, which is fine, but showing the pickers first is clearer UX.
+      customBox.style.display = "flex";
+      return;
+    }
+    customBox.style.display = "none";
+    dateFilter = { key: val, from: "", to: "" };
+    renderView();
+  });
+  document.getElementById("filterDateApply").addEventListener("click", () => {
+    dateFilter = {
+      key: "custom",
+      from: document.getElementById("filterDateFrom").value,
+      to: document.getElementById("filterDateTo").value,
+    };
+    renderView();
+  });
+
+  // Rebuilds the Stage/Source/Owner <select> options from whatever `load()`
+  // just fetched. Called on every load() (not just the first), since a
+  // branch switch can change the owner roster; each select's current value
+  // is preserved when it's still a valid option, and reset to "All ..."
+  // otherwise (e.g. an owner who isn't assigned to the newly-selected
+  // branch) - same "never leave a stale filter silently applied" instinct as
+  // the ?stage= staleness check above.
+  function populateFilterOptions(){
+    const stageSelect = document.getElementById("filterStage");
+    stageSelect.innerHTML = `<option value="">All stages</option>` + stages.map(s => `<option value="${s.key}">${App.escapeHtml(s.label)}</option>`).join("");
+
+    const sourceSelect = document.getElementById("filterSource");
+    const currentSource = sourceSelect.value;
+    sourceSelect.innerHTML = `<option value="">All sources</option>` + sources.map(s => `<option value="${s.key}">${App.escapeHtml(s.label)}</option>`).join("");
+    sourceSelect.value = sources.some(s => s.key === currentSource) ? currentSource : "";
+
+    const ownerSelect = document.getElementById("filterOwner");
+    const currentOwner = ownerSelect.value;
+    ownerSelect.innerHTML = `<option value="">All owners</option><option value="__unassigned__">Unassigned</option>` +
+      owners.map(o => `<option value="${o.id}">${App.escapeHtml(o.fullName)}</option>`).join("");
+    ownerSelect.value = currentOwner === "__unassigned__" || owners.some(o => o.id === currentOwner) ? currentOwner : "";
+  }
+
   // -------------------------------------------------------------------
   // Add Customer / Not Interested → Add to CRM - one dynamic form driven
   // entirely by template.fields, shared between both flows. "create" posts
@@ -318,6 +457,59 @@
       return `<input type="number" data-field="${field.key}" value="${App.escapeHtml(String(val))}" step="any" />`;
     }
     return `<input type="text" data-field="${field.key}" value="${App.escapeHtml(String(val))}" />`;
+  }
+
+  // ---- Branch picker for Add Customer (create mode only) ---------------
+  // "A user who only has one branch should not need to select it
+  // repeatedly" -> when the caller has 0 or 1 accessible branch, no picker
+  // is shown at all and the single branch (if any) is silently used.
+  // "A multi-branch user can switch between permitted branches" -> 2+
+  // accessible branches shows a <select>, defaulting to the page's current
+  // global branch filter if one is active and permitted, else the caller's
+  // primary branch, else the first permitted branch.
+  function computeDefaultCreateBranchId(myBranches){
+    if (!myBranches || !myBranches.branches || myBranches.branches.length === 0) return "";
+    const globalSelected = App.getSelectedBranchId();
+    if (myBranches.scope === "restricted") {
+      if (globalSelected && myBranches.branches.some(b => b.id === globalSelected)) return globalSelected;
+      const primary = myBranches.branches.find(b => b.isPrimary);
+      if (primary) return primary.id;
+      return myBranches.branches[0].id;
+    }
+    // scope === "all" (branches.manage, or a company/user with no branch
+    // memberships yet) - no single branch is "theirs", so default to the
+    // page's current filter if set, else company-wide, matching pre-branch
+    // behavior.
+    return globalSelected || "";
+  }
+
+  function branchPickerHtml(mode){
+    if (mode !== "create") return "";
+    const myBranches = App.getMyBranches();
+    if (!myBranches || !myBranches.branches || myBranches.branches.length <= 1) return "";
+    const defaultId = computeDefaultCreateBranchId(myBranches);
+    const options = `<option value="">All branches (company-wide)</option>` +
+      myBranches.branches.map(b => `<option value="${b.id}" ${b.id === defaultId ? "selected" : ""}>${App.escapeHtml(b.name)}</option>`).join("");
+    return `<label for="cf_branch">Branch</label><select id="cf_branch">${options}</select>`;
+  }
+
+  // Resolves the branchId to submit for a brand-new customer.
+  // - Picker rendered: returns its value verbatim - "" is an EXPLICIT choice
+  //   of "All branches (company-wide)", distinct from "no override" below
+  //   (the form-driven submit path treats them differently: an explicit ""
+  //   must still clear the form's own default branch).
+  // - No picker (0 or 1 accessible branches): returns that single
+  //   accessible branch (restricted scope), or undefined ("no override" -
+  //   legacy create omits branchId entirely = company-wide; form-driven
+  //   create leaves the form's own configured branch untouched).
+  function resolveCreateBranchId(){
+    const picker = document.getElementById("cf_branch");
+    if (picker) return picker.value;
+    const myBranches = App.getMyBranches();
+    if (myBranches && myBranches.scope === "restricted" && myBranches.branches.length === 1) {
+      return myBranches.branches[0].id;
+    }
+    return undefined;
   }
 
   function customerModalHtmlLegacy(mode, lead){
@@ -352,6 +544,8 @@
             <input id="cf_email" type="email" value="${App.escapeHtml(lead?.email || "")}" />
 
             ${template.fields.map(f => `<label>${App.escapeHtml(f.label)}</label>${fieldInputHtml(f, lead?.customFields?.[f.key])}`).join("")}
+
+            ${branchPickerHtml(mode)}
 
             <div class="modal-field-grid">
               <div><label for="cf_source">Source</label><select id="cf_source" ${isConvert ? "disabled" : ""}>${sourceOptions}</select></div>
@@ -428,6 +622,7 @@
           </div>
           <div class="modal-body">
             <div id="customerModalError"></div>
+            ${branchPickerHtml(mode)}
             <form id="customerModalForm">${bodyHtml}</form>
             ${isConvert && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
           </div>
@@ -455,7 +650,15 @@
     saveBtn.disabled = true;
     try {
       const body = { values };
-      if (mode === "convert") body.leadId = leadId;
+      if (mode === "convert") {
+        body.leadId = leadId;
+      } else {
+        // Preselected/chosen branch - see branchPickerHtml/resolveCreateBranchId
+        // above. Omitted (undefined) means "use the form's own configured
+        // branch" (see api/forms/handler.ts handleInternalSubmit).
+        const branchId = resolveCreateBranchId();
+        if (branchId !== undefined) body.branchId = branchId || null;
+      }
       await App.apiJson(`/api/forms/${internalForm.id}/submit`, { method: "POST", body });
       closeModal();
       load();
@@ -530,6 +733,11 @@
     try {
       if (mode === "create") {
         body.source = document.getElementById("cf_source").value;
+        // Preselected/chosen branch - see branchPickerHtml/resolveCreateBranchId
+        // above. undefined means company-wide, same as before this feature
+        // existed.
+        const branchId = resolveCreateBranchId();
+        if (branchId) body.branchId = branchId;
         await App.apiJson("/api/leads", { method: "POST", body });
       } else {
         await App.apiJson(`/api/leads/${leadId}`, { method: "PATCH", body });
@@ -608,8 +816,11 @@
    * back to their original hard-coded fields, exactly as before this
    * feature existed. */
   async function loadInternalForm(){
+    internalForm = null;
+    internalFormFields = [];
     try {
-      const result = await App.apiJson("/api/forms/default-internal");
+      const qs = branchQueryParam();
+      const result = await App.apiJson(`/api/forms/default-internal${qs ? `?${qs}` : ""}`);
       if (result.form && Array.isArray(result.fields) && result.fields.length > 0) {
         internalForm = result.form;
         internalFormFields = result.fields;
@@ -617,13 +828,19 @@
     } catch { /* fall back to legacy fields */ }
   }
 
+  function branchQueryParam(){
+    const branchId = App.getSelectedBranchId();
+    return branchId ? `branchId=${encodeURIComponent(branchId)}` : "";
+  }
+
   async function load(){
     const banner = document.getElementById("banner");
     banner.innerHTML = "";
     const campaignId = document.getElementById("campaignSelect").value;
+    const params = [campaignId ? `campaignId=${campaignId}` : "", branchQueryParam()].filter(Boolean).join("&");
     let data;
     try {
-      data = await App.apiJson(`/api/pipeline${campaignId ? `?campaignId=${campaignId}` : ""}`);
+      data = await App.apiJson(`/api/pipeline${params ? `?${params}` : ""}`);
     } catch (err) {
       document.getElementById("pipelineContent").style.display = "none";
       document.getElementById("emptyPipeline").style.display = "none";
@@ -636,6 +853,7 @@
     sources = data.sources;
     owners = data.owners;
     allRows = Object.values(data.board).flat();
+    populateFilterOptions();
 
     // A stale/invalid ?stage= (e.g. leftover after an industry template
     // change) should never silently hide the whole pipeline - drop it.
@@ -670,6 +888,23 @@
     App.renderNav(me, "/pipeline.html");
     canManage = App.hasPermission(me, "pipeline.manage");
     canManageLeads = App.hasPermission(me, "leads.manage");
+
+    // Mirrors the nav-level switcher right in the toolbar - same shared
+    // state, same "only shows if the user has >1 accessible branch" rule -
+    // just more discoverable on the page where branch filtering matters
+    // most. Board and List views both render from the same `allRows` fetch
+    // below, so filtering it once covers both.
+    App.mountBranchFilter(document.getElementById("branchFilterField"), { fieldLabel: "Branch", selectId: "branchSelectPipeline" });
+
+    // Registered before any other awaits below, so a prior branch
+    // selection restored asynchronously by the switcher (see
+    // loadBranchSwitcher in app.js) can never fire this event before the
+    // listener exists - both races against the same initial page load.
+    App.onBranchChange(async () => {
+      if (canManageLeads) await loadInternalForm();
+      await load();
+    });
+
     if (canManageLeads) {
       document.getElementById("addCustomerBtn").style.display = "inline-flex";
       await loadInternalForm();

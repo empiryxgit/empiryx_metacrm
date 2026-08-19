@@ -18,6 +18,7 @@
         <p class="page-sub">Here's what's happening with your customers and sales.</p>
       </div>
       <div class="page-head-actions" style="gap:10px">
+        <div class="field-inline" id="branchFilterField" style="display:none; width:170px"></div>
         <div class="range-picker">
           <div class="segmented" id="rangeToggle" role="tablist" aria-label="Date range">
             <button type="button" data-range="today" role="tab">Today</button>
@@ -92,13 +93,14 @@
               <thead>
                 <tr>
                   <th>Campaign</th>
+                  <th>Branch</th>
                   <th class="sortable" data-sort="leads">Leads <span class="sort-arrow">↓</span></th>
                   <th class="sortable" data-sort="qualified">Qualified <span class="sort-arrow">↓</span></th>
                   <th class="sortable" data-sort="won">Won <span class="sort-arrow">↓</span></th>
                   <th class="sortable" data-sort="conversionRate">Conversion <span class="sort-arrow">↓</span></th>
                 </tr>
               </thead>
-              <tbody id="campaignBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+              <tbody id="campaignBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -164,8 +166,8 @@
       { key: "whatsapp", label: "WhatsApp", count: 6, percent: 9.4 },
     ],
     campaigns: [
-      { id: "mock-1", name: "Project Acstya", leads: 84, qualified: 31, won: 7, conversionRate: 8.3 },
-      { id: "mock-2", name: "Diwali Offer", leads: 52, qualified: 19, won: 4, conversionRate: 7.7 },
+      { id: "mock-1", name: "Project Acstya", branchName: "Ahmedabad", leads: 84, qualified: 31, won: 7, conversionRate: 8.3 },
+      { id: "mock-2", name: "Diwali Offer", branchName: null, leads: 52, qualified: 19, won: 4, conversionRate: 7.7 },
     ],
     activity: [
       { text: "Rahul Patel moved to Qualified", timestamp: new Date(Date.now() - 20 * 60000).toISOString() },
@@ -372,7 +374,7 @@
   function renderCampaigns() {
     const body = document.getElementById("campaignBody");
     if (!campaignRows.length) {
-      body.innerHTML = `<tr><td colspan="5" class="empty">No campaign leads in this period yet.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="empty">No campaign leads in this period yet.</td></tr>`;
       return;
     }
     const sorted = [...campaignRows].sort((a, b) => {
@@ -382,6 +384,7 @@
     body.innerHTML = sorted.map(c => `
       <tr>
         <td><span class="campaign-name-link" data-campaign="${c.id}">${App.escapeHtml(c.name)}</span></td>
+        <td>${c.branchName ? App.escapeHtml(c.branchName) : '<span style="color:var(--text-muted)">All branches</span>'}</td>
         <td>${c.leads}</td>
         <td>${c.qualified}</td>
         <td>${c.won}</td>
@@ -462,6 +465,43 @@
     document.getElementById("campaignRangeLabel").textContent = "Leads generated " + rangeLabel;
   }
 
+  function branchQueryParam(){
+    const branchId = App.getSelectedBranchId();
+    return branchId ? `&branchId=${encodeURIComponent(branchId)}` : "";
+  }
+
+  // Just the "fetch + render the numbers" half of load() below, with no
+  // auth/nav work - this is what a branch-switch reacts to (see
+  // App.onBranchChange near the bottom), so switching branches never
+  // re-triggers App.renderNav() (which would re-populate the branch
+  // switcher and could re-fire the very event this responds to).
+  async function fetchAndRender() {
+    const refreshBtn = document.getElementById("refreshBtn");
+    refreshBtn.classList.add("is-loading");
+    document.getElementById("banner").innerHTML = "";
+    try {
+      const data = await App.apiJson(`/api/dashboard?${apiRangeQuery()}${branchQueryParam()}`);
+      document.getElementById("dashboardBody").style.display = "";
+      renderAll(data);
+      document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch (err) {
+      document.getElementById("dashboardBody").style.display = "none";
+      document.getElementById("banner").innerHTML = `
+        <div class="state-block">
+          <p class="state-title">Unable to load dashboard data</p>
+          <p class="state-desc">${App.escapeHtml(err.message || "Something went wrong.")}</p>
+          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+        </div>`;
+      document.getElementById("retryBtn")?.addEventListener("click", load);
+      document.getElementById("refreshedAt").textContent = "";
+      refreshBtn.classList.remove("is-loading");
+      return;
+    }
+    refreshBtn.classList.remove("is-loading");
+  }
+
+  let branchFilterMounted = false;
+
   async function load() {
     const refreshBtn = document.getElementById("refreshBtn");
     refreshBtn.classList.add("is-loading");
@@ -489,25 +529,16 @@
     document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/dashboard.html");
 
-    try {
-      const data = await App.apiJson(`/api/dashboard?${apiRangeQuery()}`);
-      document.getElementById("dashboardBody").style.display = "";
-      renderAll(data);
-      document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
-    } catch (err) {
-      document.getElementById("dashboardBody").style.display = "none";
-      document.getElementById("banner").innerHTML = `
-        <div class="state-block">
-          <p class="state-title">Unable to load dashboard data</p>
-          <p class="state-desc">${App.escapeHtml(err.message || "Something went wrong.")}</p>
-          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
-        </div>`;
-      document.getElementById("retryBtn")?.addEventListener("click", load);
-      document.getElementById("refreshedAt").textContent = "";
-      refreshBtn.classList.remove("is-loading");
-      return;
+    if (!branchFilterMounted) {
+      branchFilterMounted = true;
+      App.mountBranchFilter(document.getElementById("branchFilterField"), { fieldLabel: "Branch", selectId: "branchSelectDashboard" });
+      // Registered once, before the first fetchAndRender() below, so a
+      // prior branch selection restored asynchronously by the switcher can
+      // never fire this before the listener exists.
+      App.onBranchChange(fetchAndRender);
     }
-    refreshBtn.classList.remove("is-loading");
+
+    await fetchAndRender();
   }
 
   document.getElementById("refreshBtn").addEventListener("click", load);

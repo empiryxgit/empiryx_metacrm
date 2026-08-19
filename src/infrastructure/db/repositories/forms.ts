@@ -110,9 +110,30 @@ export async function getPublishedFormByPublicKey(publicKey: string) {
   return { form, fields };
 }
 
-export interface CreateFormInput {
+// Branch Configuration - shared shape between create and update. See
+// src/application/formBranch.ts for how these turn into an actual branchId
+// at submission time, and for the validation every caller MUST run before
+// passing these through (never trust a client-supplied branchMode/
+// branchFieldMap directly - validateBranchConfig checks tenant isolation
+// AND the saving user's own branch access on every branchId referenced).
+export interface FormBranchConfigInput {
+  branchMode?: "specific" | "all" | "field";
+  branchId?: string | null; // authoritative only when branchMode="specific"
+  branchFieldKey?: string | null; // authoritative only when branchMode="field"
+  branchFieldMap?: Record<string, string>; // authoritative only when branchMode="field"
+}
+
+// Form-level CRM defaults - shared shape between create and update. See the
+// forms table comment in schema.ts.
+export interface FormDefaultsInput {
+  defaultPipelineStage?: string | null;
+  defaultCrmCampaignId?: string | null;
+  defaultSource?: string | null;
+  defaultOwnerId?: string | null;
+}
+
+export interface CreateFormInput extends FormBranchConfigInput, FormDefaultsInput {
   companyId: string;
-  branchId?: string | null;
   name: string;
   description?: string;
   type: "internal" | "public";
@@ -127,10 +148,17 @@ export async function createForm(input: CreateFormInput) {
     .values({
       companyId: input.companyId,
       branchId: input.branchId ?? null,
+      branchMode: input.branchMode ?? (input.branchId ? "specific" : "all"),
+      branchFieldKey: input.branchFieldKey ?? null,
+      branchFieldMap: input.branchFieldMap ?? {},
       name: input.name,
       description: input.description,
       type: input.type,
       createdBy: input.createdBy,
+      defaultPipelineStage: input.defaultPipelineStage ?? null,
+      defaultCrmCampaignId: input.defaultCrmCampaignId ?? null,
+      defaultSource: input.defaultSource ?? null,
+      defaultOwnerId: input.defaultOwnerId ?? null,
     })
     .returning();
   const form = firstOrThrow(rows);
@@ -138,11 +166,13 @@ export async function createForm(input: CreateFormInput) {
   return form;
 }
 
-export async function updateFormMeta(
-  companyId: string,
-  formId: string,
-  input: { name?: string; description?: string; settings?: Record<string, unknown>; branchId?: string | null },
-) {
+export interface UpdateFormMetaInput extends FormBranchConfigInput, FormDefaultsInput {
+  name?: string;
+  description?: string;
+  settings?: Record<string, unknown>;
+}
+
+export async function updateFormMeta(companyId: string, formId: string, input: UpdateFormMetaInput) {
   const db = await getDb();
   await db
     .update(forms)

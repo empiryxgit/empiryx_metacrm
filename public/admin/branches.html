@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Branches — Setu CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Branches</h1>
+        <p class="page-sub">Manage your company's branches and who belongs to each one. Data access is enforced by the server for every branch, not just hidden in this screen.</p>
+      </div>
+      <div class="page-head-actions">
+        <button class="btn" type="button" id="ctaCreate">Add branch</button>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New branch</h2>
+      <form id="createForm">
+        <div class="grid-2">
+          <div>
+            <label for="b_name">Branch name *</label>
+            <input id="b_name" required placeholder="e.g. Bengaluru — Koramangala" />
+          </div>
+          <div>
+            <label for="b_code">Branch code *</label>
+            <input id="b_code" required placeholder="e.g. BLR-01" />
+          </div>
+        </div>
+        <label for="b_address">Address</label>
+        <textarea id="b_address" rows="2"></textarea>
+        <div class="grid-2">
+          <div>
+            <label for="b_city">City</label>
+            <input id="b_city" />
+          </div>
+          <div>
+            <label for="b_state">State</label>
+            <input id="b_state" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <label for="b_manager">Manager</label>
+            <select id="b_manager"><option value="">Unassigned</option></select>
+          </div>
+          <div>
+            <label for="b_status">Status</label>
+            <select id="b_status">
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn" type="submit" style="margin-top:14px">Create branch</button>
+      </form>
+    </div>
+
+    <h2 class="section-title">All branches</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Code</th><th>City</th><th>Manager</th><th>Users</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, companyUsers = [], branchesList = [];
+
+  function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"; }
+
+  function managerOptionsHtml(selectedId){
+    return `<option value="">Unassigned</option>` +
+      companyUsers.map(u => `<option value="${u.id}" ${u.id === selectedId ? "selected" : ""}>${App.escapeHtml(u.fullName)}</option>`).join("");
+  }
+
+  async function loadCompanyUsers(){
+    try {
+      const { users } = await App.apiJson("/api/branches/company-users");
+      companyUsers = users;
+    } catch {
+      companyUsers = []; // manager/member pickers just show empty - branch CRUD itself still works
+    }
+    document.getElementById("b_manager").innerHTML = managerOptionsHtml("");
+  }
+
+  function closeModal(){
+    document.getElementById("modalRoot").innerHTML = "";
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.getElementById("modalRoot").innerHTML.trim()) closeModal();
+  });
+
+  // ---- List -------------------------------------------------------------
+
+  async function loadBranches(){
+    const rows = document.getElementById("rows");
+    let branches;
+    try {
+      ({ branches } = await App.apiJson("/api/branches"));
+    } catch (err) {
+      rows.innerHTML = `<tr><td colspan="7">
+        <div class="state-block">
+          <p class="state-title">Unable to load branches</p>
+          <p class="state-desc">${App.escapeHtml(err.message)}</p>
+          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+        </div>
+      </td></tr>`;
+      document.getElementById("retryBtn")?.addEventListener("click", loadBranches);
+      return;
+    }
+    branchesList = branches;
+
+    if (!branches.length) {
+      rows.innerHTML = `<tr><td colspan="7">
+        <div class="state-block">
+          <p class="state-title">No branches yet</p>
+          <p class="state-desc">Add your first branch above. Until you do, every user sees the whole company's data exactly as before this feature existed.</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+
+    rows.innerHTML = branches.map(b => `
+      <tr>
+        <td><strong>${App.escapeHtml(b.name)}</strong></td>
+        <td>${App.escapeHtml(b.code)}</td>
+        <td>${App.escapeHtml(b.city || "—")}</td>
+        <td>${b.managerName ? App.escapeHtml(b.managerName) : "—"}</td>
+        <td>
+          <button type="button" class="btn tertiary sm" data-members="${b.id}" style="padding:4px 8px">
+            ${b.userCount} ${b.userCount === 1 ? "user" : "users"}
+          </button>
+        </td>
+        <td><span class="pill ${b.status === "active" ? "active" : "disabled"}">${App.escapeHtml(b.status)}</span></td>
+        <td style="white-space:nowrap">
+          <button class="btn secondary sm" data-edit="${b.id}">Edit</button>
+          <button class="btn secondary sm" data-toggle="${b.id}" data-next="${b.status === "active" ? "inactive" : "active"}">
+            ${b.status === "active" ? "Deactivate" : "Activate"}
+          </button>
+        </td>
+      </tr>
+    `).join("");
+
+    rows.querySelectorAll("[data-edit]").forEach(btn => btn.addEventListener("click", () => openEditModal(btn.dataset.edit)));
+    rows.querySelectorAll("[data-members]").forEach(btn => btn.addEventListener("click", () => openMembersModal(btn.dataset.members)));
+    rows.querySelectorAll("[data-toggle]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const banner = document.getElementById("banner");
+        banner.innerHTML = "";
+        try {
+          if (btn.dataset.next === "inactive") {
+            await App.apiJson(`/api/branches/${btn.dataset.toggle}/archive`, { method: "POST" });
+          } else {
+            await App.apiJson(`/api/branches/${btn.dataset.toggle}`, { method: "PATCH", body: { status: "active" } });
+          }
+          loadBranches();
+        } catch (err) {
+          banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        }
+      });
+    });
+  }
+
+  // ---- Create -------------------------------------------------------------
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      await App.apiJson("/api/branches", {
+        method: "POST",
+        body: {
+          name: document.getElementById("b_name").value.trim(),
+          code: document.getElementById("b_code").value.trim(),
+          address: document.getElementById("b_address").value.trim() || undefined,
+          city: document.getElementById("b_city").value.trim() || undefined,
+          state: document.getElementById("b_state").value.trim() || undefined,
+          managerId: document.getElementById("b_manager").value || undefined,
+          status: document.getElementById("b_status").value,
+        },
+      });
+      document.getElementById("createForm").reset();
+      banner.innerHTML = `<div class="banner success">Branch created.</div>`;
+      loadBranches();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("b_name").focus();
+  });
+
+  // ---- Edit ---------------------------------------------------------------
+
+  function openEditModal(branchId){
+    const b = branchesList.find(x => x.id === branchId);
+    if (!b) return;
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="editModalOverlay">
+        <div class="modal">
+          <div class="modal-header">
+            <div><h2>Edit branch</h2><p>${App.escapeHtml(b.code)}</p></div>
+            <button class="modal-close" type="button" id="editModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="editModalError"></div>
+            <div class="modal-field-grid">
+              <div><label for="e_name">Branch name *</label><input id="e_name" required value="${App.escapeHtml(b.name)}" /></div>
+              <div><label for="e_code">Branch code *</label><input id="e_code" required value="${App.escapeHtml(b.code)}" /></div>
+            </div>
+            <label for="e_address">Address</label>
+            <textarea id="e_address" rows="2">${App.escapeHtml(b.address || "")}</textarea>
+            <div class="modal-field-grid">
+              <div><label for="e_city">City</label><input id="e_city" value="${App.escapeHtml(b.city || "")}" /></div>
+              <div><label for="e_state">State</label><input id="e_state" value="${App.escapeHtml(b.state || "")}" /></div>
+            </div>
+            <div class="modal-field-grid">
+              <div><label for="e_manager">Manager</label><select id="e_manager">${managerOptionsHtml(b.managerId || "")}</select></div>
+              <div>
+                <label for="e_status">Status</label>
+                <select id="e_status">
+                  <option value="active" ${b.status === "active" ? "selected" : ""}>Active</option>
+                  <option value="inactive" ${b.status === "inactive" ? "selected" : ""}>Inactive</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn secondary" type="button" id="editModalCancel">Cancel</button>
+            <button class="btn" type="button" id="editModalSave">Save changes</button>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("editModalClose").addEventListener("click", closeModal);
+    document.getElementById("editModalCancel").addEventListener("click", closeModal);
+    document.getElementById("editModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "editModalOverlay") closeModal();
+    });
+    document.getElementById("editModalSave").addEventListener("click", async () => {
+      const errBox = document.getElementById("editModalError");
+      errBox.innerHTML = "";
+      const saveBtn = document.getElementById("editModalSave");
+      saveBtn.disabled = true;
+      try {
+        await App.apiJson(`/api/branches/${branchId}`, {
+          method: "PATCH",
+          body: {
+            name: document.getElementById("e_name").value.trim(),
+            code: document.getElementById("e_code").value.trim(),
+            address: document.getElementById("e_address").value.trim(),
+            city: document.getElementById("e_city").value.trim(),
+            state: document.getElementById("e_state").value.trim(),
+            managerId: document.getElementById("e_manager").value || null,
+            status: document.getElementById("e_status").value,
+          },
+        });
+        closeModal();
+        loadBranches();
+      } catch (err) {
+        errBox.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        saveBtn.disabled = false;
+      }
+    });
+    document.getElementById("e_name").focus();
+  }
+
+  // ---- Members --------------------------------------------------------
+
+  function memberRowHtml(user, membership){
+    const isMember = Boolean(membership);
+    const role = membership?.role || "staff";
+    const isPrimary = Boolean(membership?.isPrimary);
+    return `
+      <div class="detail-row" style="align-items:center; gap:10px">
+        <label class="checkbox-row" style="margin:0; flex:1; min-width:0">
+          <input type="checkbox" data-member-toggle="${user.id}" ${isMember ? "checked" : ""} />
+          <span style="display:block; overflow:hidden; text-overflow:ellipsis">
+            <strong>${App.escapeHtml(user.fullName)}</strong><br/>
+            <span class="hint" style="margin:0">${App.escapeHtml(user.email)}</span>
+          </span>
+        </label>
+        <select data-member-role="${user.id}" style="width:auto; margin:0" ${isMember ? "" : "disabled"}>
+          <option value="staff" ${role === "staff" ? "selected" : ""}>Staff</option>
+          <option value="manager" ${role === "manager" ? "selected" : ""}>Manager</option>
+        </select>
+        ${isMember
+          ? (isPrimary
+              ? `<span class="pill active" style="flex-shrink:0">Primary</span>`
+              : `<button type="button" class="btn tertiary sm" data-member-primary="${user.id}" style="flex-shrink:0">Set primary</button>`)
+          : `<span class="hint" style="width:78px; flex-shrink:0">—</span>`}
+      </div>`;
+  }
+
+  async function openMembersModal(branchId){
+    const b = branchesList.find(x => x.id === branchId);
+    if (!b) return;
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="membersModalOverlay">
+        <div class="modal">
+          <div class="modal-header">
+            <div>
+              <h2>${App.escapeHtml(b.name)} — users</h2>
+              <p>Users can belong to more than one branch. "Primary" is a user's default branch and is unique across all their branches.</p>
+            </div>
+            <button class="modal-close" type="button" id="membersModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body" id="membersModalBody"><p class="state-desc">Loading…</p></div>
+        </div>
+      </div>`;
+    document.getElementById("membersModalClose").addEventListener("click", closeModal);
+    document.getElementById("membersModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "membersModalOverlay") closeModal();
+    });
+
+    await renderMembersBody(branchId);
+  }
+
+  async function renderMembersBody(branchId){
+    const body = document.getElementById("membersModalBody");
+    if (!body) return; // modal was closed while a request was in flight
+    let members;
+    try {
+      ({ users: members } = await App.apiJson(`/api/branches/${branchId}/users`));
+    } catch (err) {
+      body.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      return;
+    }
+    const membershipByUserId = Object.fromEntries(members.map(m => [m.userId, m]));
+
+    if (!companyUsers.length) {
+      body.innerHTML = `<p class="state-desc">No users in this company yet.</p>`;
+      return;
+    }
+
+    body.innerHTML = companyUsers.map(u => memberRowHtml(u, membershipByUserId[u.id])).join("");
+
+    body.querySelectorAll("[data-member-toggle]").forEach(cb => {
+      cb.addEventListener("change", async () => {
+        const userId = cb.dataset.memberToggle;
+        cb.disabled = true;
+        try {
+          if (cb.checked) {
+            const roleSel = body.querySelector(`[data-member-role="${userId}"]`);
+            await App.apiJson(`/api/branches/${branchId}/users`, { method: "POST", body: { userId, role: roleSel?.value || "staff" } });
+          } else {
+            await App.apiJson(`/api/branches/${branchId}/users/${userId}`, { method: "DELETE" });
+          }
+          await renderMembersBody(branchId);
+          loadBranches(); // refresh the Users count on the underlying table
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+          cb.disabled = false;
+          cb.checked = !cb.checked;
+        }
+      });
+    });
+    body.querySelectorAll("[data-member-role]").forEach(sel => {
+      sel.addEventListener("change", async () => {
+        const userId = sel.dataset.memberRole;
+        sel.disabled = true;
+        try {
+          await App.apiJson(`/api/branches/${branchId}/users`, { method: "POST", body: { userId, role: sel.value, isPrimary: Boolean(membershipByUserId[userId]?.isPrimary) } });
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        } finally {
+          sel.disabled = false;
+        }
+      });
+    });
+    body.querySelectorAll("[data-member-primary]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await App.apiJson(`/api/branches/${branchId}/users/${btn.dataset.memberPrimary}/primary`, { method: "POST" });
+          await renderMembersBody(branchId);
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  // ---- Init -------------------------------------------------------------
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/admin/branches.html");
+    if (!App.hasPermission(me, "branches.manage")) {
+      document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
+      return;
+    }
+    document.getElementById("createCard").style.display = "block";
+    await loadCompanyUsers();
+    await loadBranches();
+  })();
+</script>
+</body>
+</html>

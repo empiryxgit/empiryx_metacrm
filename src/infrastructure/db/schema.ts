@@ -403,8 +403,38 @@ export const forms = crm.table(
     // Nullable - null means the form is company-wide (usable/visible from
     // every branch, and from the "no branch selected" default view). Set,
     // it scopes the form (and the "default Add Customer form" invariant
-    // below) to just that one branch.
+    // below) to just that one branch. Only authoritative when
+    // branchMode="specific" below - kept as the actual FK column (rather
+    // than folding it into branchFieldMap) so every existing branch-scoping
+    // query (listForms/listSubmissions/getDefaultInternalForm, all written
+    // before Branch Configuration existed) keeps working unchanged for
+    // "specific" and "all" forms with zero modification.
     branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
+    // Branch Configuration - how a lead captured through this form is
+    // assigned a branch at submission time (see
+    // src/application/formBranch.ts, the one place that turns this into an
+    // actual branchId for both the internal and public submit paths):
+    //   "specific" - always branchId above (or company-wide if that's null).
+    //   "all"      - always company-wide (branchId is ignored/cleared).
+    //   "field"    - resolved per-submission from the value of the form
+    //                field named by branchFieldKey, mapped through
+    //                branchFieldMap. Lets one public form (e.g. "Which
+    //                location are you interested in?") route different
+    //                submitters to different branches automatically.
+    // No DB-level enum - validated at the application layer in
+    // src/application/formBranch.ts, same convention as forms.status/type.
+    branchMode: text("branch_mode").notNull().default("specific"),
+    // Only meaningful when branchMode="field" - the key of a select/radio
+    // field already on this form whose submitted value determines the
+    // branch. Null for "specific"/"all".
+    branchFieldKey: text("branch_field_key"),
+    // Only meaningful when branchMode="field" - maps that field's option
+    // value (e.g. "Ahmedabad") to a branchId. Every value is validated at
+    // save time (src/application/formBranch.ts validateBranchConfig) against
+    // both tenant isolation and the saving user's own branch access, so a
+    // form can never be configured to route into a branch its builder isn't
+    // permitted to manage.
+    branchFieldMap: jsonb("branch_field_map").$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
     name: text("name").notNull(),
     description: text("description"),
     // "internal" | "public" - see comment above.
@@ -433,6 +463,21 @@ export const forms = crm.table(
     // (setDefaultInternalForm), not a DB constraint, so a company is never
     // left with zero usable forms mid-transition.
     isDefault: boolean("is_default").notNull().default(false),
+    // ---- Form-level CRM defaults -------------------------------------
+    // Applied to every lead this form creates, independent of whether the
+    // form also exposes a corresponding fillable field for it - a company
+    // can pin a landing-page form to one campaign/stage/owner without
+    // asking every visitor (or salesperson) to choose. When the form DOES
+    // include the matching system field (e.g. a pipelineStage dropdown) and
+    // a value is actually submitted, the submitted value wins - see
+    // api/forms/handler.ts resolveSubmission/applyFormDefaults for the exact
+    // precedence. Pipeline itself is never stored here - it's derived
+    // display-only from the company's industry template (one pipeline per
+    // company, see src/domain/industryTemplates.ts), never a per-form choice.
+    defaultPipelineStage: text("default_pipeline_stage"),
+    defaultCrmCampaignId: uuid("default_crm_campaign_id").references(() => campaigns.id, { onDelete: "set null" }),
+    defaultSource: text("default_source"),
+    defaultOwnerId: uuid("default_owner_id").references(() => users.id, { onDelete: "set null" }),
     // Free-form per-form UI settings (e.g. successMessage, redirectUrl,
     // submitButtonLabel) - deliberately jsonb rather than new columns per
     // setting, consistent with leads.customFields.
