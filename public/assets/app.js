@@ -130,7 +130,7 @@ const App = (() => {
 
     const displayName = me?.user?.fullName ?? "";
     const roleName = me?.role?.name ?? "";
-    const companyName = me?.company?.name ?? "Setu";
+    const companyName = me?.company?.name ?? "RUTA";
     const avatarInitials = initials(displayName);
 
     nav.innerHTML = `
@@ -138,8 +138,8 @@ const App = (() => {
         <div class="shell-brand">
           <a href="/dashboard.html" class="brand-link" aria-label="${escapeHtml(companyName)} home">
             ${BRAND_MARK_SVG}
-            <span class="brand-word">Setu</span>
-            <span class="brand-tag">CRM</span>
+            <span class="brand-word">RUTA</span>
+            <span class="brand-tag">Lead Management</span>
           </a>
           <span class="brand-by">by Empiryx</span>
         </div>
