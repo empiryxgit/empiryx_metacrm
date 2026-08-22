@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Settings — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .settings-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:14px; margin-top:16px; }
+  .settings-card{ display:block; padding:18px; border:1px solid var(--border); border-radius:12px; background:var(--surface); text-decoration:none; color:inherit; transition:border-color .15s ease; }
+  .settings-card:hover{ border-color:var(--accent, #F47B32); }
+  .settings-card h3{ margin:0 0 6px; font-size:15px; }
+  .settings-card p{ margin:0; font-size:13px; color:var(--text-muted); }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Settings</h1>
+        <p class="page-sub">Company-wide configuration.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="settings-grid" id="settingsGrid"></div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  (async () => {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings.html");
+
+    const grid = document.getElementById("settingsGrid");
+    if (App.hasPermission(me, "integrations.manage")) {
+      grid.innerHTML = `
+        <a class="settings-card" href="/settings/integrations.html">
+          <h3>Integrations</h3>
+          <p>Connect Meta and manage third-party lead sources.</p>
+        </a>
+      `;
+    } else {
+      grid.innerHTML = `<div class="state-block"><p class="state-title">Nothing to configure yet</p><p class="state-desc">Ask an admin for access to manage integrations.</p></div>`;
+    }
+  })();
+</script>
+</body>
+</html>

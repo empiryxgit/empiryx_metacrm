@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meta Integration — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* Phase 15 - a clean, glanceable status screen: one plain label/value list
+     rather than the full configuration screen's stat grid + wizard + forms
+     table (see meta.html for that). Deliberately simple - this page has
+     exactly one job, show the tenant what's currently true about their Meta
+     connection at a glance, with errors impossible to miss. */
+  .status-head{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:2px; }
+  .status-head h2{ margin:0; }
+
+  .status-list{ margin-top:16px; border-top:1px solid var(--border); }
+  .status-row{ display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:13px 0; border-bottom:1px solid var(--border); }
+  .status-row-label{ font-size:13px; color:var(--text-muted); flex-shrink:0; min-width:140px; }
+  .status-row-value{ font-size:13.5px; font-weight:600; color:var(--text-primary); text-align:right; }
+  .status-row-value .status-row-note{ display:block; margin-top:3px; font-size:12px; font-weight:500; color:var(--text-muted); }
+  .status-row-value .status-row-error{ display:block; margin-top:3px; font-size:12px; font-weight:500; color:var(--danger); max-width:340px; }
+
+  .status-actions{ display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+
+  .status-confirm{ margin-top:14px; padding:14px 16px; border:1px solid var(--danger); border-radius:var(--radius-sm); background:var(--danger-soft); }
+  .status-confirm p{ margin:0 0 10px; font-size:13px; color:var(--text-primary); }
+  .status-confirm .status-actions{ margin-top:0; }
+
+  .status-error-list{ margin:8px 0 0; padding-left:18px; font-size:12.5px; color:var(--danger); }
+  .status-error-list li{ margin-top:2px; }
+
+  /* Phase 16 - "Needs Reauthorization" card: deliberately minimal (title,
+     pill, one fixed line, one button) rather than the full status list -
+     most of those other rows (Page/Instagram/Ad Account/Campaigns/Lead
+     Forms) are last-known-good values that may or may not still be
+     accurate once the connection itself is broken, so showing them here
+     would be more misleading than helpful. */
+  .reauth-title{ margin:0 0 10px; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); font-weight:700; }
+  .reauth-desc{ margin:10px 0 0; font-size:13.5px; color:var(--text-primary); }
+  .reauth-reason{ margin:6px 0 0; font-size:12.5px; color:var(--danger); }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <p style="margin:0 0 10px"><a href="/settings/integrations.html" style="font-size:12.5px; color:var(--text-muted)">← Integrations</a></p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Meta Integration</h1>
+        <p class="page-sub">A quick look at the connection powering your Facebook &amp; Instagram leads.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="card" id="statusCard">
+      <div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let lastData = null;
+
+  function showBanner(kind, text) {
+    document.getElementById("banner").innerHTML = `<div class="banner ${kind}">${App.escapeHtml(text)}</div>`;
+  }
+  function clearBanner() {
+    document.getElementById("banner").innerHTML = "";
+  }
+
+  // "21 Aug 2026 5:12 PM" - en-GB gives the day-month-year order without a
+  // locale-dependent guess; the time is formatted separately so it always
+  // reads as 12-hour with an AM/PM suffix regardless of the browser locale.
+  function fmtDateTime(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return null;
+    const datePart = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    const timePart = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+    return `${datePart} ${timePart}`;
+  }
+
+  function row(label, valueHtml) {
+    return `
+      <div class="status-row">
+        <div class="status-row-label">${App.escapeHtml(label)}</div>
+        <div class="status-row-value">${valueHtml}</div>
+      </div>
+    `;
+  }
+
+  // ---- Not-connected state ------------------------------------------------
+
+  function renderNotConnected() {
+    document.getElementById("statusCard").innerHTML = `
+      <div class="status-head">
+        <h2 class="section-title" style="margin:0">Status</h2>
+        <span class="pill disconnected">Not Connected</span>
+      </div>
+      <p class="state-desc" style="margin:12px 0 0; max-width:none; text-align:left">Connect your Facebook and Instagram lead sources to see their status here.</p>
+      <div class="status-actions">
+        <button class="btn" type="button" id="connectBtn">Connect Meta</button>
+      </div>
+    `;
+    document.getElementById("connectBtn").addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Redirecting to Meta…`;
+      window.location.href = "/api/integrations/meta/connect";
+    });
+  }
+
+  // ---- Connected state ------------------------------------------------------
+
+  // Phase 16 - "Implement proper handling for: Expired token / Revoked
+  // authorization / Missing permission / Page access removed / Meta API
+  // authentication failure." All five are detected server-side
+  // (graphClient.classifyMetaAuthError) and collapse into this ONE
+  // connection status ("needs_reauth") and this ONE card - the tenant
+  // never needs to know or care which of the five it specifically was; the
+  // fix is the same either way.
+  function renderNeedsReauth(data) {
+    lastData = data;
+    const c = data.connection;
+    document.getElementById("statusCard").innerHTML = `
+      <p class="reauth-title">Meta Connection</p>
+      <span class="pill failed">Needs Reauthorization ⚠</span>
+      <p class="reauth-desc">Your Meta connection needs to be renewed.</p>
+      ${c.lastError ? `<p class="reauth-reason">Reason: ${App.escapeHtml(c.lastError)}</p>` : ""}
+      <div class="status-actions">
+        <button class="btn" type="button" id="reconnectBtn">Reconnect Meta</button>
+      </div>
+      <p style="margin:14px 0 0"><a href="#" id="disconnectInsteadLink" style="font-size:12.5px; color:var(--text-muted)">Disconnect Meta instead</a></p>
+      <div id="disconnectConfirm"></div>
+    `;
+    document.getElementById("reconnectBtn").addEventListener("click", runReconnect);
+    document.getElementById("disconnectInsteadLink").addEventListener("click", (e) => {
+      e.preventDefault();
+      showDisconnectConfirm();
+    });
+  }
+
+  function renderConnected(data) {
+    lastData = data;
+    const c = data.connection;
+
+    if (c.status === "needs_reauth") {
+      renderNeedsReauth(data);
+      return;
+    }
+
+    const selectedPage = data.pages.find((p) => p.isSelected) || null;
+    const selectedInstagram = data.instagramAccounts.find((i) => i.isSelected) || null;
+    const selectedAdAccount = data.adAccounts.find((a) => a.isSelected) || null;
+
+    // Status - "Connected ✓" is the healthy case; a connection that failed
+    // its own last sync (markMetaConnectionError - see the connect flow)
+    // shows as a clear error state instead of a misleading green checkmark.
+    const statusPill =
+      c.status === "active"
+        ? `<span class="pill active">Connected ✓</span>`
+        : `<span class="pill failed">Connection Error ⚠</span>`;
+
+    const facebookPageValue = selectedPage
+      ? App.escapeHtml(selectedPage.pageName)
+      : `<span class="status-row-note" style="display:inline">Not selected</span>`;
+
+    const instagramValue = selectedInstagram
+      ? App.escapeHtml(selectedInstagram.username ? `@${selectedInstagram.username}` : "(no username)")
+      : `<span class="status-row-note" style="display:inline">Not selected</span>`;
+
+    const adAccountValue = selectedAdAccount
+      ? App.escapeHtml(selectedAdAccount.name)
+      : `<span class="status-row-note" style="display:inline">Not selected</span>`;
+
+    // Webhook - reflects whichever Page is currently selected, same status
+    // Phase 7's "Meta Lead Capture" card shows on the full config screen.
+    // No Page selected yet -> nothing to report, shown as a neutral pill
+    // rather than implying a failure that hasn't actually happened.
+    let webhookValue;
+    if (!selectedPage) {
+      webhookValue = `<span class="pill disconnected">Not configured</span>`;
+    } else if (selectedPage.webhookStatus === "active") {
+      webhookValue = `<span class="pill active">Active ✓</span>`;
+    } else {
+      webhookValue = `
+        <span class="pill failed">Failed ⚠</span>
+        <span class="status-row-error">${App.escapeHtml(selectedPage.webhookLastError || "Unable to subscribe this Page.")}</span>
+      `;
+    }
+
+    const lastSyncFmt = fmtDateTime(c.lastSyncAt);
+    const lastLeadFmt = fmtDateTime(data.lastLeadAt);
+
+    document.getElementById("statusCard").innerHTML = `
+      <div class="status-head">
+        <h2 class="section-title" style="margin:0">Status</h2>
+        ${statusPill}
+      </div>
+      ${c.lastError ? `<div class="banner error" style="margin-top:12px">${App.escapeHtml(c.lastError)}</div>` : ""}
+
+      <div class="status-list">
+        ${row("Facebook Page", facebookPageValue)}
+        ${row("Instagram", instagramValue)}
+        ${row("Ad Account", adAccountValue)}
+        ${row("Campaigns", String(data.campaignsCount))}
+        ${row("Lead Forms", String(data.leadFormsCount))}
+        ${row("Webhook", webhookValue)}
+        ${row("Last Sync", lastSyncFmt ? App.escapeHtml(lastSyncFmt) : `<span class="status-row-note" style="display:inline">Never</span>`)}
+        ${row("Last Lead", lastLeadFmt ? App.escapeHtml(lastLeadFmt) : `<span class="status-row-note" style="display:inline">No leads received yet</span>`)}
+      </div>
+
+      <div class="status-actions">
+        <button class="btn secondary" type="button" id="syncBtn">Sync Now</button>
+        <button class="btn secondary" type="button" id="reconnectBtn">Reconnect Meta</button>
+        <button class="btn danger" type="button" id="disconnectBtn">Disconnect Meta</button>
+      </div>
+      <div id="disconnectConfirm"></div>
+      <p style="margin:16px 0 0"><a href="/settings/integrations/meta.html" style="font-size:12.5px">Advanced configuration (Pages, Ad Account, Lead Forms) →</a></p>
+    `;
+
+    document.getElementById("syncBtn").addEventListener("click", runSyncNow);
+    document.getElementById("reconnectBtn").addEventListener("click", runReconnect);
+    document.getElementById("disconnectBtn").addEventListener("click", showDisconnectConfirm);
+  }
+
+  // ---- Actions ------------------------------------------------------------
+
+  async function runSyncNow() {
+    const btn = document.getElementById("syncBtn");
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Syncing…`;
+    clearBanner();
+
+    let result;
+    try {
+      result = await App.apiJson("/api/integrations/meta/sync", { method: "POST" });
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      showBanner("error", err.message || "Meta sync failed.");
+      return;
+    }
+
+    if (result.ok) {
+      showBanner("success", "Meta assets synced successfully.");
+    } else {
+      // "Show errors clearly" - name exactly which step(s) failed and why,
+      // rather than a single generic "sync failed" line.
+      const failedSteps = (result.steps || []).filter((s) => s.status === "error");
+      document.getElementById("banner").innerHTML = `
+        <div class="banner error" style="flex-direction:column; align-items:flex-start">
+          <div>Meta sync finished with errors.</div>
+          ${failedSteps.length ? `<ul class="status-error-list">${failedSteps.map((s) => `<li><strong>${App.escapeHtml(s.label)}:</strong> ${App.escapeHtml(s.detail || "Failed.")}</li>`).join("")}</ul>` : ""}
+        </div>
+      `;
+    }
+
+    await loadStatus();
+  }
+
+  function runReconnect() {
+    const btn = document.getElementById("reconnectBtn");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Redirecting to Meta…`;
+    window.location.href = "/api/integrations/meta/connect";
+  }
+
+  function showDisconnectConfirm() {
+    const host = document.getElementById("disconnectConfirm");
+    host.innerHTML = `
+      <div class="status-confirm">
+        <p>Disconnect this Meta account? Campaigns already using it will stop receiving new leads until you reconnect.</p>
+        <div class="status-actions">
+          <button class="btn danger sm" type="button" id="confirmDisconnectBtn">Yes, disconnect</button>
+          <button class="btn secondary sm" type="button" id="cancelDisconnectBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("confirmDisconnectBtn").addEventListener("click", runDisconnect);
+    document.getElementById("cancelDisconnectBtn").addEventListener("click", () => { host.innerHTML = ""; });
+  }
+
+  async function runDisconnect() {
+    const host = document.getElementById("disconnectConfirm");
+    host.innerHTML = `<div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Disconnecting…</div>`;
+    try {
+      await App.apiJson("/api/integrations/meta/disconnect", { method: "POST" });
+      showBanner("success", "Meta disconnected.");
+      renderNotConnected();
+    } catch (err) {
+      host.innerHTML = "";
+      showBanner("error", err.message || "Failed to disconnect. Please try again.");
+    }
+  }
+
+  // ---- Load / error state ---------------------------------------------------
+
+  function renderLoadError(message) {
+    document.getElementById("statusCard").innerHTML = `
+      <div class="state-block">
+        <p class="state-title">Unable to load Meta integration status</p>
+        <p class="state-desc">${App.escapeHtml(message)}</p>
+        <button class="btn secondary" type="button" id="retryBtn">Try again</button>
+      </div>
+    `;
+    document.getElementById("retryBtn").addEventListener("click", loadStatus);
+  }
+
+  async function loadStatus() {
+    document.getElementById("statusCard").innerHTML = `<div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div>`;
+    try {
+      const data = await App.apiJson("/api/integrations/meta/status");
+      if (data.connection) {
+        renderConnected(data);
+      } else {
+        renderNotConnected();
+      }
+    } catch (err) {
+      renderLoadError(err.message || "Something went wrong.");
+    }
+  }
+
+  // ---- Bootstrap --------------------------------------------------------
+
+  async function load() {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings/integrations.html");
+
+    if (!App.hasPermission(me, "integrations.manage")) {
+      document.getElementById("statusCard").innerHTML = `
+        <div class="state-block">
+          <p class="state-title">You don't have access</p>
+          <p class="state-desc">Ask an admin for the "Connect and manage the Meta integration" permission.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("connected") === "1") showBanner("success", "Meta connected successfully.");
+    const errorCode = params.get("error");
+    if (errorCode === "missing_permission") {
+      // Phase 16 - "Validate permissions" failed during connect/reconnect;
+      // name exactly which Meta permissions are missing rather than a
+      // generic failure message.
+      const scopes = (params.get("scopes") || "").split(",").filter(Boolean);
+      showBanner("error", scopes.length ? `Meta connection needs these permissions to work: ${scopes.join(", ")}. Please allow all requested permissions and try again.` : "This Meta connection is missing a required permission. Please allow all requested permissions and try again.");
+    } else if (errorCode) {
+      const ERROR_MESSAGES = {
+        not_configured: "Meta integration is not configured on this server yet. Contact your administrator.",
+        connect_failed: "Something went wrong connecting to Meta. Please try again.",
+        invalid_state: "This connection attempt could not be verified (it may have expired). Please try again.",
+        missing_params: "Meta did not return the expected information. Please try again.",
+        access_denied: "You declined the Meta authorization request.",
+      };
+      showBanner("error", ERROR_MESSAGES[errorCode] || "Something went wrong connecting to Meta.");
+    }
+
+    await loadStatus();
+  }
+
+  load();
+</script>
+</body>
+</html>

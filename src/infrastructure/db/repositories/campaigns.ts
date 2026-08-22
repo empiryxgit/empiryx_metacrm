@@ -180,10 +180,26 @@ export async function getWebhookConfigBySlug(slug: string) {
 }
 
 /** Internal lookup used by the worker (process-lead) - returns the decrypted access
- * token for the campaign that raised this lead, never exposed over an API response. */
-export async function getWebhookConfigByCampaignIdInternal(campaignId: string) {
+ * token for the campaign that raised this lead, never exposed over an API response.
+ *
+ * Phase 19 (tenant isolation audit) - scoped by companyId as well as
+ * campaignId, matching every other "*Internal" lookup in this codebase
+ * (e.g. getMetaPageInternal, getActiveMetaConnectionInternal). companyId
+ * here comes from the same QStash message as crmCampaignId (both set,
+ * together, from the webhook_configs row a legitimate ingest already
+ * resolved by URL slug - see api/webhooks/meta/handler.ts) and the two
+ * should always already agree; adding the check anyway means a future bug
+ * that ever let them diverge fails closed (returns null - the caller's
+ * existing "config not found" retry path) instead of silently handing
+ * back a DIFFERENT tenant's Meta access token. "Every Meta record must
+ * belong to the correct tenant" - enforced here, not just assumed. */
+export async function getWebhookConfigByCampaignIdInternal(companyId: string, campaignId: string) {
   const db = await getDb();
-  const [row] = await db.select().from(webhookConfigs).where(eq(webhookConfigs.campaignId, campaignId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(webhookConfigs)
+    .where(and(eq(webhookConfigs.companyId, companyId), eq(webhookConfigs.campaignId, campaignId)))
+    .limit(1);
   if (!row) return null;
   return {
     ...row,

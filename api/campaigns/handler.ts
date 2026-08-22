@@ -1,11 +1,14 @@
 // Combines list/create (/api/campaigns), read/update
-// (/api/campaigns/{campaignId}), and the "add webhook" screen
-// (/api/campaigns/{campaignId}/webhook) into ONE Vercel Function - see
+// (/api/campaigns/{campaignId}), the "add webhook" screen
+// (/api/campaigns/{campaignId}/webhook), and (Phase 9) the Meta Campaigns
+// listing + map/unmap actions (/api/campaigns/meta, /api/campaigns/meta/
+// {metaCampaignId}/map|unmap) into ONE Vercel Function - see
 // api/auth/handler.ts for why. Public URLs unchanged - vercel.json rewrites
-// them here with campaignId/sub injected as query params (Vercel's
-// filesystem [[...x]].ts catch-all convention was found not to reliably
-// populate req.query in this deployment, so every dynamic route now uses
-// the same explicit-rewrite pattern api/system.ts already relied on).
+// them here with campaignId/sub (or resource/metaCampaignId/sub) injected
+// as query params (Vercel's filesystem [[...x]].ts catch-all convention was
+// found not to reliably populate req.query in this deployment, so every
+// dynamic route now uses the same explicit-rewrite pattern api/system.ts
+// already relied on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
@@ -17,9 +20,17 @@ import {
   updateCampaign,
   upsertWebhookConfig,
 } from "../../src/infrastructure/db/repositories/campaigns";
+import { getLeadCountsByMetaCampaignId, getLeadCountsForCampaigns } from "../../src/infrastructure/db/repositories";
+import {
+  getMetaCampaignWithMappingByRowId,
+  listMetaCampaignsWithMapping,
+  mapMetaCampaignToCrmCampaign,
+  unmapMetaCampaign,
+} from "../../src/infrastructure/db/repositories/metaSync";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
 import { listBranches } from "../../src/infrastructure/db/repositories/branches";
+import { evaluateLegacyWebhookMigration } from "../../src/application/metaSync/legacyMigration";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -34,6 +45,9 @@ function getBaseUrl(req: VercelRequest): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const resource = getQueryString(req, "resource");
+  if (resource === "meta-campaigns") return handleMetaCampaigns(req, res);
+
   const campaignId = getQueryString(req, "campaignId");
   const subresource = getQueryString(req, "sub");
 
@@ -64,8 +78,18 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
 
     const [campaigns, branches] = await Promise.all([listCampaigns(auth.companyId, access), listBranches(auth.companyId)]);
     const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+    // Powers the "Leads" column on the manual campaigns list (Campaigns
+    // screen) - a single grouped query rather than one query per campaign.
+    // Phase 9: the separate Meta Campaigns table gets its own lead counts
+    // from handleMetaCampaignsCollection below, keyed by Meta's raw
+    // campaign id rather than crmCampaignId.
+    const leadCounts = await getLeadCountsForCampaigns(auth.companyId, campaigns.map((c) => c.id));
     res.status(200).json({
-      campaigns: campaigns.map((c) => ({ ...c, branchName: c.branchId ? branchNameById.get(c.branchId) ?? null : null })),
+      campaigns: campaigns.map((c) => ({
+        ...c,
+        branchName: c.branchId ? branchNameById.get(c.branchId) ?? null : null,
+        leadsCount: leadCounts[c.id] ?? 0,
+      })),
     });
     return;
   }
@@ -184,7 +208,13 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
       return;
     }
     const config = await getWebhookConfigForCampaign(auth.companyId, campaignId, getBaseUrl(req));
-    res.status(200).json({ webhook: config });
+    // Phase 18 - "safe migration strategy": when this campaign has a legacy
+    // config, also report whether its Page has since shown up under the
+    // tenant's own new-integration Meta connection - a pure read-side
+    // comparison, never a write. null (not computed at all) when there's no
+    // legacy config to migrate in the first place.
+    const migration = config ? await evaluateLegacyWebhookMigration(auth.companyId, config.pageId) : null;
+    res.status(200).json({ webhook: config, migration });
     return;
   }
 
@@ -238,4 +268,148 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
   }
 
   res.status(405).json({ error: "Method not allowed" });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 - Meta Campaigns (the separate, first-class synced-from-Meta
+// entity - see src/infrastructure/db/schema.ts's metaCampaigns table doc
+// comment). GET lists every synced Meta campaign for the tenant joined with
+// its mapping (null if unmapped) and lead count, powering the Campaigns
+// screen's "Meta Campaigns" table. POST .../map and .../unmap are THE
+// mapping action - the only way a Meta campaign's crmCampaignId ever
+// changes (never the sync itself, see upsertMetaCampaign's own comment).
+// ---------------------------------------------------------------------------
+async function handleMetaCampaigns(req: VercelRequest, res: VercelResponse) {
+  const metaCampaignId = getQueryString(req, "metaCampaignId");
+  const subresource = getQueryString(req, "sub");
+
+  if (!metaCampaignId) return handleMetaCampaignsCollection(req, res);
+  if (subresource === "map") return handleMapMetaCampaign(req, res, metaCampaignId);
+  if (subresource === "unmap") return handleUnmapMetaCampaign(req, res, metaCampaignId);
+  if (!subresource) return handleGetOneMetaCampaign(req, res, metaCampaignId);
+
+  res.status(404).json({ error: "Not found" });
+}
+
+// Powers the meta-campaign.html detail/mapping screen - one Meta campaign,
+// joined with its mapping and lead count (same shape as one row of the
+// collection listing below).
+async function handleGetOneMetaCampaign(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  if (!auth) return;
+
+  const metaCampaign = await getMetaCampaignWithMappingByRowId(auth.companyId, metaCampaignId);
+  if (!metaCampaign) {
+    res.status(404).json({ error: "Meta campaign not found." });
+    return;
+  }
+
+  const leadCounts = await getLeadCountsByMetaCampaignId(auth.companyId, [metaCampaign.metaCampaignId]);
+
+  res.status(200).json({
+    metaCampaign: {
+      id: metaCampaign.id,
+      metaCampaignId: metaCampaign.metaCampaignId,
+      name: metaCampaign.name,
+      status: metaCampaign.status,
+      lastSyncAt: metaCampaign.lastSyncAt,
+      crmCampaignId: metaCampaign.crmCampaignId,
+      crmCampaignName: metaCampaign.crmCampaignName,
+      branchId: metaCampaign.crmCampaignBranchId,
+      leadsCount: leadCounts[metaCampaign.metaCampaignId] ?? 0,
+    },
+  });
+}
+
+async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  if (!auth) return;
+
+  const metaCampaigns = await listMetaCampaignsWithMapping(auth.companyId);
+  // Leads are attributed by Meta's OWN raw campaign id (leads.campaignId),
+  // independent of whether the Meta campaign has been mapped to a CRM
+  // campaign yet - see getLeadCountsByMetaCampaignId's own comment.
+  const leadCounts = await getLeadCountsByMetaCampaignId(
+    auth.companyId,
+    metaCampaigns.map((c) => c.metaCampaignId),
+  );
+
+  res.status(200).json({
+    metaCampaigns: metaCampaigns.map((c) => ({
+      id: c.id,
+      metaCampaignId: c.metaCampaignId,
+      name: c.name,
+      status: c.status,
+      lastSyncAt: c.lastSyncAt,
+      crmCampaignId: c.crmCampaignId,
+      crmCampaignName: c.crmCampaignName,
+      branchId: c.crmCampaignBranchId,
+      leadsCount: leadCounts[c.metaCampaignId] ?? 0,
+    })),
+  });
+}
+
+async function handleMapMetaCampaign(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+  if (!auth) return;
+
+  const { crmCampaignId } = (req.body ?? {}) as { crmCampaignId?: string };
+  if (!crmCampaignId) {
+    res.status(400).json({ error: "crmCampaignId is required." });
+    return;
+  }
+
+  // The target CRM campaign must exist, belong to this tenant, and be
+  // within the acting user's branch access - same gate every other
+  // campaign-mutating action in this file applies (see handleOne's PATCH).
+  const crmCampaign = await getCampaign(auth.companyId, crmCampaignId);
+  if (!crmCampaign) {
+    res.status(404).json({ error: "CRM campaign not found." });
+    return;
+  }
+  if (!canAccessBranch(resolveBranchAccess(auth), crmCampaign.branchId)) {
+    res.status(403).json({ error: "You do not have access to this branch." });
+    return;
+  }
+
+  const updated = await mapMetaCampaignToCrmCampaign(auth.companyId, metaCampaignId, crmCampaignId);
+  if (!updated) {
+    res.status(404).json({ error: "Meta campaign not found." });
+    return;
+  }
+
+  res.status(200).json({ mapped: true });
+}
+
+async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+  if (!auth) return;
+
+  const updated = await unmapMetaCampaign(auth.companyId, metaCampaignId);
+  if (!updated) {
+    res.status(404).json({ error: "Meta campaign not found." });
+    return;
+  }
+
+  res.status(200).json({ unmapped: true });
 }

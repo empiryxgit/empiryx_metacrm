@@ -408,6 +408,14 @@ paths:
     get:
       tags: [Campaigns]
       summary: Get this campaign's Meta webhook config (masked secrets)
+      description: >-
+        Legacy / Deprecated. Reads the per-campaign manual webhook_configs row,
+        if one exists. Kept for campaigns that were manually configured before
+        the tenant-level Meta OAuth integration (`/api/integrations/meta/*`)
+        existed - those keep working unchanged. Not used by any current UI to
+        create new configuration; the RUTA app only ever calls this to render
+        a read-only "Legacy / Deprecated" status on an existing campaign.
+      deprecated: true
       responses:
         "200":
           description: OK
@@ -415,11 +423,33 @@ paths:
             application/json:
               schema:
                 type: object
-                properties: { webhook: { $ref: "#/components/schemas/WebhookConfig" } }
+                properties:
+                  webhook: { $ref: "#/components/schemas/WebhookConfig" }
+                  migration:
+                    description: >-
+                      Phase 18 safe-migration hint - null when `webhook` is null. A
+                      pure read-side comparison of this legacy config's Page against
+                      the tenant's own new-integration Meta connection; never
+                      written anywhere, never deletes or modifies any record.
+                    nullable: true
+                    type: object
+                    properties:
+                      recommendation:
+                        type: string
+                        enum: [connect_required, reconnect_required, page_not_found, select_page_required, ready_to_map]
+                      matchedPageName: { type: string, nullable: true }
         "404": { description: Campaign not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     post:
       tags: [Campaigns]
       summary: Create or update this campaign's Meta webhook config
+      description: >-
+        Legacy / Deprecated. New campaigns must use the OAuth-based Meta
+        integration instead (`POST /api/integrations/meta/oauth-connect` and
+        the subsequent Page/Ad Account selection flow) - no current UI screen
+        calls this endpoint. Kept only so existing manually configured
+        campaigns can still rotate their own secrets without losing lead
+        capture; it is not linked to from anywhere in the app.
+      deprecated: true
       requestBody:
         required: true
         content:

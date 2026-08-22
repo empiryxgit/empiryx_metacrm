@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meta campaign — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <p style="margin:0 0 10px"><a href="/campaigns.html" style="font-size:12.5px; color:var(--text-muted)">← Back to campaigns</a></p>
+    <h1 class="page-title" id="metaCampaignName">Loading…</h1>
+    <p class="page-sub" id="metaCampaignSub"></p>
+    <div id="banner"></div>
+
+    <!-- =====================================================================
+         Phase 9 - THE mapping UI. A Meta campaign is an external Meta
+         object (see src/infrastructure/db/schema.ts's metaCampaigns doc
+         comment) that exists independently of any CRM campaign - this
+         screen's ONE job is letting a person connect it to a CRM campaign
+         (or several Meta campaigns to the same one), never edit the Meta
+         campaign itself (name/status come from the sync).
+         ===================================================================== -->
+    <h2 class="section-title">Map to CRM campaign</h2>
+    <div class="card">
+      <div id="mappingStateDesc" class="hint" style="margin:0 0 14px"></div>
+      <label for="crmCampaignSelect">CRM campaign</label>
+      <select id="crmCampaignSelect" disabled>
+        <option value="">Unmapped</option>
+      </select>
+      <div class="hint">Leads from this Meta campaign will be attributed to the CRM campaign you choose here, and will inherit its branch. Don't see the right one? <a href="/campaigns.html">Create a CRM campaign first</a>, then come back here.</div>
+      <div style="margin-top:14px; display:flex; gap:10px">
+        <button class="btn" type="button" id="saveMappingBtn" style="display:none">Save mapping</button>
+        <button class="btn secondary" type="button" id="unmapBtn" style="display:none">Unmap</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const metaCampaignId = params.get("id");
+  let me;
+  let metaCampaign;
+
+  function statusLabel(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  async function load() {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/campaigns.html");
+
+    if (!metaCampaignId) {
+      document.getElementById("metaCampaignName").textContent = "No Meta campaign selected";
+      return;
+    }
+
+    try {
+      ({ metaCampaign } = await App.apiJson(`/api/campaigns/meta/${metaCampaignId}`));
+    } catch (err) {
+      document.getElementById("metaCampaignName").textContent = "Meta campaign not found";
+      document.getElementById("metaCampaignSub").textContent = "";
+      return;
+    }
+
+    document.getElementById("metaCampaignName").textContent = metaCampaign.name;
+    document.getElementById("metaCampaignSub").innerHTML =
+      `<span class="pill ${metaCampaign.status}">${statusLabel(metaCampaign.status)}</span> · ${metaCampaign.leadsCount} lead${metaCampaign.leadsCount === 1 ? "" : "s"} · <span class="pill system">Synced from Meta</span>`;
+
+    const canManageCampaign = App.hasPermission(me, "campaigns.manage");
+    const select = document.getElementById("crmCampaignSelect");
+    const desc = document.getElementById("mappingStateDesc");
+
+    if (metaCampaign.crmCampaignId) {
+      desc.textContent = `Currently mapped to "${metaCampaign.crmCampaignName}". Leads route to ${metaCampaign.branchId ? "its branch" : "all branches (company-wide)"}.`;
+    } else {
+      desc.textContent = "Not mapped yet - leads from this Meta campaign are still captured, just without a CRM campaign or branch attached.";
+    }
+
+    if (!canManageCampaign) {
+      select.value = metaCampaign.crmCampaignId || "";
+      return;
+    }
+
+    try {
+      const { campaigns } = await App.apiJson("/api/campaigns");
+      select.innerHTML = `<option value="">Unmapped</option>` +
+        campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}${c.branchName ? ` (${App.escapeHtml(c.branchName)})` : ""}</option>`).join("");
+    } catch (err) {
+      // Non-fatal - select falls back to "Unmapped" only.
+    }
+    select.value = metaCampaign.crmCampaignId || "";
+    select.disabled = false;
+    document.getElementById("saveMappingBtn").style.display = "inline-flex";
+    if (metaCampaign.crmCampaignId) document.getElementById("unmapBtn").style.display = "inline-flex";
+  }
+
+  document.getElementById("saveMappingBtn").addEventListener("click", async () => {
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    const crmCampaignId = document.getElementById("crmCampaignSelect").value;
+    if (!crmCampaignId) {
+      banner.innerHTML = `<div class="banner error">Choose a CRM campaign, or use "Unmap" below to clear an existing mapping.</div>`;
+      return;
+    }
+    const btn = document.getElementById("saveMappingBtn");
+    btn.disabled = true;
+    try {
+      await App.apiJson(`/api/campaigns/meta/${metaCampaignId}/map`, { method: "POST", body: { crmCampaignId } });
+      banner.innerHTML = `<div class="banner success">Mapping saved.</div>`;
+      await load();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("unmapBtn").addEventListener("click", async () => {
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    const btn = document.getElementById("unmapBtn");
+    btn.disabled = true;
+    try {
+      await App.apiJson(`/api/campaigns/meta/${metaCampaignId}/unmap`, { method: "POST" });
+      banner.innerHTML = `<div class="banner success">Mapping removed.</div>`;
+      await load();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

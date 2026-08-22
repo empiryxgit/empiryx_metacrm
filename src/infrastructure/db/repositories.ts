@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, eq, gte, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
 import { leadProcessingLog, leads, rawMetaEvents, reconciliationRuns } from "./schema";
 import { firstOrThrow } from "./util";
@@ -92,6 +92,11 @@ export interface InsertLeadInput {
   platform: string;
   pageId: string;
   formId: string;
+  // Phase 12 - the form's own display name (resolveLeadFields.ts), not
+  // returned by Meta's leadgen API itself - see that resolver's own
+  // comment. Optional for the same "every existing caller keeps working
+  // unchanged" reason customFields below is.
+  formName?: string;
   adId?: string;
   adName?: string;
   adSetId?: string;
@@ -101,6 +106,11 @@ export interface InsertLeadInput {
   fullName?: string;
   email?: string;
   phoneNumber?: string;
+  // Phase 10 - fields resolved from the Meta form's field mapping that
+  // don't target a system column (see resolveLeadFields.ts). Optional so
+  // every existing caller of insertLead/insertRecoveredLead keeps working
+  // unchanged; the leads.custom_fields column already defaults to '{}'.
+  customFields?: Record<string, unknown>;
   formResponses: unknown;
   metaCreatedAt: Date;
   rawEventId: string;
@@ -136,7 +146,11 @@ export async function insertLead(input: InsertLeadInput): Promise<InsertLeadResu
   }
 }
 
-function isUniqueViolation(err: unknown): boolean {
+// Exported so other lead-insert paths (e.g. metaLeadEvents.ts's
+// insertMetaSyncLead) can rely on the exact same "unique violation = a
+// normal duplicate outcome" treatment, without duplicating the pg error
+// shape check.
+export function isUniqueViolation(err: unknown): boolean {
   const pgError = err as { code?: string; cause?: { code?: string } };
   return pgError?.code === "23505" || pgError?.cause?.code === "23505";
 }
@@ -179,6 +193,29 @@ export async function markLeadDeadLettered(metaLeadId: string, error: string) {
     .where(eq(leads.metaLeadId, metaLeadId));
 }
 
+/**
+ * Phase 15 - "Last Lead" for the Meta Integration status screen: the most
+ * recent lead this tenant received through EITHER Meta pipeline (the legacy
+ * per-campaign one and the tenant-level automatic sync both write into this
+ * same `leads` table with source="meta_lead_ads" - see insertLead /
+ * insertMetaSyncLead). Ordered by metaCreatedAt (Meta's own "when this lead
+ * happened" timestamp, always set for a Meta-sourced lead) rather than our
+ * own createdAt, so a reconciliation-recovered lead still reports the time
+ * it actually came in, not the time we happened to notice it. Returns null
+ * for a tenant that has never received a Meta lead - the status screen
+ * renders that as "No leads received yet", never an error.
+ */
+export async function getLastMetaLeadReceivedAt(companyId: string): Promise<Date | null> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ metaCreatedAt: leads.metaCreatedAt })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), eq(leads.source, "meta_lead_ads")))
+    .orderBy(rawSql`${leads.metaCreatedAt} DESC`)
+    .limit(1);
+  return row?.metaCreatedAt ?? null;
+}
+
 export async function incrementRetryCount(metaLeadId: string, error: string) {
   const db = await getDb();
   await db
@@ -210,6 +247,50 @@ export async function updateLeadPipelineStage(companyId: string, leadId: string,
     .where(and(...conditions))
     .returning();
   return rows.length > 0;
+}
+
+/**
+ * Lead counts per CRM campaign - powers the "Leads" column on the
+ * Campaigns screen's synced-Meta-campaigns table. Scoped to companyId
+ * (not just the campaign ids) as defense in depth against a caller ever
+ * passing a campaign id from a different tenant. Returns a plain map so
+ * the caller can default missing campaigns to 0 rather than needing to
+ * distinguish "0 leads" from "not in the result set".
+ */
+export async function getLeadCountsForCampaigns(companyId: string, campaignIds: string[]): Promise<Record<string, number>> {
+  if (campaignIds.length === 0) return {};
+  const db = await getDb();
+  const rows = await db
+    .select({ crmCampaignId: leads.crmCampaignId, count: rawSql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), inArray(leads.crmCampaignId, campaignIds)))
+    .groupBy(leads.crmCampaignId);
+  const result: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.crmCampaignId) result[row.crmCampaignId] = row.count;
+  }
+  return result;
+}
+
+/** Same shape as getLeadCountsForCampaigns above, but keyed by Meta's OWN
+ * raw campaign id (leads.campaignId, text) rather than our crmCampaignId -
+ * powers the "Leads" column on the Campaigns screen's Meta Campaigns table
+ * (see listMetaCampaignsWithMapping), which counts every lead a synced
+ * Meta campaign has produced regardless of whether it's been mapped to a
+ * CRM campaign yet. */
+export async function getLeadCountsByMetaCampaignId(companyId: string, metaCampaignIds: string[]): Promise<Record<string, number>> {
+  if (metaCampaignIds.length === 0) return {};
+  const db = await getDb();
+  const rows = await db
+    .select({ campaignId: leads.campaignId, count: rawSql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), inArray(leads.campaignId, metaCampaignIds)))
+    .groupBy(leads.campaignId);
+  const result: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.campaignId) result[row.campaignId] = row.count;
+  }
+  return result;
 }
 
 // ---- Manual customers (Flow B) -----------------------------------------

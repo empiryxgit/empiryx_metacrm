@@ -27,6 +27,12 @@ export const PERMISSIONS = {
   // same as before this feature existed, if they belong to none) - see
   // src/application/branchAccess.ts.
   BRANCHES_MANAGE: "branches.manage",
+  // Connect/disconnect the tenant's Meta Business account (Settings ->
+  // Integrations -> Meta) and choose which Pages/ad accounts it uses -
+  // deliberately separate from the legacy, per-campaign WEBHOOKS_MANAGE
+  // above: this one governs the tenant-wide OAuth connection itself, not
+  // any single campaign's webhook config.
+  INTEGRATIONS_MANAGE: "integrations.manage",
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -50,6 +56,7 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.FORMS_MANAGE, label: "Create and manage forms", category: "Forms" },
   { code: PERMISSIONS.SUBMISSIONS_VIEW, label: "View form submissions", category: "Forms" },
   { code: PERMISSIONS.BRANCHES_MANAGE, label: "Create and manage branches", category: "Administration" },
+  { code: PERMISSIONS.INTEGRATIONS_MANAGE, label: "Connect and manage the Meta integration", category: "Integrations" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

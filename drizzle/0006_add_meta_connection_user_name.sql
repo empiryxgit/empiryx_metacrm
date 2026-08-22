@@ -1,0 +1,1 @@
+ALTER TABLE "crm"."meta_connections" ADD COLUMN "meta_user_name" text;

@@ -297,6 +297,18 @@ input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--bran
 .banner.error{ background:var(--danger-soft); color:var(--danger); }
 .banner.success{ background:var(--success-soft); color:var(--success); }
 .banner.info{ background:var(--info-soft); color:var(--info); }
+.banner.warning{ background:var(--warning-soft); color:var(--warning); }
+
+/* Shared small-loading-state spinner (Meta integration screens, and
+   anywhere else that fetches something inline without a page-level
+   loader). */
+.meta-spinner{
+  display:inline-block; width:15px; height:15px; border-radius:50%;
+  border:2px solid var(--border-strong); border-top-color:var(--brand-primary);
+  animation:meta-spin .7s linear infinite; vertical-align:-3px; margin-right:8px;
+}
+@keyframes meta-spin{ to{ transform:rotate(360deg); } }
+.meta-loading{ display:flex; align-items:center; padding:6px 0; font-size:13.5px; color:var(--text-muted); }
 
 .state-block{ padding:44px 24px; text-align:center; }
 .state-icon{ width:40px; height:40px; margin:0 auto 14px; display:flex; align-items:center; justify-content:center; border-radius:50%; background:var(--surface-sunken); color:var(--text-muted); }

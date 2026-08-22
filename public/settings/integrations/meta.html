@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Meta integration — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* Phase 4/5/6: connection-state, selection-wizard and sync-progress bits
+     not already covered by the shared design system in app.css. */
+  .meta-spinner{
+    display:inline-block; width:15px; height:15px; border-radius:50%;
+    border:2px solid var(--border-strong); border-top-color:var(--brand-primary);
+    animation:meta-spin .7s linear infinite; vertical-align:-3px; margin-right:8px;
+  }
+  @keyframes meta-spin{ to{ transform:rotate(360deg); } }
+  .meta-loading{ display:flex; align-items:center; padding:6px 0; font-size:13.5px; color:var(--text-muted); }
+
+  .meta-connected-head{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:4px; }
+  .meta-connected-head h2{ margin:0; }
+
+  .meta-stats{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:14px; margin-top:16px; }
+  .meta-stat label{ display:block; font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); margin-bottom:4px; }
+  .meta-stat .meta-stat-value{ font-size:15px; font-weight:600; color:var(--text-primary); }
+  .meta-stat .meta-stat-value.count{ font-size:20px; }
+  .meta-stat .meta-stat-unit{ font-size:12.5px; font-weight:500; color:var(--text-muted); margin-left:4px; }
+
+  .meta-actions{ display:flex; gap:10px; margin-top:20px; flex-wrap:wrap; }
+
+  .meta-confirm{ margin-top:14px; padding:14px 16px; border:1px solid var(--danger); border-radius:var(--radius-sm); background:var(--danger-soft); }
+  .meta-confirm p{ margin:0 0 10px; font-size:13px; color:var(--text-primary); }
+  .meta-confirm .meta-actions{ margin-top:0; }
+
+  .meta-empty-note{ font-size:12.5px; color:var(--text-muted); margin-top:2px 0 0; }
+
+  /* First-connection nudge into the selection wizard */
+  .meta-callout{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:16px; padding:14px 16px; border:1px solid var(--brand-primary); border-radius:var(--radius-sm); background:var(--brand-primary-soft); }
+  .meta-callout p{ margin:0; font-size:13px; color:var(--text-primary); }
+
+  /* Phase 5 selection wizard */
+  .meta-wizard-head{ display:flex; align-items:center; justify-content:space-between; }
+  .meta-radio-list{ display:flex; flex-direction:column; gap:2px; margin-top:10px; }
+  .meta-radio-option{ display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); cursor:pointer; font-size:13.5px; }
+  .meta-radio-option:hover{ background:var(--surface-sunken); }
+  .meta-radio-option + .meta-radio-option{ margin-top:6px; }
+  .meta-radio-option input[type="radio"]{ width:16px; height:16px; accent-color:var(--brand-primary); flex-shrink:0; }
+  .meta-radio-option .meta-radio-sub{ color:var(--text-muted); font-size:12px; margin-left:4px; }
+
+  /* Phase 6 sync progress checklist */
+  .meta-sync-checklist{ list-style:none; margin:14px 0 0; padding:0; display:flex; flex-direction:column; gap:2px; }
+  .meta-sync-step{ display:flex; align-items:center; gap:10px; padding:9px 4px; font-size:13.5px; border-bottom:1px solid var(--border); }
+  .meta-sync-step:last-child{ border-bottom:none; }
+  .meta-sync-step-icon{ display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; flex-shrink:0; font-size:12px; font-weight:700; border-radius:50%; }
+  .meta-sync-step-pending .meta-sync-step-icon{ color:var(--text-muted); }
+  .meta-sync-step-running .meta-sync-step-label{ font-weight:600; }
+  .meta-sync-step-done .meta-sync-step-icon{ background:var(--success-soft); color:var(--success); }
+  .meta-sync-step-error .meta-sync-step-icon{ background:var(--danger-soft); color:var(--danger); }
+  .meta-sync-step-skipped .meta-sync-step-icon{ color:var(--text-muted); }
+  .meta-sync-step-label{ flex:1; }
+  .meta-sync-step-detail{ font-size:12px; color:var(--text-muted); }
+  .meta-sync-step-error .meta-sync-step-detail{ color:var(--danger); }
+
+  /* Phase 7 - Meta Lead Capture webhook status card */
+  .meta-webhook-card{ margin-top:16px; padding-top:16px; border-top:1px solid var(--border); }
+  .meta-webhook-head{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .meta-webhook-head h2{ margin:0; }
+  .meta-webhook-reason{ margin:8px 0 0; font-size:13px; color:var(--text-primary); }
+  .meta-webhook-reason .meta-webhook-reason-label{ font-weight:600; color:var(--text-muted); }
+  .meta-webhook-verified{ margin:4px 0 0; font-size:12px; color:var(--text-muted); }
+  .meta-webhook-warning{ margin-top:10px; padding:10px 12px; border:1px solid var(--warning); border-radius:var(--radius-sm); background:var(--warning-soft); font-size:12.5px; color:var(--text-primary); }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <p style="margin:0 0 10px"><a href="/settings/integrations.html" style="font-size:12.5px; color:var(--text-muted)">← Integrations</a></p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Meta Integration</h1>
+        <p class="page-sub">Connect your Facebook and Instagram lead sources.</p>
+      </div>
+    </div>
+    <!-- Phase 15 - the clean, at-a-glance status screen lives at
+         meta-status.html; this page stays the full configuration/wizard
+         screen (selection, sync, webhook retry, lead form mapping). -->
+    <p style="margin:0 0 14px"><a href="/settings/integrations/meta-status.html" style="font-size:12.5px">← Back to Meta status</a></p>
+    <div id="banner"></div>
+
+    <div class="card" id="mainCard">
+      <div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div>
+    </div>
+
+    <div class="card" id="wizardCard" style="display:none"></div>
+
+    <!-- =====================================================================
+         Phase 10 - synced Lead Forms + their field mapping status. Every
+         Meta form can ask different questions - this table is where an
+         admin gets to each form's Field Mapping screen. Hidden entirely
+         until Meta is connected (see loadLeadForms).
+         ===================================================================== -->
+    <div id="leadFormsSection" style="display:none; margin-top:24px">
+      <h2 class="section-title">Lead Forms</h2>
+      <p class="hint" style="margin:0 0 12px">Each form's questions sync automatically - open one to map its fields to the CRM.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Form</th><th>Status</th><th>Fields mapped</th></tr></thead>
+          <tbody id="leadFormRows"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  let lastStatus = null; // last successful /status payload - selection wizard reads its pages/instagramAccounts/adAccounts lists
+
+  const ERROR_MESSAGES = {
+    not_configured: "Meta integration is not configured on this server yet. Contact your administrator.",
+    connect_failed: "Something went wrong connecting to Meta. Please try again.",
+    invalid_state: "This connection attempt could not be verified (it may have expired). Please try again.",
+    missing_params: "Meta did not return the expected information. Please try again.",
+    access_denied: "You declined the Meta authorization request.",
+  };
+
+  function showBanner(kind, text) {
+    document.getElementById("banner").innerHTML = `<div class="banner ${kind}">${App.escapeHtml(text)}</div>`;
+  }
+
+  // ---- Not-connected state --------------------------------------------
+
+  function renderNotConnected() {
+    closeWizard();
+    document.getElementById("mainCard").innerHTML = `
+      <h2 class="section-title" style="margin-top:0">Meta Integration</h2>
+      <p class="state-desc" style="margin:0 0 4px; max-width:none; text-align:left">Connect your Facebook and Instagram lead sources.</p>
+      <div class="meta-actions">
+        <button class="btn" type="button" id="connectBtn">Connect Meta</button>
+      </div>
+    `;
+    document.getElementById("connectBtn").addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Redirecting to Meta…`;
+      window.location.href = "/api/integrations/meta/connect";
+    });
+  }
+
+  // ---- Connected state --------------------------------------------------
+
+  // =======================================================================
+  // Phase 7 - "Meta Lead Capture": once a Page is selected, the backend
+  // already auto-subscribed it (see Phase 5's selection step above) - this
+  // just reflects that outcome and, on failure, offers Retry. Never asks
+  // for a webhook URL / verify token / Page id / access token - "The CRM
+  // handles this."
+  // =======================================================================
+
+  function renderWebhookStatusCard(page) {
+    if (!page) return ""; // nothing to show until a Page is selected
+
+    if (page.webhookStatus === "active") {
+      return `
+        <div class="meta-webhook-card">
+          <div class="meta-webhook-head">
+            <h2 class="section-title">Meta Lead Capture</h2>
+            <span class="pill active">Active ✓</span>
+          </div>
+          ${page.webhookLastVerifiedAt ? `<p class="meta-webhook-verified">Last verified ${App.escapeHtml(new Date(page.webhookLastVerifiedAt).toLocaleString())}</p>` : ""}
+        </div>
+      `;
+    }
+
+    // "failed" (or, defensively, anything else other than "active") - Phase
+    // 7's exact wording: "Webhook Status: Failed ⚠ / Reason: / Unable to
+    // subscribe this Page. / [ Retry ]".
+    return `
+      <div class="meta-webhook-card">
+        <div class="meta-webhook-head">
+          <h2 class="section-title">Meta Lead Capture</h2>
+          <span class="pill failed">Failed ⚠</span>
+        </div>
+        <p class="meta-webhook-reason"><span class="meta-webhook-reason-label">Reason:</span> ${App.escapeHtml(page.webhookLastError || "Unable to subscribe this Page.")}</p>
+        ${page.webhookLastVerifiedAt ? `<p class="meta-webhook-verified">Last worked ${App.escapeHtml(new Date(page.webhookLastVerifiedAt).toLocaleString())}</p>` : ""}
+        <div class="meta-actions">
+          <button class="btn secondary sm" type="button" id="retryWebhookBtn">Retry</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindWebhookStatusHandlers() {
+    const retryBtn = document.getElementById("retryWebhookBtn");
+    if (retryBtn) retryBtn.addEventListener("click", runWebhookRetry);
+  }
+
+  async function runWebhookRetry() {
+    const btn = document.getElementById("retryWebhookBtn");
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Retrying…`;
+    try {
+      await App.apiJson("/api/integrations/meta/webhook/retry", { method: "POST" });
+      await loadStatus();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      showBanner("error", err.message || "Failed to retry the webhook subscription.");
+    }
+  }
+
+  // Phase 16 - three real states for this pill, not just "Connected ✓"
+  // unconditionally (a pre-existing gap - this pill never reflected
+  // anything other than active before this phase, unlike meta-status.html's
+  // Phase 15 pill which already branched on status). "needs_reauth" gets
+  // the exact wording Phase 16 specifies; "error" (a non-auth technical
+  // failure) keeps the existing generic wording.
+  function connectionStatusPill(status) {
+    if (status === "active") return `<span class="pill active">Connected ✓</span>`;
+    if (status === "needs_reauth") return `<span class="pill failed">Needs Reauthorization ⚠</span>`;
+    return `<span class="pill failed">Connection Error ⚠</span>`;
+  }
+
+  function renderConnected(data) {
+    lastStatus = data;
+    const c = data.connection;
+    const companyName = window.__metaCompanyName || "";
+    const accountLabel = c.metaUserName ? `${c.metaUserName}${companyName ? " / " + companyName : ""}` : (companyName || "—");
+    const hasAnySelection = data.pages.some((p) => p.isSelected) || data.instagramAccounts.some((i) => i.isSelected) || data.adAccounts.some((a) => a.isSelected);
+    const selectedPage = data.pages.find((p) => p.isSelected) || null;
+    const needsReconnect = c.status !== "active";
+
+    document.getElementById("mainCard").innerHTML = `
+      <div class="meta-connected-head">
+        <h2 class="section-title" style="margin:0">Meta Integration</h2>
+        ${connectionStatusPill(c.status)}
+      </div>
+      ${c.lastError ? `<div class="banner error" style="margin-top:10px">${App.escapeHtml(c.status === "needs_reauth" ? "Your Meta connection needs to be renewed. Reason: " + c.lastError : c.lastError)}</div>` : ""}
+      ${needsReconnect ? `
+        <div class="meta-actions" style="margin-top:12px">
+          <button class="btn" type="button" id="reconnectBtn">Reconnect Meta</button>
+        </div>
+      ` : ""}
+
+      <div class="meta-stats">
+        <div class="meta-stat">
+          <label>Meta Account</label>
+          <div class="meta-stat-value">${App.escapeHtml(accountLabel)}</div>
+        </div>
+        <div class="meta-stat">
+          <label>Facebook Pages</label>
+          <div class="meta-stat-value count">${data.pages.length}<span class="meta-stat-unit">available</span></div>
+        </div>
+        <div class="meta-stat">
+          <label>Instagram Accounts</label>
+          <div class="meta-stat-value count">${data.instagramAccounts.length}<span class="meta-stat-unit">available</span></div>
+        </div>
+        <div class="meta-stat">
+          <label>Ad Accounts</label>
+          <div class="meta-stat-value count">${data.adAccounts.length}<span class="meta-stat-unit">available</span></div>
+        </div>
+      </div>
+
+      ${!hasAnySelection ? `
+        <div class="meta-callout">
+          <p>Choose which Page, Instagram account and ad account this CRM should sync.</p>
+          <button class="btn" type="button" id="getStartedBtn">Get started</button>
+        </div>
+      ` : ""}
+
+      ${renderWebhookStatusCard(selectedPage)}
+
+      <div class="meta-actions">
+        <button class="btn secondary" type="button" id="configureBtn">Configure Meta</button>
+        <button class="btn danger" type="button" id="disconnectBtn">Disconnect</button>
+      </div>
+      <div id="disconnectConfirm"></div>
+    `;
+
+    document.getElementById("configureBtn").addEventListener("click", openWizard);
+    document.getElementById("disconnectBtn").addEventListener("click", showDisconnectConfirm);
+    const reconnectBtn = document.getElementById("reconnectBtn");
+    if (reconnectBtn) {
+      reconnectBtn.addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Redirecting to Meta…`;
+        window.location.href = "/api/integrations/meta/connect";
+      });
+    }
+    const getStartedBtn = document.getElementById("getStartedBtn");
+    if (getStartedBtn) getStartedBtn.addEventListener("click", openWizard);
+    bindWebhookStatusHandlers();
+
+    loadLeadForms(!!selectedPage);
+  }
+
+  // =======================================================================
+  // Phase 10 - Lead Forms + field mapping status (see leadFormsSection in
+  // the markup above). Only shown once a Page is selected - forms only
+  // ever sync under a selected Page (see metaFormService.ts). The
+  // "integrations.manage" gate is already enforced by load() below before
+  // renderConnected (and therefore this) ever runs.
+  // =======================================================================
+
+  async function loadLeadForms(hasSelectedPage) {
+    const section = document.getElementById("leadFormsSection");
+    if (!hasSelectedPage) {
+      section.style.display = "none";
+      return;
+    }
+    section.style.display = "block";
+    const rows = document.getElementById("leadFormRows");
+    let forms;
+    try {
+      ({ forms } = await App.apiJson("/api/integrations/meta/forms"));
+    } catch (err) {
+      rows.innerHTML = `<tr><td colspan="3" class="empty">Unable to load lead forms right now.</td></tr>`;
+      return;
+    }
+    if (!forms.length) {
+      rows.innerHTML = `<tr><td colspan="3">
+        <div class="state-block">
+          <p class="state-title">No lead forms synced yet</p>
+          <p class="state-desc">Forms from your selected Page appear here automatically once synced.</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+    rows.innerHTML = forms.map((f) => `
+      <tr onclick="window.location.href='/meta-form-mapping.html?id=${f.id}'" style="cursor:pointer">
+        <td><strong>${App.escapeHtml(f.formName)}</strong></td>
+        <td><span class="pill ${f.status}">${f.status.charAt(0).toUpperCase() + f.status.slice(1)}</span></td>
+        <td>${f.mappedCount} of ${f.questionCount} mapped</td>
+      </tr>
+    `).join("");
+  }
+
+  function showDisconnectConfirm() {
+    const host = document.getElementById("disconnectConfirm");
+    host.innerHTML = `
+      <div class="meta-confirm">
+        <p>Disconnect this Meta account? Campaigns already using it will stop receiving new leads until you reconnect.</p>
+        <div class="meta-actions">
+          <button class="btn danger sm" type="button" id="confirmDisconnectBtn">Yes, disconnect</button>
+          <button class="btn secondary sm" type="button" id="cancelDisconnectBtn">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("confirmDisconnectBtn").addEventListener("click", runDisconnect);
+    document.getElementById("cancelDisconnectBtn").addEventListener("click", () => { host.innerHTML = ""; });
+  }
+
+  async function runDisconnect() {
+    const host = document.getElementById("disconnectConfirm");
+    host.innerHTML = `<div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Disconnecting…</div>`;
+    try {
+      await App.apiJson("/api/integrations/meta/disconnect", { method: "POST" });
+      showBanner("success", "Meta disconnected.");
+      renderNotConnected();
+    } catch (err) {
+      host.innerHTML = "";
+      showBanner("error", err.message || "Failed to disconnect. Please try again.");
+    }
+  }
+
+  // ---- Page-level error state --------------------------------------------
+
+  function renderLoadError(message) {
+    closeWizard();
+    document.getElementById("mainCard").innerHTML = `
+      <div class="state-block">
+        <p class="state-title">Unable to load Meta integration status</p>
+        <p class="state-desc">${App.escapeHtml(message)}</p>
+        <button class="btn secondary" type="button" id="retryBtn">Try again</button>
+      </div>
+    `;
+    document.getElementById("retryBtn").addEventListener("click", loadStatus);
+  }
+
+  async function loadStatus() {
+    document.getElementById("mainCard").innerHTML = `<div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div>`;
+    try {
+      const data = await App.apiJson("/api/integrations/meta/status");
+      if (data.connection) {
+        renderConnected(data);
+      } else {
+        renderNotConnected();
+      }
+    } catch (err) {
+      renderLoadError(err.message || "Something went wrong.");
+    }
+  }
+
+  // =======================================================================
+  // Phase 5 - asset selection wizard: Select Facebook Page -> Select
+  // Instagram Account -> Select Ad Account -> Connect & Sync. Each step's
+  // choice is our OWN row id (never a raw Meta id) and is saved immediately
+  // on "Continue" via POST /api/integrations/meta/select - never lost if
+  // the tenant abandons partway through.
+  // =======================================================================
+
+  const WIZARD_STEPS = [
+    {
+      key: "page",
+      apiType: "page",
+      title: "Select Facebook Page",
+      itemsKey: "pages",
+      emptyText: "No Facebook Pages found for this Meta account.",
+      label: (p) => p.pageName,
+      sub: (p) => (p.instagramBusinessAccountId ? "Instagram linked" : ""),
+    },
+    {
+      key: "instagram",
+      apiType: "instagram",
+      title: "Select Instagram Account",
+      itemsKey: "instagramAccounts",
+      emptyText: "No Instagram accounts found for this Meta account.",
+      label: (i) => (i.username ? `@${i.username}` : "(no username returned by Meta)"),
+      sub: () => "",
+    },
+    {
+      key: "adAccount",
+      apiType: "ad_account",
+      title: "Select Ad Account",
+      itemsKey: "adAccounts",
+      emptyText: "No ad accounts found for this Meta account.",
+      label: (a) => a.name,
+      sub: () => "",
+      continueLabel: "Connect & Sync",
+    },
+  ];
+
+  let wizard = null; // { step, choice: { page, instagram, adAccount } }
+
+  function openWizard() {
+    wizard = {
+      step: 0,
+      choice: {
+        page: (lastStatus.pages.find((p) => p.isSelected) || {}).id || null,
+        instagram: (lastStatus.instagramAccounts.find((i) => i.isSelected) || {}).id || null,
+        adAccount: (lastStatus.adAccounts.find((a) => a.isSelected) || {}).id || null,
+      },
+    };
+    const card = document.getElementById("wizardCard");
+    card.style.display = "block";
+    renderWizardStep();
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function closeWizard() {
+    wizard = null;
+    const card = document.getElementById("wizardCard");
+    card.style.display = "none";
+    card.innerHTML = "";
+  }
+
+  function renderWizardStep() {
+    const def = WIZARD_STEPS[wizard.step];
+    const items = lastStatus[def.itemsKey] || [];
+    const continueLabel = def.continueLabel || "Continue";
+
+    const optionsHtml = items.length
+      ? items
+          .map(
+            (item) => `
+        <label class="meta-radio-option">
+          <input type="radio" name="wizard-${def.key}" value="${App.escapeHtml(item.id)}" ${wizard.choice[def.key] === item.id ? "checked" : ""} />
+          <span>${App.escapeHtml(def.label(item))}${def.sub(item) ? `<span class="meta-radio-sub">${App.escapeHtml(def.sub(item))}</span>` : ""}</span>
+        </label>
+      `,
+          )
+          .join("")
+      : `<p class="meta-empty-note">${App.escapeHtml(def.emptyText)} You can continue without selecting one.</p>`;
+
+    document.getElementById("wizardCard").innerHTML = `
+      <div class="meta-wizard-head">
+        <span class="hint">Step ${wizard.step + 1} of ${WIZARD_STEPS.length}</span>
+        ${wizard.step > 0 ? `<button class="btn tertiary sm" type="button" id="wizardBackBtn">← Back</button>` : ""}
+      </div>
+      <h2 class="section-title" style="margin-top:6px">${def.title}</h2>
+      <div class="meta-radio-list">${optionsHtml}</div>
+      <div id="wizardError"></div>
+      <div class="meta-actions">
+        <button class="btn" type="button" id="wizardContinueBtn">${continueLabel}</button>
+        <button class="btn tertiary" type="button" id="wizardCancelBtn">Cancel</button>
+      </div>
+    `;
+
+    document.querySelectorAll(`input[name="wizard-${def.key}"]`).forEach((input) => {
+      input.addEventListener("change", (e) => {
+        wizard.choice[def.key] = e.target.value;
+      });
+    });
+    document.getElementById("wizardContinueBtn").addEventListener("click", handleWizardContinue);
+    document.getElementById("wizardCancelBtn").addEventListener("click", closeWizard);
+    const backBtn = document.getElementById("wizardBackBtn");
+    if (backBtn) backBtn.addEventListener("click", () => { wizard.step -= 1; renderWizardStep(); });
+  }
+
+  async function handleWizardContinue() {
+    const def = WIZARD_STEPS[wizard.step];
+    const chosenId = wizard.choice[def.key];
+    const btn = document.getElementById("wizardContinueBtn");
+    const errHost = document.getElementById("wizardError");
+    errHost.innerHTML = "";
+
+    if (chosenId) {
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.innerHTML = `<span class="meta-spinner" aria-hidden="true"></span>Saving…`;
+      let selectResult;
+      try {
+        selectResult = await App.apiJson("/api/integrations/meta/select", { method: "POST", body: { type: def.apiType, id: chosenId } });
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        errHost.innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Failed to save selection.")}</div>`;
+        return;
+      }
+      // Phase 7: selecting a Page also (synchronously) attempted the
+      // automatic webhook subscribe - surface an immediate failure here as
+      // a non-blocking warning. Uses the page-level #banner (not
+      // errHost/wizardCard) because the wizard is about to re-render for
+      // the next step, which would otherwise wipe it - this way it stays
+      // visible for the rest of the flow, and the tenant sees the
+      // authoritative status + Retry on the Meta Lead Capture card once
+      // they're back on the main screen.
+      if (def.key === "page" && selectResult && selectResult.webhookStatus === "failed") {
+        showBanner("warning", `Page selected, but the automatic lead-capture webhook could not be subscribed yet: ${selectResult.webhookLastError || "Unable to subscribe this Page."} You can retry this from the Meta Lead Capture status card after finishing setup.`);
+      }
+    }
+
+    if (wizard.step < WIZARD_STEPS.length - 1) {
+      wizard.step += 1;
+      renderWizardStep();
+    } else {
+      await startSyncFlow();
+    }
+  }
+
+  // =======================================================================
+  // Phase 6 - automatic sync + live progress checklist. POST /sync runs the
+  // whole pipeline and returns the authoritative final result; while it's
+  // in flight this polls GET /sync-status (best-effort - a polling hiccup
+  // never fails the flow, it just means the checklist updates less often).
+  // =======================================================================
+
+  const SYNC_STEP_DEFS = [
+    { key: "connecting", label: "Connecting Meta" },
+    { key: "pages", label: "Loading Pages" },
+    { key: "instagram", label: "Loading Instagram" },
+    { key: "ad_accounts", label: "Loading Ad Accounts" },
+    { key: "campaigns", label: "Loading Campaigns" },
+    { key: "forms", label: "Loading Forms" },
+    { key: "completed", label: "Completed" },
+  ];
+
+  function syncStepIcon(status) {
+    if (status === "done") return "✓";
+    if (status === "error") return "✗";
+    if (status === "skipped") return "–";
+    if (status === "running") return `<span class="meta-spinner" aria-hidden="true" style="margin:0"></span>`;
+    return "○";
+  }
+
+  function renderSyncProgress(steps) {
+    document.getElementById("wizardCard").innerHTML = `
+      <h2 class="section-title" style="margin-top:0">Syncing Meta Assets</h2>
+      <ul class="meta-sync-checklist">
+        ${steps
+          .map(
+            (s) => `
+          <li class="meta-sync-step meta-sync-step-${s.status}">
+            <span class="meta-sync-step-icon">${syncStepIcon(s.status)}</span>
+            <span class="meta-sync-step-label">${App.escapeHtml(s.label)}</span>
+            ${s.detail ? `<span class="meta-sync-step-detail">${App.escapeHtml(s.detail)}</span>` : ""}
+          </li>
+        `,
+          )
+          .join("")}
+      </ul>
+    `;
+  }
+
+  async function startSyncFlow() {
+    let steps = SYNC_STEP_DEFS.map((d) => ({ ...d, status: "pending" }));
+    renderSyncProgress(steps);
+
+    const poll = async () => {
+      try {
+        const { progress } = await App.apiJson("/api/integrations/meta/sync-status");
+        if (progress && progress.steps) {
+          steps = progress.steps;
+          renderSyncProgress(steps);
+        }
+      } catch (err) {
+        // Best-effort only - keep showing the last known state rather than
+        // interrupting the flow over a single polling failure.
+      }
+    };
+    const pollTimer = setInterval(poll, 1000);
+    poll();
+
+    let result;
+    try {
+      result = await App.apiJson("/api/integrations/meta/sync", { method: "POST" });
+    } catch (err) {
+      clearInterval(pollTimer);
+      renderSyncProgress(steps.map((s) => (s.status === "pending" || s.status === "running" ? { ...s, status: "error", detail: "Sync failed." } : s)));
+      showBanner("error", err.message || "Meta sync failed.");
+      return;
+    }
+    clearInterval(pollTimer);
+    renderSyncProgress(result.steps);
+    showBanner(result.ok ? "success" : "error", result.ok ? "Meta assets synced successfully." : "Meta sync finished with errors - see the checklist below.");
+
+    // Refresh the main card's counts/selection state; the completed
+    // checklist stays visible underneath so the tenant can see exactly
+    // what happened.
+    await loadStatus();
+  }
+
+  // ---- Bootstrap --------------------------------------------------------
+
+  async function load() {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings/integrations.html");
+    window.__metaCompanyName = me.company?.name || "";
+
+    if (!App.hasPermission(me, "integrations.manage")) {
+      document.getElementById("mainCard").innerHTML = `
+        <div class="state-block">
+          <p class="state-title">You don't have access</p>
+          <p class="state-desc">Ask an admin for the "Connect and manage the Meta integration" permission.</p>
+        </div>
+      `;
+      return;
+    }
+
+    if (params.get("connected") === "1") showBanner("success", "Meta connected successfully.");
+    const errorCode = params.get("error");
+    if (errorCode === "missing_permission") {
+      const scopes = (params.get("scopes") || "").split(",").filter(Boolean);
+      showBanner("error", scopes.length ? `Meta connection needs these permissions to work: ${scopes.join(", ")}. Please allow all requested permissions and try again.` : "This Meta connection is missing a required permission. Please allow all requested permissions and try again.");
+    } else if (errorCode) {
+      showBanner("error", ERROR_MESSAGES[errorCode] || "Something went wrong connecting to Meta.");
+    }
+
+    await loadStatus();
+  }
+
+  load();
+</script>
+</body>
+</html>

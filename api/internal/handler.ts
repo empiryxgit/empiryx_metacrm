@@ -10,8 +10,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Receiver } from "@upstash/qstash";
 import { processLead, RetryableProcessingError } from "../../src/application/processLead";
+import { processMetaLeadEvent } from "../../src/application/metaSync/processMetaLeadEvent";
 import { runReconciliation } from "../../src/application/reconcile";
 import { incrementRetryCount, logEvent, markLeadDeadLettered } from "../../src/infrastructure/db/repositories";
+import { markMetaLeadEventFailed } from "../../src/infrastructure/db/repositories/metaLeadEvents";
 
 export const config = {
   api: { bodyParser: false },
@@ -69,11 +71,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 // After the configured retry count is exhausted, QStash calls the
 // failureCallback endpoint (the dead-letter action below) instead.
 interface LeadReceivedBody {
+  // publishLeadReceived never actually sets this - it's declared here
+  // (always undefined in practice) purely so TS treats `kind` as a valid
+  // discriminant across the LeadReceivedBody | TenantLeadReceivedBody
+  // union below; `message.kind === "tenant_meta_sync"` is false for every
+  // real legacy message, which is exactly the routing this needs.
+  kind?: undefined;
   rawEventId: string;
   metaLeadId: string;
   objectType: string;
   companyId: string;
   campaignId: string;
+}
+
+// Tenant-level counterpart - see
+// src/infrastructure/queue/qstash.ts's publishTenantLeadReceived and
+// src/application/metaSync/processMetaLeadEvent.ts. Same endpoint, same
+// QStash topic, distinguished purely by this `kind` field so the 12-
+// Function cap never has to grow for this new pipeline.
+interface TenantLeadReceivedBody {
+  kind: "tenant_meta_sync";
+  leadEventId: string;
+  metaLeadId: string;
+  tenantId: string;
 }
 
 async function handleProcessLead(req: VercelRequest, res: VercelResponse) {
@@ -97,9 +117,14 @@ async function handleProcessLead(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const message = JSON.parse(rawBody) as LeadReceivedBody;
+  const message = JSON.parse(rawBody) as LeadReceivedBody | TenantLeadReceivedBody;
   const attempt = Number(req.headers["upstash-retried"] ?? 0) + 1;
 
+  if (message.kind === "tenant_meta_sync") return handleProcessTenantLead(message, attempt, res);
+  return handleProcessLegacyLead(message, attempt, res);
+}
+
+async function handleProcessLegacyLead(message: LeadReceivedBody, attempt: number, res: VercelResponse) {
   try {
     const outcome = await processLead(
       message.rawEventId,
@@ -126,6 +151,25 @@ async function handleProcessLead(req: VercelRequest, res: VercelResponse) {
     // configured at publish time. We distinguish the status only for
     // observability; QStash retries on both 4xx (except a few) and 5xx by
     // default, so 502 is used here to signal "try again" unambiguously.
+    res.status(isRetryable ? 502 : 500).json({ error: messageText });
+  }
+}
+
+async function handleProcessTenantLead(message: TenantLeadReceivedBody, attempt: number, res: VercelResponse) {
+  try {
+    const outcome = await processMetaLeadEvent(message.leadEventId, message.metaLeadId, message.tenantId);
+    console.log(`[process-lead] (tenant sync) ${message.metaLeadId} -> ${outcome} (attempt ${attempt})`);
+    res.status(200).json({ outcome });
+  } catch (err) {
+    // processMetaLeadEvent already records the failure on the
+    // meta_lead_events row itself (markMetaLeadEventRetrying, with its own
+    // retryCount increment) before throwing - nothing further to persist
+    // here, unlike the legacy path above which has no such row of its own
+    // to write to. The row only reaches this handler's terminal FAILED
+    // state below, once QStash's own retries are exhausted.
+    const isRetryable = err instanceof RetryableProcessingError;
+    const messageText = err instanceof Error ? err.message : String(err);
+    console.error(`[process-lead] (tenant sync) Attempt ${attempt} failed for ${message.metaLeadId}: ${messageText}`);
     res.status(isRetryable ? 502 : 500).json({ error: messageText });
   }
 }
@@ -240,9 +284,24 @@ async function handleDeadLetter(req: VercelRequest, res: VercelResponse) {
 
   const payload = JSON.parse(rawBody) as QStashFailureCallbackBody;
   const originalMessage = JSON.parse(Buffer.from(payload.body, "base64").toString("utf8")) as {
-    rawEventId: string;
+    kind?: "tenant_meta_sync";
+    rawEventId?: string;
+    leadEventId?: string;
     metaLeadId: string;
   };
+
+  if (originalMessage.kind === "tenant_meta_sync" && originalMessage.leadEventId) {
+    // Tenant-level pipeline - there is no `leads` row to mark (processing
+    // never got far enough to create one), so the failure is recorded on
+    // meta_lead_events itself instead, which IS this pipeline's durability
+    // record.
+    console.error(
+      `[dead-letter] (tenant sync) Lead ${originalMessage.metaLeadId} (event ${originalMessage.leadEventId}) exhausted all retries. dlqId=${payload.dlqId}`,
+    );
+    await markMetaLeadEventFailed(originalMessage.leadEventId, `Exhausted retries, QStash status ${payload.status}, dlqId=${payload.dlqId}`);
+    res.status(200).json({ recorded: true });
+    return;
+  }
 
   console.error(
     `[dead-letter] Lead ${originalMessage.metaLeadId} (raw event ${originalMessage.rawEventId}) exhausted all retries. dlqId=${payload.dlqId}`,

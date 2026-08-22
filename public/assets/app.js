@@ -110,6 +110,7 @@ const App = (() => {
     { href: "/admin/users.html", label: "Users", perm: "users.manage" },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage" },
     { href: "/admin/branches.html", label: "Branches", perm: "branches.manage" },
+    { href: "/settings.html", label: "Settings", perm: "integrations.manage" },
   ];
 
   function navLinkHtml(link, activeHref, extraClass) {

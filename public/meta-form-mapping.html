@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Field mapping — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* Phase 10 - Field Mapping table. Each row: Meta's own question label on
+     the left, the CRM destination on the right - deliberately laid out
+     like the Phase 10 spec's own example ("Full Name → Lead Name"). */
+  .mapping-row{ display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; gap:14px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .mapping-row:last-child{ border-bottom:none; }
+  .mapping-meta{ min-width:0; }
+  .mapping-meta .mapping-meta-label{ font-weight:600; font-size:13.5px; color:var(--text-primary); }
+  .mapping-meta .mapping-meta-key{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+  .mapping-arrow{ color:var(--text-muted); font-size:15px; }
+  .mapping-crm{ display:flex; flex-direction:column; gap:6px; }
+  .mapping-crm select, .mapping-crm input{ margin:0; }
+  .mapping-head-row{ display:grid; grid-template-columns: 1fr auto 1fr; gap:14px; padding-bottom:8px; border-bottom:1px solid var(--border-strong); font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <p style="margin:0 0 10px"><a href="/settings/integrations/meta.html" style="font-size:12.5px; color:var(--text-muted)">← Meta integration</a></p>
+    <h1 class="page-title" id="formName">Loading…</h1>
+    <p class="page-sub" id="formSub"></p>
+    <div id="banner"></div>
+
+    <h2 class="section-title">Field Mapping</h2>
+    <p class="hint" style="margin:0 0 14px">Every question this form asks, and where its answer goes in the CRM. Fields Meta doesn't already recognize are captured as custom fields automatically - rename or repoint any of them below.</p>
+    <div class="card" id="mappingCard">
+      <div class="mapping-head-row">
+        <div>Meta field</div>
+        <div></div>
+        <div>CRM field</div>
+      </div>
+      <div id="mappingRows"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div></div>
+      <div style="margin-top:16px">
+        <button class="btn" type="button" id="saveMappingBtn" style="display:none">Save Mapping</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const metaFormId = params.get("id");
+  let me;
+  let fields = [];
+
+  const SYSTEM_FIELD_OPTIONS = [
+    { value: "system:fullName", label: "Lead Name" },
+    { value: "system:phoneNumber", label: "Phone" },
+    { value: "system:email", label: "Email" },
+    { value: "custom", label: "Custom field…" },
+  ];
+
+  function currentSelectValue(field) {
+    return field.mappingType === "system" ? `system:${field.systemField}` : "custom";
+  }
+
+  function fieldRowHtml(field, index) {
+    const selectValue = currentSelectValue(field);
+    const options = SYSTEM_FIELD_OPTIONS.map(o => `<option value="${o.value}" ${o.value === selectValue ? "selected" : ""}>${App.escapeHtml(o.label)}</option>`).join("");
+    const showCustomInput = selectValue === "custom";
+    return `
+      <div class="mapping-row" data-index="${index}">
+        <div class="mapping-meta">
+          <div class="mapping-meta-label">${App.escapeHtml(field.metaFieldLabel)}</div>
+          <div class="mapping-meta-key">${App.escapeHtml(field.metaFieldKey)}</div>
+        </div>
+        <div class="mapping-arrow">→</div>
+        <div class="mapping-crm">
+          <select class="mapping-target" data-index="${index}">${options}</select>
+          <input class="mapping-custom-label" data-index="${index}" type="text" placeholder="Custom field label" value="${App.escapeHtml(field.customFieldLabel || "")}" style="display:${showCustomInput ? "block" : "none"}" />
+        </div>
+      </div>
+    `;
+  }
+
+  function renderRows() {
+    document.getElementById("mappingRows").innerHTML = fields.length
+      ? fields.map((f, i) => fieldRowHtml(f, i)).join("")
+      : `<div class="state-block"><p class="state-title">This form has no questions yet</p><p class="state-desc">Run a Meta sync from the integration screen, then come back here.</p></div>`;
+
+    document.querySelectorAll(".mapping-target").forEach((sel) => {
+      sel.addEventListener("change", (e) => {
+        const idx = Number(e.target.dataset.index);
+        const input = document.querySelector(`.mapping-custom-label[data-index="${idx}"]`);
+        input.style.display = e.target.value === "custom" ? "block" : "none";
+      });
+    });
+  }
+
+  async function load() {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings.html");
+
+    if (!metaFormId) {
+      document.getElementById("formName").textContent = "No form selected";
+      return;
+    }
+
+    let metaForm;
+    try {
+      ({ metaForm, fields } = await App.apiJson(`/api/integrations/meta/forms/${metaFormId}`));
+    } catch (err) {
+      document.getElementById("formName").textContent = "Form not found";
+      return;
+    }
+
+    document.getElementById("formName").textContent = metaForm.formName;
+    document.getElementById("formSub").innerHTML = `Meta Form · <span class="pill ${metaForm.status}">${metaForm.status.charAt(0).toUpperCase() + metaForm.status.slice(1)}</span>`;
+
+    renderRows();
+
+    if (App.hasPermission(me, "integrations.manage")) {
+      document.getElementById("saveMappingBtn").style.display = "inline-flex";
+    }
+  }
+
+  document.getElementById("saveMappingBtn").addEventListener("click", async () => {
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    const btn = document.getElementById("saveMappingBtn");
+
+    const mappings = [];
+    let invalid = false;
+    fields.forEach((f, i) => {
+      if (!f.mappingId) return; // question synced without a mapping row yet - nothing to save until the next sync seeds it
+      const selectValue = document.querySelector(`.mapping-target[data-index="${i}"]`).value;
+      if (selectValue === "custom") {
+        const label = document.querySelector(`.mapping-custom-label[data-index="${i}"]`).value.trim();
+        if (!label) { invalid = true; return; }
+        mappings.push({ mappingId: f.mappingId, mappingType: "custom", customFieldLabel: label });
+      } else {
+        mappings.push({ mappingId: f.mappingId, mappingType: "system", systemField: selectValue.replace("system:", "") });
+      }
+    });
+
+    if (invalid) {
+      banner.innerHTML = `<div class="banner error">Give every custom field a label before saving.</div>`;
+      return;
+    }
+
+    btn.disabled = true;
+    try {
+      await App.apiJson(`/api/integrations/meta/forms/${metaFormId}/mapping`, { method: "PUT", body: { mappings } });
+      banner.innerHTML = `<div class="banner success">Mapping saved.</div>`;
+      await load();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

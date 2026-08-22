@@ -55,6 +55,36 @@ export async function publishLeadReceived(input: PublishLeadReceivedInput): Prom
   return result.messageId;
 }
 
+export interface PublishTenantLeadReceivedInput {
+  leadEventId: string; // crm.meta_lead_events.id - this pipeline's durability record (no raw_meta_events row involved)
+  metaLeadId: string;
+  tenantId: string;
+}
+
+/**
+ * Tenant-level counterpart to publishLeadReceived above - "go process this
+ * lead" for a lead captured via the automatic per-Page webhook receiver
+ * (src/application/metaSync/metaLeadEventService.ts), rather than the
+ * legacy per-campaign one. Deliberately posts to the SAME
+ * /api/internal/process-lead endpoint (not a new one - see the Vercel
+ * Hobby 12-Function-cap reasoning throughout this codebase); the `kind`
+ * discriminator on the body is what api/internal/handler.ts uses to route
+ * to processMetaLeadEvent instead of the legacy processLead.
+ */
+export async function publishTenantLeadReceived(input: PublishTenantLeadReceivedInput): Promise<string> {
+  const client = getClient();
+  const result = await client.publishJSON({
+    url: `${getBaseUrl()}/api/internal/process-lead`,
+    body: { kind: "tenant_meta_sync", ...input },
+    retries: 5,
+    failureCallback: `${getBaseUrl()}/api/internal/dead-letter`,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return result.messageId;
+}
+
 export interface ScheduleReconciliationInput {
   cron: string; // e.g. "*/15 * * * *" - every 15 minutes, unlike Vercel Hobby's 1x/day cron cap
 }

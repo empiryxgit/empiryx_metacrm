@@ -16,7 +16,14 @@
 //
 // It also sweeps raw events that were durably persisted but never
 // successfully published to QStash (see getUnenqueuedRawEvents) and retries
-// publishing them - the second half of the durability guarantee.
+// publishing them - the second half of the durability guarantee for the
+// legacy per-campaign pipeline.
+//
+// Phase 11 adds the tenant-level pipeline's equivalent sweep -
+// getUnenqueuedMetaLeadEvents - closing the gap metaLeadEventService.ts
+// used to flag as "not yet built": a meta_lead_events row whose QStash
+// publish failed (or whose process died between the durability write and
+// the publish call) now self-heals here too, on the same schedule.
 
 import { getRecentLeadsForForm } from "../infrastructure/meta/graphClient";
 import { listActiveWebhookConfigs } from "../infrastructure/db/repositories/campaigns";
@@ -29,7 +36,9 @@ import {
   markRawEventEnqueueFailed,
   recordReconciliationRun,
 } from "../infrastructure/db/repositories";
-import { publishLeadReceived } from "../infrastructure/queue/qstash";
+import { getUnenqueuedMetaLeadEvents, markMetaLeadEventEnqueued } from "../infrastructure/db/repositories/metaLeadEvents";
+import { publishLeadReceived, publishTenantLeadReceived } from "../infrastructure/queue/qstash";
+import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { LeadPlatform } from "../domain/types";
 
 const LOOKBACK_HOURS = Number(process.env.RECONCILIATION_LOOKBACK_HOURS ?? 6);
@@ -41,6 +50,11 @@ export interface ReconciliationSummary {
   missingLeadsFound: number;
   missingLeadsRecovered: number;
   unenqueuedEventsRetried: number;
+  // Phase 11 - the tenant-level pipeline's own count, kept separate from
+  // unenqueuedEventsRetried above (a different table, a different
+  // publish call, a different failure mode) rather than folded into one
+  // combined number.
+  unenqueuedMetaLeadEventsRetried: number;
   errors: number;
 }
 
@@ -74,6 +88,12 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
 
           missingFound++;
           campaignMissingFound++;
+          // Phase 10: same dynamic field resolution the two live ingestion
+          // pipelines use - a lead reconciliation recovers directly from
+          // the Graph API had never had its fullName/email/phoneNumber (or
+          // any custom field) extracted at all before this, an existing
+          // gap this closes as a side effect of sharing the one resolver.
+          const contact = await resolveLeadFields(config.companyId, lead.formId, lead.fieldData);
           const result = await insertRecoveredLead({
             companyId: config.companyId,
             branchId: config.branchId,
@@ -82,12 +102,17 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
             platform: LeadPlatform.Unknown, // reconciliation doesn't know the source object type
             pageId: lead.pageId ?? "",
             formId: lead.formId,
+            formName: contact.formName,
             adId: lead.adId,
             adName: lead.adName,
             adSetId: lead.adSetId,
             adSetName: lead.adSetName,
             campaignId: lead.campaignId,
             campaignName: lead.campaignName,
+            fullName: contact.fullName,
+            email: contact.email,
+            phoneNumber: contact.phoneNumber,
+            customFields: contact.customFields,
             formResponses: lead.fieldData,
             metaCreatedAt: new Date(lead.createdTime),
             // No webhook raw event exists for a lead reconciliation discovers directly from
@@ -147,6 +172,27 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     }
   }
 
+  // Phase 11 - retry publishing any tenant-level meta_lead_events row that
+  // was durably persisted (by the /leadgen webhook receiver) but never
+  // confirmed enqueued. Same "leave it exactly as it was on a repeat
+  // failure" contract as the raw-event sweep above: a publish that fails
+  // again here is only logged, never re-thrown - the row stays at status
+  // "received" and simply reappears in the next sweep once the age cutoff
+  // has passed again (see getUnenqueuedMetaLeadEvents's own comment for
+  // why there is no separate "enqueue_failed" state to set).
+  const unenqueuedMetaLeadEvents = await getUnenqueuedMetaLeadEvents(15);
+  let metaLeadEventsRetried = 0;
+  for (const event of unenqueuedMetaLeadEvents) {
+    try {
+      await publishTenantLeadReceived({ leadEventId: event.id, metaLeadId: event.leadgenId, tenantId: event.tenantId });
+      await markMetaLeadEventEnqueued(event.id);
+      metaLeadEventsRetried++;
+    } catch (err) {
+      console.error(`[reconciliation] Failed to re-publish meta_lead_events ${event.id} (lead ${event.leadgenId}):`, err);
+      errors++;
+    }
+  }
+
   return {
     campaignsScanned: activeCampaigns.length,
     formsScanned,
@@ -154,6 +200,7 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     missingLeadsFound: missingFound,
     missingLeadsRecovered: missingRecovered,
     unenqueuedEventsRetried: retried,
+    unenqueuedMetaLeadEventsRetried: metaLeadEventsRetried,
     errors,
   };
 }

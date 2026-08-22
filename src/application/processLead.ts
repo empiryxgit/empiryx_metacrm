@@ -7,6 +7,7 @@ import { getLeadDetails, MetaApiError } from "../infrastructure/meta/graphClient
 import { releaseLeadIdClaim, tryClaimLeadId } from "../infrastructure/cache/redis";
 import { insertLead, leadExistsByMetaLeadId, logEvent } from "../infrastructure/db/repositories";
 import { getCampaign, getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
+import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { LeadPlatform } from "../domain/types";
 import type { MetaLeadDetails } from "../domain/types";
 
@@ -35,9 +36,15 @@ export async function processLead(
     return "duplicate";
   }
 
-  const webhookConfig = await getWebhookConfigByCampaignIdInternal(crmCampaignId);
+  // Phase 19 (tenant isolation audit) - scoped by companyId as well as
+  // crmCampaignId, so a webhook config belonging to a DIFFERENT tenant can
+  // never be returned here even if companyId/crmCampaignId ever diverged
+  // (e.g. a future bug reusing this queue message shape) - see
+  // getWebhookConfigByCampaignIdInternal's own comment.
+  const webhookConfig = await getWebhookConfigByCampaignIdInternal(companyId, crmCampaignId);
   if (!webhookConfig) {
-    // The campaign's webhook config was deleted/changed after this message was queued.
+    // The campaign's webhook config was deleted/changed after this message was queued
+    // (or, per the tenant check above, never belonged to this tenant to begin with).
     // Not retryable - there is no access token to fetch the lead with.
     await releaseLeadIdClaim(metaLeadId);
     throw new Error(`No webhook configuration found for campaign ${crmCampaignId}`);
@@ -52,64 +59,64 @@ export async function processLead(
     throw new RetryableProcessingError(`Failed to fetch lead details for ${metaLeadId}: ${message}`);
   }
 
-  const contact = extractContactFields(details);
+  // Phase 13: everything from here through the insert is wrapped so a
+  // failure ANYWHERE in it - a DB blip resolving fields/campaign, a
+  // Postgres outage on the insert itself, anything unexpected - always
+  // releases the Redis claim before propagating. Without this, a failure
+  // here (as opposed to the getLeadDetails failure just above, which
+  // already releases on its own) would leave the claim stuck for its full
+  // TTL: every retry landing before then would see "already claimed" and
+  // silently short-circuit to "duplicate" WITHOUT the lead ever having
+  // been created - exactly the silent discard Phase 13 rules out.
+  try {
+    // Phase 10: resolves every field on this lead (system + custom)
+    // against the tenant's own persisted Meta Field -> CRM Field mapping -
+    // see resolveLeadFields's own comment for the fallback behavior when
+    // this form was never synced.
+    const contact = await resolveLeadFields(companyId, details.formId, details.fieldData);
 
-  // Meta ingestion never receives a branchId directly (the webhook only
-  // knows the campaign) - it's resolved here from the campaign's own
-  // branchId, so a lead raised by a branch-owned campaign lands in that
-  // branch automatically, with zero change needed to the webhook handler
-  // or the QStash message shape.
-  const campaign = await getCampaign(companyId, crmCampaignId);
+    // Meta ingestion never receives a branchId directly (the webhook only
+    // knows the campaign) - it's resolved here from the campaign's own
+    // branchId, so a lead raised by a branch-owned campaign lands in that
+    // branch automatically, with zero change needed to the webhook
+    // handler or the QStash message shape.
+    const campaign = await getCampaign(companyId, crmCampaignId);
 
-  const result = await insertLead({
-    companyId,
-    branchId: campaign?.branchId ?? null,
-    crmCampaignId,
-    metaLeadId: details.id,
-    platform: objectType.includes("instagram") ? LeadPlatform.Instagram : LeadPlatform.Facebook,
-    pageId: details.pageId ?? "",
-    formId: details.formId,
-    adId: details.adId,
-    adName: details.adName,
-    adSetId: details.adSetId,
-    adSetName: details.adSetName,
-    campaignId: details.campaignId,
-    campaignName: details.campaignName,
-    fullName: contact.fullName,
-    email: contact.email,
-    phoneNumber: contact.phoneNumber,
-    formResponses: details.fieldData,
-    metaCreatedAt: new Date(details.createdTime),
-    rawEventId,
-  });
+    const result = await insertLead({
+      companyId,
+      branchId: campaign?.branchId ?? null,
+      crmCampaignId,
+      metaLeadId: details.id,
+      platform: objectType.includes("instagram") ? LeadPlatform.Instagram : LeadPlatform.Facebook,
+      pageId: details.pageId ?? "",
+      formId: details.formId,
+      formName: contact.formName,
+      adId: details.adId,
+      adName: details.adName,
+      adSetId: details.adSetId,
+      adSetName: details.adSetName,
+      campaignId: details.campaignId,
+      campaignName: details.campaignName,
+      fullName: contact.fullName,
+      email: contact.email,
+      phoneNumber: contact.phoneNumber,
+      customFields: contact.customFields,
+      formResponses: details.fieldData,
+      metaCreatedAt: new Date(details.createdTime),
+      rawEventId,
+    });
 
-  if (result.outcome === "duplicate") {
-    // Lost a race with another invocation - not an error.
-    await logEvent({ rawEventId, eventType: "Duplicate", detail: `Race-condition duplicate: ${metaLeadId}` });
-    return "duplicate";
-  }
-
-  await logEvent({ leadId: result.id, rawEventId, eventType: "Processed" });
-  return "processed";
-}
-
-function extractContactFields(details: MetaLeadDetails) {
-  const contact: { fullName?: string; email?: string; phoneNumber?: string } = {};
-  for (const field of details.fieldData) {
-    const value = field.values[0];
-    switch (field.name.toLowerCase()) {
-      case "full_name":
-      case "name":
-        contact.fullName = value;
-        break;
-      case "email":
-        contact.email = value;
-        break;
-      case "phone_number":
-      case "phone":
-        contact.phoneNumber = value;
-        break;
+    if (result.outcome === "duplicate") {
+      // Lost a race with another invocation - not an error.
+      await logEvent({ rawEventId, eventType: "Duplicate", detail: `Race-condition duplicate: ${metaLeadId}` });
+      return "duplicate";
     }
+
+    await logEvent({ leadId: result.id, rawEventId, eventType: "Processed" });
+    return "processed";
+  } catch (err) {
+    await releaseLeadIdClaim(metaLeadId);
+    const message = err instanceof Error ? err.message : String(err);
+    throw new RetryableProcessingError(`Failed to create lead for ${metaLeadId}: ${message}`);
   }
-  return contact;
 }

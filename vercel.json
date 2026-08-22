@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/webhooks/meta/handler.ts": { "maxDuration": 15 },
+    "api/webhooks/meta/handler.ts": { "maxDuration": 60 },
     "api/internal/handler.ts": { "maxDuration": 60 },
     "api/leads/handler.ts": { "maxDuration": 15 },
     "api/pipeline/index.ts": { "maxDuration": 15 },
@@ -38,6 +38,10 @@
     { "source": "/api/leads/:leadId", "destination": "/api/leads/handler?leadId=:leadId" },
 
     { "source": "/api/campaigns", "destination": "/api/campaigns/handler" },
+    { "source": "/api/campaigns/meta", "destination": "/api/campaigns/handler?resource=meta-campaigns" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/map", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=map" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/unmap", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=unmap" },
+    { "source": "/api/campaigns/meta/:metaCampaignId", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId" },
     { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },
     { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },
 
@@ -68,7 +72,21 @@
     { "source": "/api/public/forms/:publicKey/submit", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-submit" },
     { "source": "/api/public/forms/:publicKey", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-get" },
 
+    { "source": "/api/webhooks/meta/leadgen", "destination": "/api/webhooks/meta/handler?resource=leadgen" },
+    { "source": "/api/webhooks/meta/page-events", "destination": "/api/webhooks/meta/handler?resource=page-events" },
     { "source": "/api/webhooks/meta/:slug", "destination": "/api/webhooks/meta/handler?slug=:slug" },
+
+    { "source": "/api/integrations/meta/connect", "destination": "/api/webhooks/meta/handler?resource=oauth-connect" },
+    { "source": "/api/integrations/meta/callback", "destination": "/api/webhooks/meta/handler?resource=oauth-callback" },
+    { "source": "/api/integrations/meta/status", "destination": "/api/webhooks/meta/handler?resource=oauth-status" },
+    { "source": "/api/integrations/meta/disconnect", "destination": "/api/webhooks/meta/handler?resource=oauth-disconnect" },
+    { "source": "/api/integrations/meta/select", "destination": "/api/webhooks/meta/handler?resource=select" },
+    { "source": "/api/integrations/meta/sync", "destination": "/api/webhooks/meta/handler?resource=sync" },
+    { "source": "/api/integrations/meta/sync-status", "destination": "/api/webhooks/meta/handler?resource=sync-status" },
+    { "source": "/api/integrations/meta/webhook/retry", "destination": "/api/webhooks/meta/handler?resource=webhook-retry" },
+    { "source": "/api/integrations/meta/forms", "destination": "/api/webhooks/meta/handler?resource=meta-forms" },
+    { "source": "/api/integrations/meta/forms/:metaFormId/mapping", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId&sub=mapping" },
+    { "source": "/api/integrations/meta/forms/:metaFormId", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId" },
 
     { "source": "/", "destination": "/login.html" }
   ],

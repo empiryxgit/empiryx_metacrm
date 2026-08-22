@@ -36,6 +36,48 @@
       "when": 1787127121399,
       "tag": "0004_add_form_branch_config",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787314802677,
+      "tag": "0005_add_tenant_meta_integration",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787316235043,
+      "tag": "0006_add_meta_connection_user_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787317179129,
+      "tag": "0007_phase5_6_meta_selection_and_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787318327582,
+      "tag": "0008_phase7_page_webhook_subscription",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787394198101,
+      "tag": "0009_phase9_meta_campaign_entity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787395561467,
+      "tag": "0010_phase10_meta_form_field_mapping",
+      "breakpoints": true
     }
   ]
 }
