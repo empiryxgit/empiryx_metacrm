@@ -49,8 +49,13 @@ npm run setup:schedules
 ## Deploying to production (all free tier)
 
 1. **Neon** — create a project, copy the pooled connection string into `DATABASE_URL` on Vercel
-   (leave `DB_DRIVER` unset there so the app uses the Neon HTTP driver). Run
-   `npm run db:migrate` locally against Neon's direct (non-pooled) connection string once.
+   (leave `DB_DRIVER` unset there so the app uses the Neon HTTP driver). Also copy the DIRECT
+   (non-pooled) connection string into `MIGRATE_DATABASE_URL` on Vercel. Migrations now run
+   automatically as part of `npm run build` (see `scripts/migrate.ts`), which Vercel runs on
+   every deploy — there is no separate manual migration step anymore. Set `MIGRATE_DATABASE_URL`
+   (or at least `DATABASE_URL`) for every Vercel environment you deploy to (Production, and
+   Preview too if you want preview deploys to build successfully), or the build step will fail
+   with "Neither MIGRATE_DATABASE_URL nor DATABASE_URL is set."
 2. **Upstash Redis** — create a Redis database, copy the REST URL/token into
    `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`.
 3. **Upstash QStash** — copy `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`,
