@@ -887,6 +887,46 @@ export const leads = crm.table(
   }),
 );
 
+// A salesperson-logged follow-up entry against a lead/customer - the
+// structured history behind the Pipeline page's lead-details popup ("Follow-
+// ups" section). Deliberately separate from `leads.notes` (a single freeform
+// field) and `leads.nextFollowUpAt` (just the next due date): this table is
+// an append-only log of every call/contact attempt made, each with its own
+// remarks/outcome/timestamp/author, so a salesperson can see the full
+// history of contact with a lead, not just the latest note. Logging an entry
+// with a `nextFollowUpAt` also updates the parent lead's own
+// `nextFollowUpAt` column (see insertLeadFollowUp in repositories.ts) so the
+// list view's "Next follow-up" column always reflects the latest one set
+// here, without duplicating date-tracking logic in two places.
+export const leadFollowUps = crm.table(
+  "lead_follow_ups",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    // Denormalized alongside leadId (rather than joining through leads for
+    // every tenant-isolation check) - same defense-in-depth pattern as other
+    // company-scoped tables in this file.
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
+    remarks: text("remarks").notNull(),
+    // Small fixed catalog (connected/no_answer/left_voicemail/not_interested/
+    // rescheduled/converted/other) enforced at the application layer, not a
+    // DB enum, so adding an outcome later never needs a migration - see
+    // FOLLOW_UP_OUTCOMES in public/pipeline.html and api/leads/handler.ts.
+    outcome: text("outcome"),
+    nextFollowUpAt: timestamp("next_follow_up_at", { withTimezone: true }),
+    // Who logged this entry. Nullable + ON DELETE SET NULL (not NOT NULL) so
+    // a user being removed later never breaks or deletes the follow-up
+    // history they left behind - same reasoning as leads.ownerId.
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    leadIdx: index("ix_lead_follow_ups_lead_id").on(t.leadId),
+    companyIdx: index("ix_lead_follow_ups_company_id").on(t.companyId),
+    createdAtIdx: index("ix_lead_follow_ups_created_at").on(t.createdAt),
+  }),
+);
+
 export const leadProcessingLog = crm.table(
   "lead_processing_log",
   {

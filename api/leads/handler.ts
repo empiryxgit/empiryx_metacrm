@@ -11,7 +11,14 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
-import { insertManualLead, updateLeadCrmFields, updateLeadPipelineStage } from "../../src/infrastructure/db/repositories";
+import {
+  insertLeadFollowUp,
+  insertManualLead,
+  isLeadAccessible,
+  listLeadFollowUps,
+  updateLeadCrmFields,
+  updateLeadPipelineStage,
+} from "../../src/infrastructure/db/repositories";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
 import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
@@ -55,6 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
   if (subresource === "stage") return handleStage(req, res, leadId);
+  if (subresource === "followups") return handleFollowUps(req, res, leadId);
   if (!subresource) return handleUpdate(req, res, leadId);
 
   res.status(404).json({ error: "Not found" });
@@ -159,6 +167,94 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
     return;
   }
   res.status(200).json({ updated: true });
+}
+
+// Fixed catalog for a follow-up entry's optional `outcome` tag - kept here
+// (not a DB enum) so adding one later never needs a migration. Mirrored in
+// public/pipeline.html's FOLLOW_UP_OUTCOMES for the <select> options; keep
+// both lists in sync if this changes.
+const FOLLOW_UP_OUTCOMES = [
+  "connected",
+  "no_answer",
+  "left_voicemail",
+  "not_interested",
+  "rescheduled",
+  "converted",
+  "other",
+];
+
+interface CreateFollowUpBody {
+  remarks?: string;
+  outcome?: string;
+  nextFollowUpAt?: string | null;
+}
+
+// Pipeline lead-details popup's "Follow-ups" section - GET lists the full
+// history for one lead, POST logs a new entry (optionally moving the
+// lead's own nextFollowUpAt forward in the same call - see
+// insertLeadFollowUp). Both branches share the same tenant/branch-access
+// check via isLeadAccessible before touching anything, so a caller can
+// never read or write follow-ups against a lead outside their own company
+// or branch access just by guessing its id.
+async function handleFollowUps(req: VercelRequest, res: VercelResponse, leadId: string) {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const permission = req.method === "GET" ? PERMISSIONS.LEADS_VIEW : PERMISSIONS.LEADS_MANAGE;
+  const auth = await requirePermission(req, res, permission);
+  if (!auth) return;
+
+  const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+  const accessible = await isLeadAccessible(auth.companyId, leadId, branchCondition);
+  if (!accessible) {
+    res.status(404).json({ error: "Lead not found." });
+    return;
+  }
+
+  if (req.method === "GET") {
+    try {
+      const followUps = await listLeadFollowUps(auth.companyId, leadId);
+      res.status(200).json({ followUps });
+    } catch (err) {
+      console.error("[leads] Failed to list follow-ups:", err);
+      res.status(500).json({ error: "Failed to load follow-ups." });
+    }
+    return;
+  }
+
+  const body = (req.body ?? {}) as CreateFollowUpBody;
+  const remarks = body.remarks?.trim();
+  if (!remarks) {
+    res.status(400).json({ error: "remarks is required." });
+    return;
+  }
+  const outcome = body.outcome && FOLLOW_UP_OUTCOMES.includes(body.outcome) ? body.outcome : undefined;
+  let nextFollowUpAt: Date | null | undefined;
+  if (body.nextFollowUpAt !== undefined) {
+    const d = body.nextFollowUpAt ? new Date(body.nextFollowUpAt) : null;
+    if (d && Number.isNaN(d.getTime())) {
+      res.status(400).json({ error: "nextFollowUpAt is not a valid date." });
+      return;
+    }
+    nextFollowUpAt = d;
+  }
+
+  try {
+    const followUp = await insertLeadFollowUp({
+      companyId: auth.companyId,
+      leadId,
+      remarks,
+      outcome,
+      nextFollowUpAt,
+      createdBy: auth.userId,
+    });
+    res.status(201).json({ followUp });
+  } catch (err) {
+    console.error("[leads] Failed to log follow-up:", err);
+    res.status(500).json({ error: "Failed to log follow-up." });
+  }
 }
 
 interface ManualCreateBody {

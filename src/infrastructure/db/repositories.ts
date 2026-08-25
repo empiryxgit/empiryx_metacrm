@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
-import { and, eq, gte, inArray, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
-import { leadProcessingLog, leads, rawMetaEvents, reconciliationRuns } from "./schema";
+import { leadFollowUps, leadProcessingLog, leads, rawMetaEvents, reconciliationRuns, users } from "./schema";
 import { firstOrThrow } from "./util";
 import type { IntegrationCounts } from "../../domain/types";
 
@@ -427,6 +427,89 @@ export async function updateLeadCrmFields(companyId: string, leadId: string, inp
     .where(and(...conditions))
     .returning();
   return rows[0] ?? null;
+}
+
+// ---- Follow-ups (Pipeline lead-details popup) --------------------------
+//
+// A structured, append-only log of contact attempts against a lead/
+// customer - separate from `leads.notes` (one freeform field) and
+// `leads.nextFollowUpAt` (just the next due date). See leadFollowUps in
+// schema.ts for the full rationale.
+
+/** Existence + tenant/branch-access check shared by both follow-up
+ * endpoints below - same "company_id + branch_id enforced on the backend"
+ * contract as updateLeadPipelineStage/updateLeadCrmFields above, so a
+ * caller can never list or log a follow-up against a lead outside their
+ * own company or branch access just by guessing its id. */
+export async function isLeadAccessible(companyId: string, leadId: string, branchCondition?: SQL): Promise<boolean> {
+  const db = await getDb();
+  const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
+  if (branchCondition) conditions.push(branchCondition);
+  const rows = await db.select({ id: leads.id }).from(leads).where(and(...conditions)).limit(1);
+  return rows.length > 0;
+}
+
+export interface InsertLeadFollowUpInput {
+  companyId: string;
+  leadId: string;
+  remarks: string;
+  outcome?: string;
+  nextFollowUpAt?: Date | null;
+  createdBy?: string;
+}
+
+/** Logs one follow-up entry. When `nextFollowUpAt` is provided, also
+ * updates the parent lead's own `nextFollowUpAt` column in the same call -
+ * so the Pipeline list's "Next follow-up" column always reflects whatever
+ * was most recently set here, without the caller needing a second request.
+ * Scoped to companyId on both writes as defense in depth (the caller has
+ * already been authorized via isLeadAccessible above, including branch
+ * access, before this is ever invoked). */
+export async function insertLeadFollowUp(input: InsertLeadFollowUpInput) {
+  const db = await getDb();
+  const rows = await db
+    .insert(leadFollowUps)
+    .values({
+      companyId: input.companyId,
+      leadId: input.leadId,
+      remarks: input.remarks,
+      outcome: input.outcome,
+      nextFollowUpAt: input.nextFollowUpAt ?? undefined,
+      createdBy: input.createdBy,
+    })
+    .returning();
+
+  if (input.nextFollowUpAt) {
+    await db
+      .update(leads)
+      .set({ nextFollowUpAt: input.nextFollowUpAt, updatedAt: new Date() })
+      .where(and(eq(leads.companyId, input.companyId), eq(leads.id, input.leadId)));
+  }
+
+  return firstOrThrow(rows);
+}
+
+/** Full follow-up history for one lead, newest first, with each entry's
+ * author name resolved from `users` (left join - a since-deleted user's
+ * entries still show up, just with authorName: null, per createdBy's ON
+ * DELETE SET NULL above). */
+export async function listLeadFollowUps(companyId: string, leadId: string) {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: leadFollowUps.id,
+      remarks: leadFollowUps.remarks,
+      outcome: leadFollowUps.outcome,
+      nextFollowUpAt: leadFollowUps.nextFollowUpAt,
+      createdAt: leadFollowUps.createdAt,
+      createdBy: leadFollowUps.createdBy,
+      authorName: users.fullName,
+    })
+    .from(leadFollowUps)
+    .leftJoin(users, eq(users.id, leadFollowUps.createdBy))
+    .where(and(eq(leadFollowUps.companyId, companyId), eq(leadFollowUps.leadId, leadId)))
+    .orderBy(desc(leadFollowUps.createdAt));
+  return rows;
 }
 
 // ---- Audit log --------------------------------------------------------

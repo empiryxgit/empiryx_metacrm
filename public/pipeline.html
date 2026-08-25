@@ -18,7 +18,11 @@
         <p class="page-sub">Manage leads and customers from first contact to conversion.</p>
       </div>
       <div class="page-head-actions">
-        <div class="segmented" id="viewToggle" role="tablist" aria-label="Pipeline view">
+        <!-- Board view is hidden for now (see BOARD_VIEW_ENABLED below) - List
+             is the only view, so the toggle that used to switch between them
+             is hidden rather than removed, to make restoring it later a
+             one-line change. -->
+        <div class="segmented" id="viewToggle" role="tablist" aria-label="Pipeline view" style="display:none">
           <button type="button" data-view="board" role="tab">Board</button>
           <button type="button" data-view="list" role="tab">List</button>
         </div>
@@ -116,11 +120,17 @@
   let template = null, stages = [], sources = [], owners = [];
   let allRows = [];
   let campaignName = "";
-  let viewMode = localStorage.getItem("setu_pipeline_view") === "list" ? "list" : "board";
+  // Board view is hidden for now - flip this to true (and remove the
+  // `style="display:none"` on #viewToggle above) to bring it back. Every
+  // board-rendering function below (renderBoard/wireDragDrop/leadCard/...)
+  // is left in place, unused, for exactly that.
+  const BOARD_VIEW_ENABLED = false;
+  let viewMode = BOARD_VIEW_ENABLED
+    ? (localStorage.getItem("setu_pipeline_view") === "list" ? "list" : "board")
+    : "list";
   // Set when arriving via a link like /pipeline.html?stage=won (e.g. from
   // the Dashboard's pipeline funnel). Cleared by the chip's "Clear" action.
   let stageFilter = new URLSearchParams(window.location.search).get("stage") || null;
-  if (stageFilter) viewMode = "list"; // a single-stage filter reads best as a flat list, not a mostly-empty board
   const MANUAL_SOURCES = [
     { key: "referral", label: "Referral" },
     { key: "phone", label: "Phone" },
@@ -341,7 +351,7 @@
     const owners_ = ownerById();
     const sorted = [...rows].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     document.getElementById("listBody").innerHTML = sorted.length ? sorted.map(r => `
-      <tr>
+      <tr class="row-clickable" data-lead-id="${r.id}" tabindex="0">
         <td><div class="lead-identity"><div class="lead-name">${App.escapeHtml(r.fullName || "Unnamed lead")}</div>${r.email ? `<div class="lead-meta-id">${App.escapeHtml(r.email)}</div>` : ""}</div></td>
         <td>${App.escapeHtml(r.phoneNumber || "—")}</td>
         <td>${App.escapeHtml(sourceLabel(r.source))}</td>
@@ -357,6 +367,13 @@
 
   function renderView(){
     const rows = applyFilters(allRows);
+    if (!BOARD_VIEW_ENABLED) {
+      document.getElementById("board").style.display = "none";
+      document.querySelector(".mobile-stage-select").style.display = "none";
+      document.getElementById("listWrap").style.display = "block";
+      renderList(rows);
+      return;
+    }
     document.querySelectorAll("#viewToggle button").forEach(b => b.classList.toggle("active", b.dataset.view === viewMode));
     document.getElementById("board").style.display = viewMode === "board" ? "grid" : "none";
     document.querySelector(".mobile-stage-select").style.display = viewMode === "board" ? "" : "none";
@@ -373,6 +390,26 @@
   });
   document.getElementById("mobileStage").addEventListener("change", () => renderView());
   document.getElementById("searchInput").addEventListener("input", () => renderView());
+
+  // Clicking (or Enter/Space-ing, for keyboard users - see tabindex="0" on
+  // each <tr> in renderList) anywhere on a list row opens its full-details
+  // popup. Delegated on the tbody since renderList() rebuilds rows on every
+  // load()/filter change - a direct per-row listener would need rewiring
+  // every time.
+  document.getElementById("listBody").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-lead-id]");
+    if (!tr) return;
+    const row = allRows.find(r => r.id === tr.dataset.leadId);
+    if (row) openLeadDetailsModal(row);
+  });
+  document.getElementById("listBody").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const tr = e.target.closest("tr[data-lead-id]");
+    if (!tr) return;
+    e.preventDefault();
+    const row = allRows.find(r => r.id === tr.dataset.leadId);
+    if (row) openLeadDetailsModal(row);
+  });
 
   // Stage select is a second entry point to the same `stageFilter` source of
   // truth as the URL-driven chip (see renderStageFilterChip) - keep the URL
@@ -512,25 +549,40 @@
     return undefined;
   }
 
+  // mode is "create" (+ Add Customer), "convert" (Not interested -> Add to
+  // CRM, for a digital lead not yet fully worked), or "edit" (the lead
+  // details popup's "Edit details" button, for any already-existing lead).
+  // "convert" and "edit" behave identically for prefill/submit purposes -
+  // both patch an existing lead - they only differ in the copy shown, since
+  // "Add to CRM" doesn't read correctly for a lead/customer that's already
+  // fully in the CRM.
   function customerModalHtmlLegacy(mode, lead){
-    const isConvert = mode === "convert";
-    const sourceOptions = isConvert
+    const isUpdate = mode !== "create";
+    const isEdit = mode === "edit";
+    const sourceOptions = isUpdate
       ? `<option value="${lead.source}" selected>${App.escapeHtml(sourceLabel(lead.source))}</option>`
       : MANUAL_SOURCES.map(s => `<option value="${s.key}">${App.escapeHtml(s.label)}</option>`).join("");
     const stageOptions = stages.map(s => {
-      const selected = isConvert ? lead.pipelineStage === s.key : s.isInitial;
+      const selected = isUpdate ? lead.pipelineStage === s.key : s.isInitial;
       return `<option value="${s.key}" ${selected ? "selected" : ""}>${App.escapeHtml(s.label)}</option>`;
     }).join("");
     const ownerOptions = `<option value="">Unassigned</option>` +
-      owners.map(o => `<option value="${o.id}" ${isConvert && lead.ownerId === o.id ? "selected" : ""}>${App.escapeHtml(o.fullName)}</option>`).join("");
+      owners.map(o => `<option value="${o.id}" ${isUpdate && lead.ownerId === o.id ? "selected" : ""}>${App.escapeHtml(o.fullName)}</option>`).join("");
+    const title = isEdit ? "Edit details" : isUpdate ? "Add to CRM" : "Add Customer";
+    const subtitle = isEdit
+      ? "Update this lead's stage, owner, follow-up date and notes."
+      : isUpdate
+        ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing."
+        : "Create a customer and place them in the pipeline.";
+    const saveLabel = isEdit ? "Save changes" : isUpdate ? "Save Customer" : "Add Customer";
 
     return `
       <div class="modal-overlay" id="customerModalOverlay">
         <div class="modal">
           <div class="modal-header">
             <div>
-              <h2>${isConvert ? "Add to CRM" : "Add Customer"}</h2>
-              <p>${isConvert ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing." : "Create a customer and place them in the pipeline."}</p>
+              <h2>${title}</h2>
+              <p>${subtitle}</p>
             </div>
             <button class="modal-close" type="button" id="customerModalClose" aria-label="Close">✕</button>
           </div>
@@ -548,7 +600,7 @@
             ${branchPickerHtml(mode)}
 
             <div class="modal-field-grid">
-              <div><label for="cf_source">Source</label><select id="cf_source" ${isConvert ? "disabled" : ""}>${sourceOptions}</select></div>
+              <div><label for="cf_source">Source</label><select id="cf_source" ${isUpdate ? "disabled" : ""}>${sourceOptions}</select></div>
               <div><label for="cf_owner">Owner</label><select id="cf_owner">${ownerOptions}</select></div>
             </div>
             <div class="modal-field-grid">
@@ -557,11 +609,11 @@
             </div>
             <label for="cf_notes">Requirement / Notes</label>
             <textarea id="cf_notes" rows="3">${App.escapeHtml(lead?.notes || "")}</textarea>
-            ${isConvert && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
+            ${isUpdate && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
           </div>
           <div class="modal-footer">
             <button class="btn secondary" type="button" id="customerModalCancel">Cancel</button>
-            <button class="btn" type="button" id="customerModalSave">${isConvert ? "Save Customer" : "Add Customer"}</button>
+            <button class="btn" type="button" id="customerModalSave">${saveLabel}</button>
           </div>
         </div>
       </div>`;
@@ -595,7 +647,8 @@
   }
 
   function customerModalHtmlFromForm(mode, lead){
-    const isConvert = mode === "convert";
+    const isUpdate = mode !== "create";
+    const isEdit = mode === "edit";
     const dynOpts = {
       dynamicOptions: {
         source: sources.map(s => ({ value: s.key, label: s.label })),
@@ -604,19 +657,26 @@
         crmCampaignId: campaignsList.map(c => ({ value: c.id, label: c.name })),
       },
     };
-    if (isConvert) {
+    if (isUpdate) {
       const sourceField = internalFormFields.find(f => f.systemField === "source");
       if (sourceField) dynOpts.disabledFields = [sourceField.key];
     }
     const bodyHtml = FormRenderer.renderFields(internalFormFields, valuesFromLead(internalFormFields, lead), dynOpts);
+    const title = isEdit ? "Edit details" : isUpdate ? "Add to CRM" : "Add Customer";
+    const subtitle = isEdit
+      ? "Update this lead's stage, owner, follow-up date and notes."
+      : isUpdate
+        ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing."
+        : "Create a customer and place them in the pipeline.";
+    const saveLabel = isEdit ? "Save changes" : isUpdate ? "Save Customer" : "Add Customer";
 
     return `
       <div class="modal-overlay" id="customerModalOverlay">
         <div class="modal">
           <div class="modal-header">
             <div>
-              <h2>${isConvert ? "Add to CRM" : "Add Customer"}</h2>
-              <p>${isConvert ? "Original source is kept as " + App.escapeHtml(sourceLabel(lead.source)) + " — just fill in what's missing." : "Create a customer and place them in the pipeline."}</p>
+              <h2>${title}</h2>
+              <p>${subtitle}</p>
             </div>
             <button class="modal-close" type="button" id="customerModalClose" aria-label="Close">✕</button>
           </div>
@@ -624,11 +684,11 @@
             <div id="customerModalError"></div>
             ${branchPickerHtml(mode)}
             <form id="customerModalForm">${bodyHtml}</form>
-            ${isConvert && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
+            ${isUpdate && lead.campaignName ? `<p class="hint">Campaign: ${App.escapeHtml(lead.campaignName)}</p>` : ""}
           </div>
           <div class="modal-footer">
             <button class="btn secondary" type="button" id="customerModalCancel">Cancel</button>
-            <button class="btn" type="button" id="customerModalSave">${isConvert ? "Save Customer" : "Add Customer"}</button>
+            <button class="btn" type="button" id="customerModalSave">${saveLabel}</button>
           </div>
         </div>
       </div>`;
@@ -650,7 +710,7 @@
     saveBtn.disabled = true;
     try {
       const body = { values };
-      if (mode === "convert") {
+      if (mode !== "create") {
         body.leadId = leadId;
       } else {
         // Preselected/chosen branch - see branchPickerHtml/resolveCreateBranchId
@@ -791,6 +851,192 @@
     document.getElementById("niAddToCrm").addEventListener("click", () => {
       openCustomerModal({ mode: "convert", lead });
     });
+  }
+
+  // -------------------------------------------------------------------
+  // Lead details popup - opened by clicking any row in the list view (see
+  // the #listBody delegated click/keydown listeners above). Shows every
+  // field on the lead read-only, plus the Follow-ups section: full history
+  // of logged contact attempts, and a form to log a new one. Board view's
+  // drag-and-drop is hidden for now (see BOARD_VIEW_ENABLED), so "Edit
+  // details" below is the replacement path for changing a lead's stage/
+  // owner/notes/custom fields - it reuses the exact same form as "Not
+  // interested -> Add to CRM" (see customerModalHtml/openCustomerModal),
+  // just under an "edit" mode with its own copy so it reads correctly for
+  // a lead that's already fully in the CRM, not only a fresh conversion.
+  // -------------------------------------------------------------------
+
+  const FOLLOW_UP_OUTCOMES = [
+    { key: "connected", label: "Connected" },
+    { key: "no_answer", label: "No Answer" },
+    { key: "left_voicemail", label: "Left Voicemail" },
+    { key: "not_interested", label: "Not Interested" },
+    { key: "rescheduled", label: "Rescheduled" },
+    { key: "converted", label: "Converted" },
+    { key: "other", label: "Other" },
+  ];
+  const followUpOutcomeLabel = (key) => FOLLOW_UP_OUTCOMES.find(o => o.key === key)?.label || key;
+
+  function detailRow(label, value){
+    return `<div class="detail-row"><span class="detail-label">${App.escapeHtml(label)}</span><span class="detail-value">${value}</span></div>`;
+  }
+
+  function leadDetailsBodyHtml(lead){
+    const owners_ = ownerById();
+    const stagePillClass = resolvedStage(lead) === "won" ? "processed" : resolvedStage(lead) === "lost" ? "failed" : "pending";
+    return `
+      <div class="lead-identity" style="margin-bottom:14px">
+        <span class="avatar">${App.escapeHtml(App.initials(lead.fullName || "?"))}</span>
+        <div>
+          <div class="lead-name">${App.escapeHtml(lead.fullName || "Unnamed lead")}</div>
+          <div class="hint" style="margin:0">${App.escapeHtml(lead.leadType === "manual_customer" ? "Manual Customer" : "Digital Lead")}</div>
+        </div>
+      </div>
+      ${detailRow("Phone", App.escapeHtml(lead.phoneNumber || "—"))}
+      ${detailRow("Email", App.escapeHtml(lead.email || "—"))}
+      ${detailRow("Source", App.escapeHtml(sourceLabel(lead.source)))}
+      ${detailRow("Campaign", App.escapeHtml(lead.campaignName || "—"))}
+      ${detailRow("Stage", `<span class="pill ${stagePillClass}">${App.escapeHtml(stageLabel(resolvedStage(lead)))}</span>`)}
+      ${detailRow("Owner", lead.ownerId && owners_[lead.ownerId] ? App.escapeHtml(owners_[lead.ownerId]) : "—")}
+      ${detailRow("Next follow-up", `<span id="detailNextFollowUp">${lead.nextFollowUpAt ? App.escapeHtml(fmtDate(lead.nextFollowUpAt)) : "—"}</span>`)}
+      ${detailRow("Created", App.escapeHtml(fmtDateTime(lead.createdAt)))}
+      ${template.fields.length ? `
+        <div style="height:1px; background:var(--border); margin:14px 0"></div>
+        <p class="section-title" style="margin-top:0; font-size:13px">Details</p>
+        ${template.fields.map(f => detailRow(f.label, fmtFieldValue(f, lead.customFields && lead.customFields[f.key]))).join("")}
+      ` : ""}
+      ${lead.notes ? `
+        <div style="height:1px; background:var(--border); margin:14px 0"></div>
+        <p class="section-title" style="margin-top:0; font-size:13px">Notes</p>
+        <p style="font-size:12.5px; color:var(--text-secondary); line-height:1.55; white-space:pre-wrap; margin:0">${App.escapeHtml(lead.notes)}</p>
+      ` : ""}
+
+      <div style="height:1px; background:var(--border); margin:14px 0"></div>
+      <p class="section-title" style="margin-top:0; font-size:13px">Follow-ups</p>
+      <div id="followupEntries" class="followup-entry-list">
+        <p class="hint" style="margin:0">Loading…</p>
+      </div>
+
+      <div class="followup-form">
+        <div id="followupFormError"></div>
+        <label for="fuRemarks">Add a follow-up</label>
+        <textarea id="fuRemarks" rows="3" placeholder="What happened on this call/visit?"></textarea>
+        <div class="modal-field-grid">
+          <div>
+            <label for="fuOutcome">Outcome</label>
+            <select id="fuOutcome">
+              <option value="">— Optional —</option>
+              ${FOLLOW_UP_OUTCOMES.map(o => `<option value="${o.key}">${App.escapeHtml(o.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label for="fuNextFollowUp">Next follow-up</label>
+            <input id="fuNextFollowUp" type="date" />
+          </div>
+        </div>
+        <button class="btn secondary sm" type="button" id="fuSaveBtn" style="margin-top:10px">+ Log follow-up</button>
+      </div>
+    `;
+  }
+
+  function followUpEntryHtml(f){
+    const tags = [];
+    if (f.outcome) tags.push(`<span class="pill pending">${App.escapeHtml(followUpOutcomeLabel(f.outcome))}</span>`);
+    if (f.nextFollowUpAt) tags.push(`<span class="pill system">Next: ${App.escapeHtml(fmtDate(f.nextFollowUpAt))}</span>`);
+    return `<div class="followup-entry">
+      <div class="followup-entry-head">
+        <span class="followup-entry-author">${App.escapeHtml(f.authorName || "Unknown")}</span>
+        <span class="followup-entry-date">${App.escapeHtml(fmtDateTime(f.createdAt))}</span>
+      </div>
+      <div class="followup-entry-remarks">${App.escapeHtml(f.remarks)}</div>
+      ${tags.length ? `<div class="followup-entry-tags">${tags.join("")}</div>` : ""}
+    </div>`;
+  }
+
+  async function loadFollowUpsIntoModal(leadId){
+    const box = document.getElementById("followupEntries");
+    if (!box) return; // modal was closed/replaced before this resolved
+    try {
+      const { followUps } = await App.apiJson(`/api/leads/${leadId}/followups`);
+      if (!document.getElementById("followupEntries")) return; // still guard post-await
+      box.innerHTML = followUps.length
+        ? followUps.map(followUpEntryHtml).join("")
+        : `<p class="hint" style="margin:0">No follow-ups logged yet.</p>`;
+    } catch (err) {
+      if (box) box.innerHTML = `<p class="hint" style="margin:0">Couldn't load follow-up history.</p>`;
+    }
+  }
+
+  function wireFollowUpForm(lead){
+    document.getElementById("fuSaveBtn").addEventListener("click", async () => {
+      const errBox = document.getElementById("followupFormError");
+      errBox.innerHTML = "";
+      const remarks = document.getElementById("fuRemarks").value.trim();
+      if (!remarks) {
+        errBox.innerHTML = `<div class="banner error">Enter what happened before saving.</div>`;
+        return;
+      }
+      const outcome = document.getElementById("fuOutcome").value || undefined;
+      const nextFollowUpAtRaw = document.getElementById("fuNextFollowUp").value;
+
+      const saveBtn = document.getElementById("fuSaveBtn");
+      saveBtn.disabled = true;
+      try {
+        await App.apiJson(`/api/leads/${lead.id}/followups`, {
+          method: "POST",
+          body: { remarks, outcome, nextFollowUpAt: nextFollowUpAtRaw || undefined },
+        });
+        document.getElementById("fuRemarks").value = "";
+        document.getElementById("fuOutcome").value = "";
+        if (nextFollowUpAtRaw) {
+          lead.nextFollowUpAt = nextFollowUpAtRaw;
+          const nextEl = document.getElementById("detailNextFollowUp");
+          if (nextEl) nextEl.textContent = fmtDate(nextFollowUpAtRaw);
+        }
+        document.getElementById("fuNextFollowUp").value = "";
+        await loadFollowUpsIntoModal(lead.id);
+        load(); // background refresh so the list's own "Next follow-up" column stays in sync
+      } catch (err) {
+        errBox.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+
+  function openLeadDetailsModal(lead){
+    const showNotInterested = canManageLeads && lead.leadType === "digital_lead";
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="leadDetailsOverlay">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <div>
+              <h2>${App.escapeHtml(lead.fullName || "Unnamed lead")}</h2>
+              <p>${App.escapeHtml(sourceLabel(lead.source))}${lead.campaignName ? " · " + App.escapeHtml(lead.campaignName) : ""}</p>
+            </div>
+            <button class="modal-close" type="button" id="leadDetailsClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body">${leadDetailsBodyHtml(lead)}</div>
+          <div class="modal-footer modal-footer-split">
+            <div>
+              ${showNotInterested ? `<button class="btn secondary" type="button" id="leadDetailsNotInterested">Not interested</button>` : ""}
+            </div>
+            <div style="display:flex; gap:8px">
+              <button class="btn secondary" type="button" id="leadDetailsCloseBtn">Close</button>
+              ${canManageLeads ? `<button class="btn" type="button" id="leadDetailsEdit">Edit details</button>` : ""}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("leadDetailsClose").addEventListener("click", closeModal);
+    document.getElementById("leadDetailsCloseBtn").addEventListener("click", closeModal);
+    document.getElementById("leadDetailsOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "leadDetailsOverlay") closeModal();
+    });
+    document.getElementById("leadDetailsNotInterested")?.addEventListener("click", () => openNotInterestedModal(lead));
+    document.getElementById("leadDetailsEdit")?.addEventListener("click", () => openCustomerModal({ mode: "edit", lead }));
+    wireFollowUpForm(lead);
+    loadFollowUpsIntoModal(lead.id);
   }
 
   document.addEventListener("keydown", (e) => {
