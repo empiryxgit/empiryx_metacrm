@@ -14,7 +14,15 @@ export async function createCampaign(input: {
   branchId?: string | null;
   name: string;
   platform: string;
-  createdBy: string;
+  // Optional/nullable so the sync pipeline's own auto-create-on-first-sync
+  // (see metaCampaignService.ts) can create a row with no acting user -
+  // `campaigns.createdBy` is ON DELETE SET NULL for exactly this "system,
+  // not a person" case. Every human-facing call site (the Create CRM
+  // campaign form) still always passes the acting user's id.
+  createdBy?: string | null;
+  // "manual" (default, matches the column's own DB default) vs "meta_sync"
+  // - see campaigns.source's schema.ts comment for what each means.
+  source?: string;
 }) {
   const db = await getDb();
   const rows = await db.insert(campaigns).values(input).returning();

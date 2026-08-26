@@ -33,8 +33,16 @@ export interface UpsertMetaCampaignInput {
  * unique index (`ux_meta_campaigns_tenant_meta_campaign`). A re-sync only
  * ever refreshes name/status/metaAdAccountId/lastSyncAt - crmCampaignId is
  * NEVER touched here, on insert (defaults to null/"unmapped") or on
- * conflict, since the CRM mapping is owned entirely by an explicit user
- * action (see mapMetaCampaignToCrmCampaign), not by the sync.
+ * conflict, since the CRM mapping is owned entirely by an explicit action
+ * (see mapMetaCampaignToCrmCampaign), never implicitly by this upsert.
+ * That explicit action is usually a person (meta-campaign.html), but as of
+ * the sync's own auto-map-on-first-sync step (see
+ * syncCampaignsForSelectedAdAccount in metaCampaignService.ts, which calls
+ * this function then separately checks "was this row brand new?" before
+ * ever calling mapMetaCampaignToCrmCampaign itself) it can also be the
+ * sync bootstrapping a brand-new campaign - the contract this comment
+ * describes ("never implicitly, only via an explicit call") still holds
+ * either way; only WHO calls that explicit function has widened.
  */
 export async function upsertMetaCampaign(tenantId: string, adAccountRowId: string, input: UpsertMetaCampaignInput) {
   const db = await getDb();

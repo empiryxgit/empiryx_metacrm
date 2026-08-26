@@ -146,6 +146,7 @@
     const emailError = document.getElementById("email-error");
     const passwordError = document.getElementById("password-error");
     const toggleBtn = document.getElementById("togglePassword");
+    const rememberInput = document.getElementById("remember");
     const params = new URLSearchParams(window.location.search);
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -216,6 +217,12 @@
           body: {
             email: emailInput.value.trim(),
             password: passwordInput.value,
+            // Left unchecked by default (see the checkbox markup above) -
+            // the server treats anything other than a literal `true` here
+            // as "don't remember," so this only ever asks for the LONGER of
+            // two server-defined session lifetimes, never grants one on its
+            // own (see api/auth/handler.ts's handleLogin).
+            rememberMe: rememberInput.checked,
           },
         });
         if (result.user.mustChangePassword) {

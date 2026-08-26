@@ -23,7 +23,22 @@ import { createHash, randomBytes } from "node:crypto";
 // the browser after the old 15 minutes regardless of the token still being
 // valid inside it.
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 60 minutes
+// "Remember me" checked (login.html) - a session that should survive the
+// browser closing and reopening days later. Also what registration and
+// password-reset flows use, since there's no checkbox on those screens and
+// "just created/reset the account" is the friendliest default.
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+// "Remember me" left unchecked - the DEFAULT for a plain login. Deliberately
+// short: this is what actually stops an unchecked login on a shared/public
+// computer from quietly staying signed in for a month. Long enough to cover
+// one real sitting (survives the access token's own 60-minute silent
+// refreshes without re-prompting for a password mid-task); short enough
+// that walking away and coming back the next day requires signing in again.
+// Server-side, not just client-side: the paired cookie is ALSO issued as a
+// non-persistent session cookie (see cookieOptions below), but this TTL is
+// what actually bounds the session even if a browser is configured to
+// restore cookies across a restart (e.g. "continue where you left off").
+export const SESSION_REFRESH_TOKEN_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 export interface AccessTokenClaims {
   sub: string; // user id
@@ -80,14 +95,20 @@ export function hashRefreshToken(token: string): string {
 export const ACCESS_COOKIE_NAME = "mla_access";
 export const REFRESH_COOKIE_NAME = "mla_refresh";
 
-export function cookieOptions(maxAgeSeconds: number): string {
+// maxAgeSeconds: null means "browser SESSION cookie" - no Max-Age/Expires
+// directive at all, so the browser itself drops it on close (the "Remember
+// me" unchecked case). The token inside the cookie still carries its own
+// real, server-checked expiry regardless (the JWT's exp claim, or the
+// session row's expiresAt) - this only controls whether the cookie ALSO
+// survives a browser restart, never how long the token is actually valid.
+export function cookieOptions(maxAgeSeconds: number | null): string {
   const secure = process.env.NODE_ENV !== "development";
   return [
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     secure ? "Secure" : "",
-    `Max-Age=${maxAgeSeconds}`,
+    maxAgeSeconds === null ? "" : `Max-Age=${maxAgeSeconds}`,
   ]
     .filter(Boolean)
     .join("; ");

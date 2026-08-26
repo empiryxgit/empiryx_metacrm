@@ -22,21 +22,27 @@
   .manual-campaigns-section{ margin-top:32px; padding-top:24px; border-top:1px solid var(--border); }
   .manual-campaigns-section .section-title{ margin-top:0; }
 
-  /* Meta Campaigns row expand -> performance trend (Reach/Impressions/
-     Clicks/CTR). Reuses app.css's .chart-legend/.chart-svg-wrap/.chart-empty
-     (dashboard.html's own chart pieces) for the actual charts, so only the
-     expand affordance + panel layout need their own rules here. */
-  .expand-btn{ background:none; border:none; cursor:pointer; padding:4px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-muted); border-radius:var(--radius-sm); }
-  .expand-btn:hover{ background:var(--surface-sunken); color:var(--text-primary); }
-  .expand-btn svg{ transition:transform .15s ease; }
-  .expand-btn.open svg{ transform:rotate(90deg); }
-  .insights-row td{ padding:0 !important; border-top:none !important; }
-  .insights-panel{ padding:16px 20px 20px; background:var(--surface-sunken); }
-  .insights-head{ display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px; }
-  .insights-stats{ display:flex; gap:22px; flex-wrap:wrap; }
-  .insights-stat .n{ display:block; font-size:18px; font-weight:700; color:var(--text-primary); }
+  /* Search + pagination toolbar, shared shape for both tables on this page. */
+  .list-toolbar{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:14px 0 12px; }
+  .list-toolbar .field-inline{ max-width:280px; flex:1 1 220px; }
+  .pagination-bar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; flex-wrap:wrap; }
+  .pagination-info{ font-size:12.5px; color:var(--text-muted); }
+  .pagination-controls{ display:flex; align-items:center; gap:10px; }
+  .pagination-controls button:disabled{ opacity:.4; cursor:not-allowed; }
+  .page-indicator{ font-size:12.5px; color:var(--text-secondary); min-width:64px; text-align:center; }
+
+  /* Meta Campaign performance modal (Reach/Impressions/Clicks/CTR).
+     Reuses app.css's .chart-legend/.chart-svg-wrap/.chart-empty
+     (dashboard.html's own chart pieces) for the actual charts, and
+     .modal-xl/.range-custom/.segmented (also app.css) for the shell and
+     the date-range picker - only the insights-specific layout needs its
+     own rules here. */
+  .insights-stats{ display:flex; gap:22px; flex-wrap:wrap; margin-bottom:16px; }
+  .insights-stat .n{ display:block; font-size:19px; font-weight:700; color:var(--text-primary); }
   .insights-stat .l{ display:block; font-size:11.5px; color:var(--text-muted); margin-top:1px; }
-  .insights-chart-block{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:12px; }
+  .insights-range-row{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .insights-range-row .range-custom{ margin:0; }
+  .insights-chart-block{ background:var(--surface-sunken); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:12px; }
   .insights-chart-block:last-child{ margin-bottom:0; }
   .insights-loading{ padding:20px 0; text-align:center; color:var(--text-muted); font-size:12.5px; }
 </style>
@@ -92,11 +98,73 @@
         </form>
       </div>
 
+      <div class="list-toolbar">
+        <div class="field-inline">
+          <label for="crmSearch">Search</label>
+          <input id="crmSearch" type="text" placeholder="Search by campaign name…" autocomplete="off" />
+        </div>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead><tr><th>Name</th><th>Platform</th><th>Branch</th><th>Status</th><th>Leads</th><th>Created</th></tr></thead>
           <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
         </table>
+      </div>
+      <div class="pagination-bar" id="crmPaginationBar" style="display:none">
+        <span class="pagination-info" id="crmPaginationInfo"></span>
+        <div class="pagination-controls">
+          <button type="button" class="btn secondary sm" id="crmPrevPage">← Prev</button>
+          <span class="page-indicator" id="crmPageIndicator"></span>
+          <button type="button" class="btn secondary sm" id="crmNextPage">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =======================================================================
+       Meta Campaign performance modal - Reach/Impressions/Clicks/CTR trend
+       for whichever ONE Meta campaign a "View performance" button was
+       clicked for (see openInsightsModal). One shared modal instance
+       rather than per-row, since only one can meaningfully be open at a
+       time - simpler state than the earlier per-row-expand approach.
+       ======================================================================= -->
+  <div class="modal-overlay" id="insightsModalOverlay" style="display:none">
+    <div class="modal modal-xl">
+      <div class="modal-header">
+        <div>
+          <h2 id="insightsModalTitle">Performance</h2>
+          <p id="insightsModalSub"></p>
+        </div>
+        <button class="modal-close" type="button" id="insightsModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="insights-stats" id="insightsStats"><div class="insights-loading">Loading…</div></div>
+
+        <div class="insights-range-row">
+          <div class="segmented" id="insightsRangeToggle" role="tablist" aria-label="Date range">
+            <button type="button" data-range="7" role="tab">7D</button>
+            <button type="button" data-range="14" role="tab">14D</button>
+            <button type="button" data-range="30" role="tab" class="active">30D</button>
+            <button type="button" data-range="90" role="tab">90D</button>
+            <button type="button" data-range="custom" role="tab">Custom</button>
+          </div>
+          <div class="range-custom" id="insightsRangeCustom" style="display:none">
+            <input type="date" id="insightsRangeFrom" />
+            <span style="color:var(--text-muted); font-size:12px">to</span>
+            <input type="date" id="insightsRangeTo" />
+            <button class="btn secondary sm" type="button" id="insightsRangeApply">Apply</button>
+          </div>
+        </div>
+
+        <div class="insights-chart-block">
+          <div class="chart-legend" id="insightsLegend"></div>
+          <div class="chart-svg-wrap" id="insightsChart"><div class="insights-loading">Loading trend…</div></div>
+        </div>
+        <div class="insights-chart-block">
+          <p class="dash-card-sub" style="margin:0 0 8px">Click-through rate (CTR)</p>
+          <div class="chart-svg-wrap" id="insightsCtrChart"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -105,6 +173,8 @@
 <script>
   let me;
   let allCampaigns = [];
+  let crmSearch = "";
+  let crmPage = 1;
 
   function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"}) : "—"; }
   function statusLabel(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
@@ -112,6 +182,41 @@
   function branchQueryParam(){
     const branchId = App.getSelectedBranchId();
     return branchId ? `branchId=${encodeURIComponent(branchId)}` : "";
+  }
+
+  // =======================================================================
+  // Search + pagination - shared shape for both tables on this screen.
+  // Both lists are fetched in full (tenants realistically have dozens, not
+  // thousands, of campaigns) and filtered/paged entirely client-side - no
+  // new query params on the underlying list endpoints, consistent with
+  // this file's existing "fetch once, re-render on branch change" pattern.
+  // =======================================================================
+
+  const PAGE_SIZE = 10;
+
+  /** Clamps `page` into range for `totalItems`, updates the pagination
+   * bar's text/button state, and returns the clamped page - callers store
+   * that back into their own page variable so a search that shrinks the
+   * result set below the current page number doesn't leave the UI
+   * pointing at a now-nonexistent page. Hides the whole bar (rather than
+   * just disabling both buttons) when everything fits on one page - a
+   * pager with nothing to page through is just noise. */
+  function updatePaginationBar(totalItems, page, ids) {
+    const bar = document.getElementById(ids.bar);
+    if (totalItems <= PAGE_SIZE) {
+      bar.style.display = "none";
+      return { page: 1 };
+    }
+    bar.style.display = "flex";
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    const clampedPage = Math.min(Math.max(1, page), totalPages);
+    const start = (clampedPage - 1) * PAGE_SIZE + 1;
+    const end = Math.min(clampedPage * PAGE_SIZE, totalItems);
+    document.getElementById(ids.info).textContent = `${start}–${end} of ${totalItems}`;
+    document.getElementById(ids.indicator).textContent = `Page ${clampedPage} of ${totalPages}`;
+    document.getElementById(ids.prev).disabled = clampedPage <= 1;
+    document.getElementById(ids.next).disabled = clampedPage >= totalPages;
+    return { page: clampedPage };
   }
 
   // =======================================================================
@@ -170,29 +275,80 @@
         <h2 class="section-title">Meta Campaigns</h2>
         <a href="/settings/integrations/meta.html" style="font-size:12.5px">Manage Meta connection →</a>
       </div>
+
+      <div class="list-toolbar">
+        <div class="field-inline">
+          <label for="metaSearch">Search</label>
+          <input id="metaSearch" type="text" placeholder="Search by campaign name…" autocomplete="off" />
+        </div>
+      </div>
+
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:30px"></th><th>Campaign</th><th>Status</th><th>Leads</th><th>Mapped CRM campaign</th></tr></thead>
+          <thead><tr><th>Campaign</th><th>Status</th><th>Leads</th><th>Mapped CRM campaign</th><th style="width:150px"></th></tr></thead>
           <tbody id="metaRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
+      <div class="pagination-bar" id="metaPaginationBar" style="display:none">
+        <span class="pagination-info" id="metaPaginationInfo"></span>
+        <div class="pagination-controls">
+          <button type="button" class="btn secondary sm" id="metaPrevPage">← Prev</button>
+          <span class="page-indicator" id="metaPageIndicator"></span>
+          <button type="button" class="btn secondary sm" id="metaNextPage">Next →</button>
+        </div>
+      </div>
     `;
+
+    // renderMetaSection rebuilds this whole block's DOM from scratch every
+    // time it runs (including on a branch switch) - restore whatever
+    // search term was already typed rather than silently clearing it, even
+    // though `metaSearch` itself (a plain JS variable) survives the rebuild
+    // fine on its own.
+    document.getElementById("metaSearch").value = metaSearch;
+    document.getElementById("metaSearch").addEventListener("input", (e) => {
+      metaSearch = e.target.value;
+      metaPage = 1;
+      renderMetaCampaignsTable();
+    });
+    document.getElementById("metaPrevPage").addEventListener("click", () => { metaPage--; renderMetaCampaignsTable(); });
+    document.getElementById("metaNextPage").addEventListener("click", () => { metaPage++; renderMetaCampaignsTable(); });
 
     loadMetaCampaigns();
   }
 
+  // =======================================================================
+  // Meta Campaigns list - search + client-side pagination (see
+  // updatePaginationBar above). allMetaCampaigns is fetched once per
+  // renderMetaSection() call (branch switches re-fetch since a Meta
+  // campaign's mapped CRM campaign - the "Mapped CRM campaign" column - can
+  // itself be branch-scoped); metaSearch/metaPage filter and page that
+  // in-memory list without another round trip.
+  // =======================================================================
+
+  let allMetaCampaigns = [];
+  let metaSearch = "";
+  let metaPage = 1;
+
   async function loadMetaCampaigns() {
     const metaRows = document.getElementById("metaRows");
     if (!metaRows) return;
-    let metaCampaigns;
     try {
-      ({ metaCampaigns } = await App.apiJson("/api/campaigns/meta"));
+      ({ metaCampaigns: allMetaCampaigns } = await App.apiJson("/api/campaigns/meta"));
     } catch (err) {
+      document.getElementById("metaPaginationBar").style.display = "none";
       metaRows.innerHTML = `<tr><td colspan="5" class="empty">Unable to load Meta campaigns right now.</td></tr>`;
       return;
     }
+    metaPage = 1;
+    renderMetaCampaignsTable();
+  }
 
-    if (!metaCampaigns.length) {
+  function renderMetaCampaignsTable() {
+    const metaRows = document.getElementById("metaRows");
+    if (!metaRows) return;
+
+    if (!allMetaCampaigns.length) {
+      document.getElementById("metaPaginationBar").style.display = "none";
       metaRows.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">No campaigns synced yet</p>
@@ -201,135 +357,188 @@
       </td></tr>`;
       return;
     }
-    metaRows.innerHTML = metaCampaigns.map((c) => `
+
+    const term = metaSearch.trim().toLowerCase();
+    const filtered = term ? allMetaCampaigns.filter((c) => c.name.toLowerCase().includes(term)) : allMetaCampaigns;
+    if (!filtered.length) {
+      document.getElementById("metaPaginationBar").style.display = "none";
+      metaRows.innerHTML = `<tr><td colspan="5" class="empty">No Meta campaigns match "${App.escapeHtml(metaSearch.trim())}".</td></tr>`;
+      return;
+    }
+
+    const { page } = updatePaginationBar(filtered.length, metaPage, {
+      bar: "metaPaginationBar", info: "metaPaginationInfo", indicator: "metaPageIndicator", prev: "metaPrevPage", next: "metaNextPage",
+    });
+    metaPage = page;
+    const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+    metaRows.innerHTML = pageItems.map((c) => `
       <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
-        <td onclick="event.stopPropagation()">
-          <button type="button" class="expand-btn" onclick="toggleCampaignInsights(this, '${c.id}')" aria-label="Show performance trend for ${App.escapeHtml(c.name)}" aria-expanded="false">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 1l5 4-5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-        </td>
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>
         <td>${c.crmCampaignName ? App.escapeHtml(c.crmCampaignName) : '<span style="color:var(--text-muted)">Unmapped — Map to CRM →</span>'}</td>
+        <td onclick="event.stopPropagation()">
+          <button type="button" class="btn secondary sm" onclick="openInsightsModal('${c.id}')">📊 Performance</button>
+        </td>
       </tr>
-      <tr class="insights-row" id="insightsRow-${c.id}" style="display:none"><td colspan="5"><div class="insights-panel" id="insightsPanel-${c.id}"></div></td></tr>
     `).join("");
   }
 
   // =======================================================================
-  // Meta Campaigns - performance trend (Reach/Impressions/Clicks/CTR).
-  // Expanding a row fetches /api/campaigns/meta/{id}/insights (backed by
-  // Meta's own Insights API, cached briefly server-side - see
-  // api/campaigns/handler.ts) and renders it inline, right under that row,
-  // rather than a separate page - this is deliberately "built into the
-  // existing Campaigns page" rather than a new screen. Reach/Impressions/
-  // Clicks share one chart (same unit: counts) with a togglable legend,
-  // matching dashboard.html's own chart pattern; CTR is a percentage on an
-  // entirely different scale, so it gets its own small chart underneath
-  // rather than being squashed flat on the counts axis.
+  // Meta Campaign performance modal (Reach/Impressions/Clicks/CTR). One
+  // shared modal instance (#insightsModalOverlay, static markup at the
+  // bottom of this page) rather than a panel per row - clicking "View
+  // performance" is now the explicit way in, so it's always obvious where
+  // to look, and only one campaign's data is ever in memory/on screen at
+  // once. `insights` (null when the modal is closed) is that one campaign's
+  // full state: which range is selected (a preset day count, or a custom
+  // since/until pair), which series are toggled on in the legend, and the
+  // data once loaded.
+  //
+  // Reach/Impressions/Clicks share one chart (same unit: counts) with a
+  // togglable legend, matching dashboard.html's own chart pattern; CTR is a
+  // percentage on an entirely different scale, so it gets its own small
+  // chart underneath rather than being squashed flat on the counts axis.
   // =======================================================================
 
-  const insightsState = new Map(); // metaCampaignId -> { days, visible:Set, data:Array|null }
+  let insights = null;
   const INSIGHT_SERIES = [
     { key: "reach", label: "Reach", color: "var(--brand-primary)" },
     { key: "impressions", label: "Impressions", color: "var(--brand-dark)" },
     { key: "clicks", label: "Clicks", color: "var(--success)" },
   ];
 
-  function toggleCampaignInsights(btn, id) {
-    const row = document.getElementById(`insightsRow-${id}`);
-    if (!row) return;
-    const isOpen = row.style.display !== "none";
-    if (isOpen) {
-      row.style.display = "none";
-      btn.classList.remove("open");
-      btn.setAttribute("aria-expanded", "false");
+  function openInsightsModal(metaCampaignId) {
+    // Looked up from the already-loaded list rather than a fresh API call -
+    // name/status/leadsCount are already in hand, no reason to re-fetch
+    // just to populate the modal header.
+    const campaign = allMetaCampaigns.find((c) => c.id === metaCampaignId);
+    if (!campaign) return;
+
+    insights = {
+      metaCampaignId,
+      days: 30,
+      custom: null, // { since, until } once a custom range has been applied - takes priority over `days` when set
+      visible: new Set(["reach", "impressions", "clicks"]),
+      data: null,
+    };
+
+    document.getElementById("insightsModalTitle").textContent = campaign.name;
+    document.getElementById("insightsModalSub").textContent =
+      `${statusLabel(campaign.status)} · ${campaign.leadsCount} lead${campaign.leadsCount === 1 ? "" : "s"}`;
+
+    document.querySelectorAll("#insightsRangeToggle button").forEach((b) => b.classList.toggle("active", b.dataset.range === "30"));
+    document.getElementById("insightsRangeCustom").style.display = "none";
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const fromInput = document.getElementById("insightsRangeFrom");
+    const toInput = document.getElementById("insightsRangeTo");
+    fromInput.max = todayStr;
+    toInput.max = todayStr;
+    fromInput.value = "";
+    toInput.value = "";
+
+    document.getElementById("insightsStats").innerHTML = `<div class="insights-loading">Loading…</div>`;
+    document.getElementById("insightsChart").innerHTML = `<div class="insights-loading">Loading trend…</div>`;
+    document.getElementById("insightsCtrChart").innerHTML = "";
+    renderInsightsLegend();
+
+    document.getElementById("insightsModalOverlay").style.display = "flex";
+    document.body.style.overflow = "hidden";
+    loadInsightsData();
+  }
+
+  function closeInsightsModal() {
+    document.getElementById("insightsModalOverlay").style.display = "none";
+    document.body.style.overflow = "";
+    insights = null; // also lets any still-in-flight fetch for this campaign detect it's stale - see loadInsightsData
+  }
+
+  document.getElementById("insightsModalClose").addEventListener("click", closeInsightsModal);
+  document.getElementById("insightsModalOverlay").addEventListener("click", (e) => {
+    if (e.target.id === "insightsModalOverlay") closeInsightsModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && document.getElementById("insightsModalOverlay").style.display !== "none") closeInsightsModal();
+  });
+
+  document.getElementById("insightsRangeToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-range]");
+    if (!btn || !insights) return;
+    document.querySelectorAll("#insightsRangeToggle button").forEach((b) => b.classList.toggle("active", b === btn));
+    const rangeKey = btn.dataset.range;
+    document.getElementById("insightsRangeCustom").style.display = rangeKey === "custom" ? "flex" : "none";
+    if (rangeKey === "custom") return; // wait for "Apply" below - nothing picked yet, don't fetch
+    insights.days = Number(rangeKey);
+    insights.custom = null;
+    insights.data = null;
+    loadInsightsData();
+  });
+
+  document.getElementById("insightsRangeApply").addEventListener("click", () => {
+    if (!insights) return;
+    const since = document.getElementById("insightsRangeFrom").value;
+    const until = document.getElementById("insightsRangeTo").value;
+    if (!since || !until) {
+      document.getElementById("insightsStats").innerHTML = `<div class="insights-loading">Pick both a start and end date.</div>`;
       return;
     }
-    row.style.display = "";
-    btn.classList.add("open");
-    btn.setAttribute("aria-expanded", "true");
-    if (!insightsState.has(id)) {
-      insightsState.set(id, { days: 30, visible: new Set(["reach", "impressions", "clicks"]), data: null });
+    if (since > until) {
+      document.getElementById("insightsStats").innerHTML = `<div class="insights-loading">Start date must be on or before the end date.</div>`;
+      return;
     }
-    renderInsightsPanel(id);
-    if (!insightsState.get(id).data) loadCampaignInsights(id);
+    insights.custom = { since, until };
+    insights.data = null;
+    loadInsightsData();
+  });
+
+  async function loadInsightsData() {
+    if (!insights) return;
+    const state = insights; // captured now - if the modal closes/reopens/range changes again before this resolves, `insights` (the live global) will have moved on and this stale response gets discarded below
+    const qs = state.custom ? `since=${state.custom.since}&until=${state.custom.until}` : `days=${state.days}`;
+    document.getElementById("insightsStats").innerHTML = `<div class="insights-loading">Loading…</div>`;
+    document.getElementById("insightsChart").innerHTML = `<div class="insights-loading">Loading trend…</div>`;
+    try {
+      const { insights: data } = await App.apiJson(`/api/campaigns/meta/${state.metaCampaignId}/insights?${qs}`);
+      if (insights !== state) return;
+      state.data = data;
+      renderInsightsStats();
+      renderInsightsChart();
+      renderInsightsCtrChart();
+    } catch (err) {
+      if (insights !== state) return;
+      // Surfaces the server's own message (e.g. a custom-range validation
+      // error like "too large - pick 730 days or fewer") rather than a
+      // generic failure line, same as every other API error banner in
+      // this app.
+      const message = (err && err.message) || "Unable to load performance data right now.";
+      document.getElementById("insightsStats").innerHTML = `<div class="insights-loading">${App.escapeHtml(message)}</div>`;
+      document.getElementById("insightsChart").innerHTML = `<div class="chart-empty">Unable to load trend data.</div>`;
+      document.getElementById("insightsCtrChart").innerHTML = "";
+    }
   }
 
-  function renderInsightsPanel(id) {
-    const state = insightsState.get(id);
-    const panel = document.getElementById(`insightsPanel-${id}`);
-    if (!state || !panel) return;
-    panel.innerHTML = `
-      <div class="insights-head">
-        <div class="insights-stats" id="insightsStats-${id}"><div class="insights-loading">Loading…</div></div>
-        <div class="segmented" id="insightsRangeToggle-${id}">
-          ${[7, 14, 30, 90].map(d => `<button type="button" data-days="${d}" class="${d === state.days ? "active" : ""}">${d}D</button>`).join("")}
-        </div>
-      </div>
-      <div class="insights-chart-block">
-        <div class="chart-legend" id="insightsLegend-${id}"></div>
-        <div class="chart-svg-wrap" id="insightsChart-${id}"><div class="insights-loading">Loading trend…</div></div>
-      </div>
-      <div class="insights-chart-block">
-        <p class="dash-card-sub" style="margin:0 0 8px">Click-through rate (CTR)</p>
-        <div class="chart-svg-wrap" id="insightsCtrChart-${id}"></div>
-      </div>
-    `;
-    panel.querySelectorAll(`#insightsRangeToggle-${id} button`).forEach(rangeBtn => {
-      rangeBtn.addEventListener("click", () => {
-        const days = Number(rangeBtn.dataset.days);
-        if (days === state.days) return;
-        state.days = days;
-        state.data = null;
-        renderInsightsPanel(id);
-        loadCampaignInsights(id);
-      });
-    });
-    renderInsightsLegend(id);
-  }
-
-  function renderInsightsLegend(id) {
-    const state = insightsState.get(id);
-    const legend = document.getElementById(`insightsLegend-${id}`);
-    if (!state || !legend) return;
-    legend.innerHTML = INSIGHT_SERIES.map(s => `
-      <button type="button" class="chart-legend-item ${state.visible.has(s.key) ? "" : "off"}" data-series="${s.key}">
+  function renderInsightsLegend() {
+    if (!insights) return;
+    const legend = document.getElementById("insightsLegend");
+    legend.innerHTML = INSIGHT_SERIES.map((s) => `
+      <button type="button" class="chart-legend-item ${insights.visible.has(s.key) ? "" : "off"}" data-series="${s.key}">
         <span class="dot" style="background:${s.color}"></span>${App.escapeHtml(s.label)}
       </button>`).join("");
-    legend.querySelectorAll(".chart-legend-item").forEach(legendBtn => {
-      legendBtn.addEventListener("click", () => {
-        const key = legendBtn.dataset.series;
-        if (state.visible.has(key)) state.visible.delete(key); else state.visible.add(key);
-        renderInsightsLegend(id);
-        renderInsightsChart(id);
+    legend.querySelectorAll(".chart-legend-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.series;
+        if (insights.visible.has(key)) insights.visible.delete(key); else insights.visible.add(key);
+        renderInsightsLegend();
+        renderInsightsChart();
       });
     });
   }
 
-  async function loadCampaignInsights(id) {
-    const state = insightsState.get(id);
-    if (!state) return;
-    try {
-      const { insights } = await App.apiJson(`/api/campaigns/meta/${id}/insights?days=${state.days}`);
-      state.data = insights;
-      renderInsightsStats(id);
-      renderInsightsChart(id);
-      renderInsightsCtrChart(id);
-    } catch (err) {
-      const statsEl = document.getElementById(`insightsStats-${id}`);
-      const chartEl = document.getElementById(`insightsChart-${id}`);
-      if (statsEl) statsEl.innerHTML = `<div class="insights-loading">Unable to load performance data right now.</div>`;
-      if (chartEl) chartEl.innerHTML = `<div class="chart-empty">Unable to load trend data.</div>`;
-    }
-  }
-
-  function renderInsightsStats(id) {
-    const state = insightsState.get(id);
-    const el = document.getElementById(`insightsStats-${id}`);
-    if (!state || !el || !state.data) return;
-    const totals = state.data.reduce((acc, d) => {
+  function renderInsightsStats() {
+    const el = document.getElementById("insightsStats");
+    if (!insights || !insights.data) return;
+    const totals = insights.data.reduce((acc, d) => {
       acc.reach += d.reach; acc.impressions += d.impressions; acc.clicks += d.clicks;
       return acc;
     }, { reach: 0, impressions: 0, clicks: 0 });
@@ -343,54 +552,53 @@
       { label: "Clicks", value: totals.clicks.toLocaleString() },
       { label: "Avg. CTR", value: `${avgCtr.toFixed(2)}%` },
     ];
-    el.innerHTML = stats.map(s => `<div class="insights-stat"><span class="n">${s.value}</span><span class="l">${s.label}</span></div>`).join("");
+    el.innerHTML = stats.map((s) => `<div class="insights-stat"><span class="n">${s.value}</span><span class="l">${s.label}</span></div>`).join("");
   }
 
   // Same hand-rolled inline-SVG line/area chart approach as
   // dashboard.html's renderChart - no charting library in this codebase.
-  function renderInsightsChart(id) {
-    const state = insightsState.get(id);
-    const wrap = document.getElementById(`insightsChart-${id}`);
-    if (!state || !wrap || !state.data) return;
-    const buckets = state.data;
+  function renderInsightsChart() {
+    const wrap = document.getElementById("insightsChart");
+    if (!insights || !insights.data) return;
+    const buckets = insights.data;
     if (!buckets.length) { wrap.innerHTML = `<div class="chart-empty">No data for this period yet.</div>`; return; }
 
-    const height = 180;
-    const padding = { top: 12, right: 12, bottom: 24, left: 34 };
-    const pxPerPoint = buckets.length > 20 ? 26 : 40;
-    const width = Math.max(480, buckets.length * pxPerPoint);
+    const height = 220;
+    const padding = { top: 14, right: 14, bottom: 26, left: 38 };
+    const pxPerPoint = buckets.length > 40 ? 18 : buckets.length > 20 ? 28 : 44;
+    const width = Math.max(700, buckets.length * pxPerPoint);
     const innerW = width - padding.left - padding.right;
     const innerH = height - padding.top - padding.bottom;
 
-    const activeSeries = INSIGHT_SERIES.filter(s => state.visible.has(s.key));
-    const maxVal = Math.max(1, ...buckets.flatMap(b => activeSeries.map(s => b[s.key] || 0)));
+    const activeSeries = INSIGHT_SERIES.filter((s) => insights.visible.has(s.key));
+    const maxVal = Math.max(1, ...buckets.flatMap((b) => activeSeries.map((s) => b[s.key] || 0)));
     const niceMax = Math.ceil(maxVal / 4) * 4 || 4;
 
     const xAt = (i) => padding.left + (buckets.length === 1 ? innerW / 2 : (i / (buckets.length - 1)) * innerW);
     const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
 
-    const gridLines = [0, 0.5, 1].map(f => {
+    const gridLines = [0, 0.25, 0.5, 0.75, 1].map((f) => {
       const y = padding.top + innerH * (1 - f);
       const val = Math.round(niceMax * f);
       return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
-              <text x="${padding.left - 8}" y="${y + 3}" font-size="9.5" fill="var(--text-muted)" text-anchor="end">${val}</text>`;
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="10" fill="var(--text-muted)" text-anchor="end">${val}</text>`;
     }).join("");
 
-    const labelEvery = Math.ceil(buckets.length / 7) || 1;
+    const labelEvery = Math.ceil(buckets.length / 8) || 1;
     const xLabels = buckets.map((b, i) => {
       if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
       const d = new Date(b.date);
       const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      return `<text x="${xAt(i)}" y="${height - 6}" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="10" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
     }).join("");
 
-    const seriesSvg = activeSeries.map(s => {
+    const seriesSvg = activeSeries.map((s) => {
       const points = buckets.map((b, i) => [xAt(i), yAt(b[s.key] || 0)]);
       const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
       const areaPath = linePath + ` L${xAt(buckets.length - 1).toFixed(1)},${(padding.top + innerH).toFixed(1)} L${xAt(0).toFixed(1)},${(padding.top + innerH).toFixed(1)} Z`;
-      const dots = points.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="${s.color}" />`).join("");
+      const dots = buckets.length <= 60 ? points.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${s.color}" />`).join("") : "";
       return `<path d="${areaPath}" fill="${s.color}" opacity="0.07" />
-              <path d="${linePath}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" />
+              <path d="${linePath}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
               ${dots}`;
     }).join("");
 
@@ -403,48 +611,47 @@
   // than a fourth series on the chart above, where a CTR of a few percent
   // would be visually flattened to nothing against reach/impressions counts
   // in the thousands.
-  function renderInsightsCtrChart(id) {
-    const state = insightsState.get(id);
-    const wrap = document.getElementById(`insightsCtrChart-${id}`);
-    if (!state || !wrap || !state.data) return;
-    const buckets = state.data;
+  function renderInsightsCtrChart() {
+    const wrap = document.getElementById("insightsCtrChart");
+    if (!insights || !insights.data) return;
+    const buckets = insights.data;
     if (!buckets.length) { wrap.innerHTML = `<div class="chart-empty">No data for this period yet.</div>`; return; }
 
-    const height = 140;
-    const padding = { top: 10, right: 12, bottom: 24, left: 40 };
-    const pxPerPoint = buckets.length > 20 ? 26 : 40;
-    const width = Math.max(480, buckets.length * pxPerPoint);
+    const height = 150;
+    const padding = { top: 10, right: 14, bottom: 26, left: 44 };
+    const pxPerPoint = buckets.length > 40 ? 18 : buckets.length > 20 ? 28 : 44;
+    const width = Math.max(700, buckets.length * pxPerPoint);
     const innerW = width - padding.left - padding.right;
     const innerH = height - padding.top - padding.bottom;
 
-    const maxVal = Math.max(0.5, ...buckets.map(b => b.ctr || 0));
+    const maxVal = Math.max(0.5, ...buckets.map((b) => b.ctr || 0));
     const niceMax = Math.ceil(maxVal * 4) / 4 || 0.5; // nearest 0.25%
 
     const xAt = (i) => padding.left + (buckets.length === 1 ? innerW / 2 : (i / (buckets.length - 1)) * innerW);
     const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
 
-    const gridLines = [0, 0.5, 1].map(f => {
+    const gridLines = [0, 0.5, 1].map((f) => {
       const y = padding.top + innerH * (1 - f);
       const val = (niceMax * f).toFixed(2);
       return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
-              <text x="${padding.left - 8}" y="${y + 3}" font-size="9.5" fill="var(--text-muted)" text-anchor="end">${val}%</text>`;
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="10" fill="var(--text-muted)" text-anchor="end">${val}%</text>`;
     }).join("");
 
-    const labelEvery = Math.ceil(buckets.length / 7) || 1;
+    const labelEvery = Math.ceil(buckets.length / 8) || 1;
     const xLabels = buckets.map((b, i) => {
       if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
       const d = new Date(b.date);
       const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      return `<text x="${xAt(i)}" y="${height - 6}" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="10" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
     }).join("");
 
     const points = buckets.map((b, i) => [xAt(i), yAt(b.ctr || 0)]);
     const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-    const dots = points.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="var(--warning)" />`).join("");
+    const dots = buckets.length <= 60 ? points.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="var(--warning)" />`).join("") : "";
 
     wrap.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Campaign CTR trend chart">
       ${gridLines}${xLabels}
-      <path d="${linePath}" fill="none" stroke="var(--warning)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" />
+      <path d="${linePath}" fill="none" stroke="var(--warning)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
       ${dots}
     </svg>`;
   }
@@ -480,6 +687,7 @@
     try {
       ({ campaigns: allCampaigns } = await App.apiJson(`/api/campaigns${qs ? `?${qs}` : ""}`));
     } catch (err) {
+      document.getElementById("crmPaginationBar").style.display = "none";
       rows.innerHTML = `<tr><td colspan="6">
         <div class="state-block">
           <p class="state-title">Unable to load campaigns</p>
@@ -492,8 +700,20 @@
     }
 
     renderMetaSection(metaStatus);
+    crmPage = 1;
+    renderCampaignsTable();
+  }
+
+  // Search + client-side pagination for the CRM Campaigns table - same
+  // shape as renderMetaCampaignsTable above. allCampaigns is fetched once
+  // per loadCampaigns() call (branch switches re-fetch); crmSearch/crmPage
+  // filter and page that in-memory list without another round trip.
+  function renderCampaignsTable() {
+    const rows = document.getElementById("rows");
+    if (!rows) return;
 
     if (!allCampaigns.length) {
+      document.getElementById("crmPaginationBar").style.display = "none";
       rows.innerHTML = `<tr><td colspan="6">
         <div class="state-block">
           <p class="state-title">No CRM campaigns</p>
@@ -502,7 +722,22 @@
       </td></tr>`;
       return;
     }
-    rows.innerHTML = allCampaigns.map(c => `
+
+    const term = crmSearch.trim().toLowerCase();
+    const filtered = term ? allCampaigns.filter((c) => c.name.toLowerCase().includes(term)) : allCampaigns;
+    if (!filtered.length) {
+      document.getElementById("crmPaginationBar").style.display = "none";
+      rows.innerHTML = `<tr><td colspan="6" class="empty">No campaigns match "${App.escapeHtml(crmSearch.trim())}".</td></tr>`;
+      return;
+    }
+
+    const { page } = updatePaginationBar(filtered.length, crmPage, {
+      bar: "crmPaginationBar", info: "crmPaginationInfo", indicator: "crmPageIndicator", prev: "crmPrevPage", next: "crmNextPage",
+    });
+    crmPage = page;
+    const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+    rows.innerHTML = pageItems.map(c => `
       <tr onclick="window.location.href='/campaign.html?id=${c.id}'" style="cursor:pointer">
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td>${App.escapeHtml(c.platform)}</td>
@@ -550,6 +785,17 @@
     document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
     document.getElementById("name").focus();
   });
+
+  // #crmSearch/#crmPrevPage/#crmNextPage are static markup (unlike the Meta
+  // Campaigns toolbar, which is rebuilt by renderMetaSection() on every
+  // branch switch) - wired once here, never re-attached.
+  document.getElementById("crmSearch").addEventListener("input", (e) => {
+    crmSearch = e.target.value;
+    crmPage = 1;
+    renderCampaignsTable();
+  });
+  document.getElementById("crmPrevPage").addEventListener("click", () => { crmPage--; renderCampaignsTable(); });
+  document.getElementById("crmNextPage").addEventListener("click", () => { crmPage++; renderCampaignsTable(); });
 
   (async () => {
     me = await App.requireAuth();

@@ -152,14 +152,18 @@ export async function getMetaSyncProgress(tenantId: string): Promise<MetaSyncPro
 const CAMPAIGN_INSIGHTS_KEY_PREFIX = "campaigninsights:";
 const CAMPAIGN_INSIGHTS_TTL_SECONDS = 30 * 60; // 30 minutes
 
-function campaignInsightsKey(tenantId: string, metaCampaignId: string, days: number): string {
-  return `${CAMPAIGN_INSIGHTS_KEY_PREFIX}${tenantId}:${metaCampaignId}:${days}`;
+// `rangeKey` identifies WHICH window is cached - either a preset day count
+// ("30") or a custom "since:until" pair - so a preset and a custom range
+// that happen to cover the same days never collide, and picking a
+// different range never serves another range's stale data.
+function campaignInsightsKey(tenantId: string, metaCampaignId: string, rangeKey: string): string {
+  return `${CAMPAIGN_INSIGHTS_KEY_PREFIX}${tenantId}:${metaCampaignId}:${rangeKey}`;
 }
 
-export async function getCachedCampaignInsights<T = unknown>(tenantId: string, metaCampaignId: string, days: number): Promise<T | null> {
+export async function getCachedCampaignInsights<T = unknown>(tenantId: string, metaCampaignId: string, rangeKey: string): Promise<T | null> {
   try {
     const redis = getRedis();
-    const raw = await redis.get<T | string>(campaignInsightsKey(tenantId, metaCampaignId, days));
+    const raw = await redis.get<T | string>(campaignInsightsKey(tenantId, metaCampaignId, rangeKey));
     if (!raw) return null;
     return typeof raw === "string" ? (JSON.parse(raw) as T) : raw;
   } catch (err) {
@@ -168,10 +172,10 @@ export async function getCachedCampaignInsights<T = unknown>(tenantId: string, m
   }
 }
 
-export async function setCachedCampaignInsights(tenantId: string, metaCampaignId: string, days: number, data: unknown): Promise<void> {
+export async function setCachedCampaignInsights(tenantId: string, metaCampaignId: string, rangeKey: string, data: unknown): Promise<void> {
   try {
     const redis = getRedis();
-    await redis.set(campaignInsightsKey(tenantId, metaCampaignId, days), JSON.stringify(data), { ex: CAMPAIGN_INSIGHTS_TTL_SECONDS });
+    await redis.set(campaignInsightsKey(tenantId, metaCampaignId, rangeKey), JSON.stringify(data), { ex: CAMPAIGN_INSIGHTS_TTL_SECONDS });
   } catch (err) {
     console.warn(`[campaign-insights] Redis unavailable while writing cache for ${metaCampaignId}:`, err);
   }

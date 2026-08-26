@@ -108,6 +108,17 @@ export const sessions = crm.table("sessions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  // "Remember me" (login.html) - the tenant's own choice, captured at login
+  // and carried forward across every silent refresh (see refresh() in
+  // src/application/auth.ts) so it can't drift back to the long-lived
+  // default partway through a session. Defaults false: a login that omits
+  // it (or a malformed value) gets the SHORT session, never the 30-day one
+  // - "forget unless told to remember," not the other way around. Purely
+  // determines expiresAt's TTL and whether the browser cookie itself is a
+  // persistent (Max-Age) or session cookie (see cookieOptions in
+  // src/infrastructure/auth/tokens.ts) - never a separate grant of access;
+  // the refresh token's own signature/hash is what's actually checked.
+  rememberMe: boolean("remember_me").notNull().default(false),
 }, (t) => ({
   userIdx: index("ix_sessions_user_id").on(t.userId),
 }));
@@ -573,16 +584,20 @@ export const campaigns = crm.table("campaigns", {
   name: text("name").notNull(),
   platform: text("platform").notNull().default("facebook"), // facebook | instagram | both
   status: text("status").notNull().default("draft"), // draft | active | paused | archived
-  // Provenance only, as of Phase 9 - "manual" (created directly via
-  // Create Campaign, the pre-existing default/only behavior) or
-  // "meta_sync" (this row was auto-created by the Phase 9 migration when
-  // backfilling a pre-Phase-9 row that used to double as both the CRM
-  // campaign AND its Meta campaign - see migration 0009). Never written by
-  // the sync pipeline going forward: mapping a Meta campaign to a CRM
-  // campaign never creates or renames a `campaigns` row on its own, the
-  // CRM campaign is always either pre-existing or explicitly created by a
-  // person. Not a DB enum, same convention as every other status/source
-  // column in this schema.
+  // Provenance only. "manual" - created directly via Create Campaign (or
+  // any other person-initiated action). "meta_sync" - auto-created, either
+  // by the one-time Phase 9 migration backfilling a pre-Phase-9 row that
+  // used to double as both the CRM campaign AND its Meta campaign (see
+  // migration 0009), or - as of the sync pipeline auto-mapping a brand-new
+  // Meta campaign the first time it's ever synced (see
+  // syncCampaignsForSelectedAdAccount in metaCampaignService.ts) -
+  // ongoing, going forward. Either way this is only ever a starting point:
+  // a "meta_sync" row is a completely normal campaigns row from that
+  // moment on, freely renamable/reassignable, and re-mapping a Meta
+  // campaign to a DIFFERENT existing CRM campaign never creates or renames
+  // a `campaigns` row - that still only happens on first sync. Not a DB
+  // enum, same convention as every other status/source column in this
+  // schema.
   source: text("source").notNull().default("manual"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

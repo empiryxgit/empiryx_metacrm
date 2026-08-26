@@ -14,12 +14,13 @@
 // matching api/system.ts which already worked this way.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { AuthError, login, logout, refresh, registerCompanyAndOwner } from "../../src/application/auth";
+import { AuthError, login, logout, refresh, registerCompanyAndOwner, type AuthTokens } from "../../src/application/auth";
 import {
   ACCESS_COOKIE_NAME,
   ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_COOKIE_NAME,
   REFRESH_TOKEN_TTL_SECONDS,
+  SESSION_REFRESH_TOKEN_TTL_SECONDS,
   cookieOptions,
   clearCookieOptions,
 } from "../../src/infrastructure/auth/tokens";
@@ -38,6 +39,34 @@ function getAction(req: VercelRequest): string {
   const segments = req.query.action;
   if (Array.isArray(segments)) return segments[0] ?? "";
   return typeof segments === "string" ? segments : "";
+}
+
+// THE single place both auth cookies get set, from register/login/refresh
+// alike, so "remember me" is honored identically everywhere rather than
+// re-implemented per handler (a prior version of this file hardcoded a
+// separate hardcoded TTL literal per handler for the access cookie alone -
+// see tokens.ts's own comment on that bug - this exists so that class of
+// drift can't happen again for the remember-me persistence flag either).
+//
+// tokens.rememberMe (set once at login, then carried forward unchanged by
+// every subsequent refresh() rotation - see src/application/auth.ts) drives
+// TWO independent things, and both matter for this to actually be secure:
+//   1. The cookie's OWN persistence - Max-Age set (survives a browser
+//      restart) when remembered, a plain session cookie (gone the moment
+//      the browser closes) when not.
+//   2. The refresh cookie's Max-Age, when set, is capped at the SAME TTL
+//      the underlying session row was actually issued with server-side
+//      (REFRESH_TOKEN_TTL_SECONDS vs SESSION_REFRESH_TOKEN_TTL_SECONDS) -
+//      never a client-controlled duration. A tampered/oversized Max-Age in
+//      a replayed cookie buys nothing: the session row's own expiresAt
+//      (checked in getActiveSessionByHash) is what's actually authoritative,
+//      the cookie is just how long the browser bothers holding onto it.
+function setAuthCookies(res: VercelResponse, tokens: AuthTokens): void {
+  const refreshTtl = tokens.rememberMe ? REFRESH_TOKEN_TTL_SECONDS : SESSION_REFRESH_TOKEN_TTL_SECONDS;
+  res.setHeader("Set-Cookie", [
+    `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(tokens.rememberMe ? ACCESS_TOKEN_TTL_SECONDS : null)}`,
+    `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(tokens.rememberMe ? refreshTtl : null)}`,
+  ]);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -83,18 +112,21 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
     await registerCompanyAndOwner(body);
 
     // Log the new owner in immediately - registration and first login are
-    // the same moment from the user's perspective.
+    // the same moment from the user's perspective. There's no "remember me"
+    // checkbox on this screen, so this always remembers - a tenant who just
+    // created their account shouldn't be signed out the moment they close
+    // the tab, and there's no shared/public-computer risk yet since no
+    // meaningful data exists on the account until they've done something
+    // with it.
     const tokens = await login({
       email: body.email,
       password: body.password,
       userAgent: req.headers["user-agent"],
       ipAddress: (req.headers["x-forwarded-for"] as string) ?? req.socket.remoteAddress,
+      rememberMe: true,
     });
 
-    res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
-      `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
-    ]);
+    setAuthCookies(res, tokens);
     res.status(201).json({ user: tokens.user });
   } catch (err) {
     if (err instanceof AuthError) {
@@ -112,7 +144,7 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const { email, password } = (req.body ?? {}) as { email?: string; password?: string };
+  const { email, password, rememberMe } = (req.body ?? {}) as { email?: string; password?: string; rememberMe?: unknown };
   if (!email || !password) {
     res.status(400).json({ error: "email and password are required." });
     return;
@@ -124,12 +156,18 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
       password,
       userAgent: req.headers["user-agent"],
       ipAddress: (req.headers["x-forwarded-for"] as string) ?? req.socket.remoteAddress,
+      // Strict `=== true` on purpose - anything other than the literal
+      // boolean true (missing, false, "true" the string, 1, ...) is treated
+      // as "not remembered," the safer default per src/application/auth.ts's
+      // own LoginInput.rememberMe comment. Whatever a client sends here only
+      // ever selects between the two SERVER-defined TTLs (login() itself
+      // decides REFRESH_TOKEN_TTL_SECONDS vs SESSION_REFRESH_TOKEN_TTL_SECONDS)
+      // - there is no value a caller could put in this field that grants a
+      // session longer than what login() would issue for a genuine "yes".
+      rememberMe: rememberMe === true,
     });
 
-    res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
-      `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
-    ]);
+    setAuthCookies(res, tokens);
     res.status(200).json({ user: tokens.user });
   } catch (err) {
     if (err instanceof AuthError) {
@@ -156,10 +194,12 @@ async function handleRefresh(req: VercelRequest, res: VercelResponse) {
 
   try {
     const tokens = await refresh(refreshToken);
-    res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
-      `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
-    ]);
+    // tokens.rememberMe here is whatever the ORIGINAL login chose, carried
+    // forward by refresh() itself (see its own comment) - never
+    // re-evaluated from this request, so a not-remembered session can't
+    // accidentally upgrade itself to persistent just by staying active
+    // long enough to hit a silent refresh.
+    setAuthCookies(res, tokens);
     res.status(200).json({ user: tokens.user });
   } catch (err) {
     // A rejected refresh always clears cookies - forces a clean re-login

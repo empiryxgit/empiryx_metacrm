@@ -18,6 +18,7 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   REFRESH_TOKEN_TTL_SECONDS,
+  SESSION_REFRESH_TOKEN_TTL_SECONDS,
   signAccessToken,
 } from "../infrastructure/auth/tokens";
 import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
@@ -131,12 +132,22 @@ export interface LoginInput {
   password: string;
   userAgent?: string;
   ipAddress?: string;
+  // "Remember me" (login.html's checkbox) - defaults to false (NOT
+  // remembered) when omitted, same "forget unless told to remember"
+  // default as the sessions table column itself. Determines the session's
+  // actual server-side lifetime (REFRESH_TOKEN_TTL_SECONDS vs
+  // SESSION_REFRESH_TOKEN_TTL_SECONDS below), which the caller
+  // (api/auth/handler.ts) then also mirrors in whether the cookie is
+  // persistent or session-only - see cookieOptions in
+  // src/infrastructure/auth/tokens.ts.
+  rememberMe?: boolean;
 }
 
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
   refreshExpiresAt: Date;
+  rememberMe: boolean;
   user: { id: string; email: string; fullName: string; companyId: string; mustChangePassword: boolean };
 }
 
@@ -164,14 +175,16 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     branchIds,
   });
 
+  const rememberMe = input.rememberMe === true;
   const { token: refreshToken, hash } = generateRefreshToken();
-  const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);
+  const refreshExpiresAt = new Date(Date.now() + (rememberMe ? REFRESH_TOKEN_TTL_SECONDS : SESSION_REFRESH_TOKEN_TTL_SECONDS) * 1000);
   await createSession({
     userId: user.id,
     refreshTokenHash: hash,
     userAgent: input.userAgent,
     ipAddress: input.ipAddress,
     expiresAt: refreshExpiresAt,
+    rememberMe,
   });
 
   await touchLastLogin(user.id);
@@ -180,6 +193,7 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     accessToken,
     refreshToken,
     refreshExpiresAt,
+    rememberMe,
     user: {
       id: user.id,
       email: user.email,
@@ -219,13 +233,23 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
     branchIds,
   });
   const { token: newRefreshToken, hash: newHash } = generateRefreshToken();
-  const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);
-  await createSession({ userId: user.id, refreshTokenHash: newHash, expiresAt: refreshExpiresAt });
+  // Carry the ORIGINAL login's "remember me" choice forward across every
+  // rotation, from the session row being renewed - never re-derived or
+  // defaulted here. Without this, a not-remembered (short) session would
+  // silently become a 30-day one the moment app.js's silent-refresh-on-401
+  // logic fired, which defeats "remember me" unchecked entirely: a tenant
+  // who deliberately left it unchecked on a shared computer would end up
+  // remembered anyway as soon as their access token expired and refreshed
+  // once, often within the hour.
+  const rememberMe = session.rememberMe;
+  const refreshExpiresAt = new Date(Date.now() + (rememberMe ? REFRESH_TOKEN_TTL_SECONDS : SESSION_REFRESH_TOKEN_TTL_SECONDS) * 1000);
+  await createSession({ userId: user.id, refreshTokenHash: newHash, expiresAt: refreshExpiresAt, rememberMe });
 
   return {
     accessToken,
     refreshToken: newRefreshToken,
     refreshExpiresAt,
+    rememberMe,
     user: {
       id: user.id,
       email: user.email,

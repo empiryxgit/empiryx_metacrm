@@ -148,10 +148,11 @@ export async function runMetaSync(tenantId: string): Promise<MetaSyncResult> {
       if (result.skipped) {
         setStep("campaigns", "skipped", result.reason);
       } else {
+        const autoMappedNote = result.autoMappedCount > 0 ? `, ${pluralize(result.autoMappedCount, "new campaign")} auto-mapped to CRM` : "";
         setStep(
           "campaigns",
           "done",
-          `${pluralize(result.campaignsCount, "campaign")}, ${pluralize(result.adSetsCount, "ad set")}, ${pluralize(result.adsCount, "ad")}`,
+          `${pluralize(result.campaignsCount, "campaign")}, ${pluralize(result.adSetsCount, "ad set")}, ${pluralize(result.adsCount, "ad")}${autoMappedNote}`,
         );
       }
     } catch (err) {

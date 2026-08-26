@@ -500,19 +500,23 @@ interface GraphInsightNode {
   ctr?: string;
 }
 
-/** Day-by-day insights for one campaign over the last `days` days
- * (inclusive of today). Meta's Insights API only returns a row for a day
- * that had at least some activity - a quiet day is simply absent from
- * `data`, not returned as a zeroed row - so every day in the requested
- * range is filled in explicitly here, defaulting to 0, rather than
- * leaving the trend chart with a gap where a flat day should be. */
-export async function getCampaignInsights(metaCampaignId: string, userAccessToken: string, days: number): Promise<MetaCampaignInsightDay[]> {
-  const until = new Date();
-  const since = new Date(until);
-  since.setDate(since.getDate() - (days - 1));
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-  const timeRange = encodeURIComponent(JSON.stringify({ since: fmt(since), until: fmt(until) }));
+/** Day-by-day insights for one campaign over an explicit [since, until]
+ * range (both "YYYY-MM-DD", inclusive on both ends) - either a preset
+ * window (last 7/14/30/90 days) or an arbitrary custom range a tenant
+ * picked, both computed by the caller (api/campaigns/handler.ts); this
+ * function itself has no notion of "days back from today" any more, only
+ * a concrete range. Bounding how large that range is allowed to be is the
+ * CALLER's job (see MAX_CUSTOM_RANGE_DAYS there) - this function will
+ * happily walk whatever range it's given, so an unbounded range here would
+ * mean an unbounded response size/Graph API cost.
+ *
+ * Meta's Insights API only returns a row for a day that had at least some
+ * activity - a quiet day is simply absent from `data`, not returned as a
+ * zeroed row - so every day in the requested range is filled in explicitly
+ * here, defaulting to 0, rather than leaving the trend chart with a gap
+ * where a flat day should be. */
+export async function getCampaignInsights(metaCampaignId: string, userAccessToken: string, since: string, until: string): Promise<MetaCampaignInsightDay[]> {
+  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
   const url =
     `${getBaseUrl()}/${metaCampaignId}/insights?fields=reach,impressions,clicks,ctr` +
     `&time_range=${timeRange}&time_increment=1&limit=500` +
@@ -526,10 +530,10 @@ export async function getCampaignInsights(metaCampaignId: string, userAccessToke
   const byDate = new Map(page.data.map((node) => [node.date_start, node]));
 
   const results: MetaCampaignInsightDay[] = [];
-  for (let i = 0; i < days; i++) {
-    const d = new Date(since);
-    d.setDate(d.getDate() + i);
-    const dateStr = fmt(d);
+  const cursor = new Date(`${since}T00:00:00Z`);
+  const end = new Date(`${until}T00:00:00Z`);
+  while (cursor.getTime() <= end.getTime()) {
+    const dateStr = cursor.toISOString().slice(0, 10);
     const node = byDate.get(dateStr);
     results.push({
       date: dateStr,
@@ -538,6 +542,7 @@ export async function getCampaignInsights(metaCampaignId: string, userAccessToke
       clicks: Number(node?.clicks ?? 0),
       ctr: Number(node?.ctr ?? 0),
     });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return results;
 }

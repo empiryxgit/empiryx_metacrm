@@ -207,6 +207,12 @@ export async function createSession(input: {
   userAgent?: string;
   ipAddress?: string;
   expiresAt: Date;
+  // "Remember me" - see schema.ts's own comment on this column. Optional
+  // here (defaults to the column's own `false`) so refresh()'s token
+  // rotation, which always knows and passes the real value explicitly,
+  // reads no differently from any call site that genuinely means "not
+  // remembered" and simply omits it.
+  rememberMe?: boolean;
 }) {
   const db = await getDb();
   const rows = await db.insert(sessions).values(input).returning();

@@ -173,6 +173,17 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
       branchId?: string | null;
     };
 
+    // Only checked when `name` is actually present in the body - PATCH is
+    // partial-update, so omitting it entirely (e.g. the Branch-only save
+    // this endpoint originally only ever saw) must stay a no-op on name,
+    // never an accidental validation failure. Newly worth guarding now
+    // that campaign.html exposes an actual rename field (previously
+    // nothing in the UI ever sent `name` on this route at all).
+    if (name !== undefined && !name.trim()) {
+      res.status(400).json({ error: "Campaign name can't be empty." });
+      return;
+    }
+
     let branchIdPatch: string | null | undefined;
     if (branchId !== undefined) {
       const branchAssertion = await assertBranchAccessible(auth, branchId);
@@ -419,12 +430,74 @@ async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, 
 }
 
 // Day-by-day Reach/Impressions/Clicks/CTR for one Meta campaign - powers
-// the "expand a row" trend chart on the Campaigns screen. Same
-// CAMPAIGNS_VIEW gate as every other read in this file; deliberately no
-// branch check, matching handleGetOneMetaCampaign above - a Meta campaign
-// itself isn't branch-scoped (only its optional CRM mapping is), and this
-// is read-only performance data, not lead PII.
+// the performance modal on the Campaigns screen. Same CAMPAIGNS_VIEW gate
+// as every other read in this file; deliberately no branch check, matching
+// handleGetOneMetaCampaign above - a Meta campaign itself isn't
+// branch-scoped (only its optional CRM mapping is), and this is read-only
+// performance data, not lead PII.
+//
+// Two ways to ask for a window, both resolved to a concrete [since, until]
+// range before ever touching Meta or the cache:
+//   ?days=7|14|30|90   - a preset trailing window ending today.
+//   ?since=&until=     - an arbitrary custom range (YYYY-MM-DD each) - "I
+//     want to see the entire thing," not just the last 90 days. Capped at
+//     MAX_CUSTOM_RANGE_DAYS so nobody (accidentally or otherwise) requests
+//     a range large enough to be a real cost/latency problem; Meta's own
+//     Insights data doesn't meaningfully go back further than that anyway,
+//     so the cap costs nothing a tenant would actually notice.
+// `since`/`until` win if both are present; an incomplete pair (only one of
+// the two) is a 400, not a silent fallback to the days preset - half a
+// custom range is a mistake worth surfacing, not guessing past.
 const ALLOWED_INSIGHTS_DAYS = [7, 14, 30, 90];
+const MAX_CUSTOM_RANGE_DAYS = 730; // ~2 years
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+interface ResolvedInsightsRange {
+  since: string;
+  until: string;
+  rangeKey: string; // cache key component - distinct per preset AND per distinct custom range
+}
+
+/** Returns null (after writing the appropriate error response itself) when
+ * the request's range params are invalid - callers just need to bail out
+ * on a null return, no separate error-shape handling. */
+function resolveInsightsRange(req: VercelRequest, res: VercelResponse): ResolvedInsightsRange | null {
+  const sinceParam = getQueryString(req, "since");
+  const untilParam = getQueryString(req, "until");
+
+  if (sinceParam || untilParam) {
+    if (!sinceParam || !untilParam || !ISO_DATE_RE.test(sinceParam) || !ISO_DATE_RE.test(untilParam)) {
+      res.status(400).json({ error: "Provide both 'since' and 'until' as YYYY-MM-DD for a custom range." });
+      return null;
+    }
+    if (sinceParam > untilParam) {
+      res.status(400).json({ error: "'since' must be on or before 'until'." });
+      return null;
+    }
+    // Clamped, not rejected - a tenant picking "until" as today or later
+    // (e.g. their date picker defaults to today and they never touched it)
+    // is a completely normal request, not an error; there's just nothing
+    // to chart past today.
+    const until = untilParam > todayIsoDate() ? todayIsoDate() : untilParam;
+    const spanDays = Math.round((new Date(`${until}T00:00:00Z`).getTime() - new Date(`${sinceParam}T00:00:00Z`).getTime()) / 86_400_000) + 1;
+    if (spanDays > MAX_CUSTOM_RANGE_DAYS) {
+      res.status(400).json({ error: `That range is too large - pick ${MAX_CUSTOM_RANGE_DAYS} days or fewer.` });
+      return null;
+    }
+    return { since: sinceParam, until, rangeKey: `custom:${sinceParam}:${until}` };
+  }
+
+  const requestedDays = Number(getQueryString(req, "days"));
+  const days = ALLOWED_INSIGHTS_DAYS.includes(requestedDays) ? requestedDays : 30;
+  const untilDate = new Date();
+  const sinceDate = new Date(untilDate);
+  sinceDate.setUTCDate(sinceDate.getUTCDate() - (days - 1));
+  return { since: sinceDate.toISOString().slice(0, 10), until: untilDate.toISOString().slice(0, 10), rangeKey: String(days) };
+}
 
 async function handleMetaCampaignInsights(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
   if (req.method !== "GET") {
@@ -441,12 +514,12 @@ async function handleMetaCampaignInsights(req: VercelRequest, res: VercelRespons
     return;
   }
 
-  const requestedDays = Number(getQueryString(req, "days"));
-  const days = ALLOWED_INSIGHTS_DAYS.includes(requestedDays) ? requestedDays : 30;
+  const range = resolveInsightsRange(req, res);
+  if (!range) return; // resolveInsightsRange already wrote the error response
 
-  const cached = await getCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, days);
+  const cached = await getCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, range.rangeKey);
   if (cached) {
-    res.status(200).json({ insights: cached });
+    res.status(200).json({ insights: cached, since: range.since, until: range.until });
     return;
   }
 
@@ -462,9 +535,9 @@ async function handleMetaCampaignInsights(req: VercelRequest, res: VercelRespons
   }
 
   try {
-    const insights = await getCampaignInsights(metaCampaign.metaCampaignId, connection.accessToken, days);
-    await setCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, days, insights);
-    res.status(200).json({ insights });
+    const insights = await getCampaignInsights(metaCampaign.metaCampaignId, connection.accessToken, range.since, range.until);
+    await setCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, range.rangeKey, insights);
+    res.status(200).json({ insights, since: range.since, until: range.until });
   } catch (err) {
     // Same Phase 16 posture as the sync pipeline (see runMetaSync.ts): an
     // auth-classified failure flags the connection so the tenant sees

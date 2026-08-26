@@ -15,7 +15,14 @@
 
 import { getAdAccountCampaigns, getCampaignAdSets, getAdSetAds } from "../../infrastructure/meta/graphClient";
 import { getSelectedMetaAdAccount } from "../../infrastructure/db/repositories/metaIntegration";
-import { upsertMetaCampaign, replaceMetaAdSets, replaceMetaAds } from "../../infrastructure/db/repositories/metaSync";
+import {
+  upsertMetaCampaign,
+  replaceMetaAdSets,
+  replaceMetaAds,
+  getMetaCampaignByMetaCampaignId,
+  mapMetaCampaignToCrmCampaign,
+} from "../../infrastructure/db/repositories/metaSync";
+import { createCampaign } from "../../infrastructure/db/repositories/campaigns";
 
 export interface SyncCampaignsResult {
   skipped: boolean;
@@ -23,25 +30,57 @@ export interface SyncCampaignsResult {
   campaignsCount: number;
   adSetsCount: number;
   adsCount: number;
+  autoMappedCount: number; // brand-new Meta campaigns this run auto-created + mapped a CRM campaign for
 }
 
 export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAccessToken: string): Promise<SyncCampaignsResult> {
   const selectedAdAccount = await getSelectedMetaAdAccount(tenantId);
   if (!selectedAdAccount) {
-    return { skipped: true, reason: "No ad account selected yet.", campaignsCount: 0, adSetsCount: 0, adsCount: 0 };
+    return { skipped: true, reason: "No ad account selected yet.", campaignsCount: 0, adSetsCount: 0, adsCount: 0, autoMappedCount: 0 };
   }
 
   const campaigns = await getAdAccountCampaigns(selectedAdAccount.adAccountId, userAccessToken);
 
   let adSetsCount = 0;
   let adsCount = 0;
+  let autoMappedCount = 0;
 
   for (const campaign of campaigns) {
+    // Looked up BEFORE the upsert below, specifically so this only ever
+    // fires for a Meta campaign this tenant has never synced before - a
+    // Meta campaign RUTA has already seen, even one currently unmapped
+    // because a person explicitly unmapped it, is left exactly as it is.
+    // upsertMetaCampaign itself still never touches crmCampaignId (its own
+    // contract, unchanged); auto-mapping only ever happens here, as this
+    // one explicit, one-time bootstrap step for a brand-new campaign.
+    const alreadySynced = await getMetaCampaignByMetaCampaignId(tenantId, campaign.id);
+
     const metaCampaignRow = await upsertMetaCampaign(tenantId, selectedAdAccount.id, {
       metaCampaignId: campaign.id,
       name: campaign.name,
       metaStatus: campaign.status,
     });
+
+    if (!alreadySynced) {
+      // First time this tenant has ever synced this Meta campaign - create
+      // and map a same-named CRM campaign automatically so leads land
+      // somewhere useful without a manual "create a CRM campaign, then map
+      // it" round trip. Company-wide (branchId null) by default, same as a
+      // manually created campaign left on "All branches"; the tenant can
+      // reassign a branch (campaign.html) or rename it (also
+      // campaign.html) any time afterward - this is only ever a starting
+      // point, never a lock-in.
+      const crmCampaign = await createCampaign({
+        companyId: tenantId,
+        branchId: null,
+        name: campaign.name,
+        platform: "facebook",
+        createdBy: null, // system-created, not a person - see createCampaign's own comment
+        source: "meta_sync",
+      });
+      await mapMetaCampaignToCrmCampaign(tenantId, metaCampaignRow.id, crmCampaign.id);
+      autoMappedCount++;
+    }
 
     const adSets = await getCampaignAdSets(campaign.id, userAccessToken);
     if (adSets.length === 0) continue;
@@ -73,5 +112,5 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
     }
   }
 
-  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount };
+  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount, autoMappedCount };
 }
