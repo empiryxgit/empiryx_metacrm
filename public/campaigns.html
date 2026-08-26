@@ -179,6 +179,17 @@
   function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric"}) : "—"; }
   function statusLabel(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
+  // Meta's own campaign schedule (start_time/stop_time, synced straight
+  // from the Graph API - see graphClient.getAdAccountCampaigns), shown in
+  // the Performance popup's subtitle line. A campaign with no configured
+  // end date has no stopTime at all on Meta's side (not a missing sync) -
+  // "Ongoing" reflects that rather than implying an end date exists.
+  function formatCampaignSchedule(campaign){
+    if (!campaign.startTime) return "No schedule synced yet";
+    const start = fmt(campaign.startTime);
+    return campaign.stopTime ? `${start} – ${fmt(campaign.stopTime)}` : `${start} – Ongoing`;
+  }
+
   function branchQueryParam(){
     const branchId = App.getSelectedBranchId();
     return branchId ? `branchId=${encodeURIComponent(branchId)}` : "";
@@ -426,7 +437,7 @@
 
     document.getElementById("insightsModalTitle").textContent = campaign.name;
     document.getElementById("insightsModalSub").textContent =
-      `${statusLabel(campaign.status)} · ${campaign.leadsCount} lead${campaign.leadsCount === 1 ? "" : "s"}`;
+      `${statusLabel(campaign.status)} · ${campaign.leadsCount} lead${campaign.leadsCount === 1 ? "" : "s"} · ${formatCampaignSchedule(campaign)}`;
 
     document.querySelectorAll("#insightsRangeToggle button").forEach((b) => b.classList.toggle("active", b.dataset.range === "30"));
     document.getElementById("insightsRangeCustom").style.display = "none";

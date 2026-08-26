@@ -651,6 +651,15 @@ export const metaCampaigns = crm.table(
     // external object, not a CRM-owned one. Not a DB enum, same convention
     // as every other status column in this schema.
     status: text("status").notNull().default("active"),
+    // Meta's OWN campaign schedule (Graph API `start_time`/`stop_time` on
+    // the campaign node) - surfaced read-only in the Performance popup
+    // (campaigns.html) so a person can see when a campaign ran without
+    // leaving RUTA. `stopTime` is nullable: an ad set with no end date
+    // configured (runs until paused) simply has no stop_time on Meta's
+    // side either - never defaulted/guessed here, always what Meta itself
+    // reports, including null.
+    startTime: timestamp("start_time", { withTimezone: true }),
+    stopTime: timestamp("stop_time", { withTimezone: true }),
     lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),

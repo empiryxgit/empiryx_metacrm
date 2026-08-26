@@ -466,12 +466,21 @@ export interface MetaCampaignSummary {
   id: string;
   name: string;
   status: string; // Meta's own status string, e.g. "ACTIVE" | "PAUSED" | "ARCHIVED" | "DELETED"
+  // Meta's own campaign schedule, ISO 8601 strings straight off the Graph
+  // API (e.g. "2026-08-01T00:00:00-0700") - startTime is effectively
+  // always present once a campaign has been created; stopTime is null
+  // whenever the campaign has no end date configured (runs until
+  // paused) - never defaulted/guessed here, only ever what Meta reports.
+  startTime: string | null;
+  stopTime: string | null;
 }
 
 interface GraphCampaignNode {
   id: string;
   name: string;
   status: string;
+  start_time?: string;
+  stop_time?: string;
 }
 
 // Campaign performance trend (Reach/Impressions/Clicks/CTR) - Meta's
@@ -552,7 +561,7 @@ export async function getCampaignInsights(metaCampaignId: string, userAccessToke
  * connection's user token, same as getUserAdAccounts (ads_read scope). */
 export async function getAdAccountCampaigns(adAccountId: string, userAccessToken: string): Promise<MetaCampaignSummary[]> {
   const results: MetaCampaignSummary[] = [];
-  let url = `${getBaseUrl()}/${adAccountId}/campaigns?fields=id,name,status&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+  let url = `${getBaseUrl()}/${adAccountId}/campaigns?fields=id,name,status,start_time,stop_time&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
 
   while (url) {
     const response = await fetchWithRetry(url);
@@ -561,7 +570,7 @@ export async function getAdAccountCampaigns(adAccountId: string, userAccessToken
     }
     const page = (await response.json()) as GraphPagedResponse<GraphCampaignNode>;
     for (const node of page.data) {
-      results.push({ id: node.id, name: node.name, status: node.status });
+      results.push({ id: node.id, name: node.name, status: node.status, startTime: node.start_time ?? null, stopTime: node.stop_time ?? null });
     }
     url = page.paging?.next ?? "";
   }

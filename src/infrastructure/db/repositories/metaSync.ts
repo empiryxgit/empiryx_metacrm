@@ -26,6 +26,11 @@ export interface UpsertMetaCampaignInput {
   metaCampaignId: string;
   name: string;
   metaStatus: string;
+  // Meta's own campaign schedule (Graph API start_time/stop_time, ISO
+  // strings) - null/undefined stopTime means Meta itself reports no end
+  // date configured, not a missing fetch.
+  startTime?: string | null;
+  stopTime?: string | null;
 }
 
 /**
@@ -54,6 +59,8 @@ export async function upsertMetaCampaign(tenantId: string, adAccountRowId: strin
       metaCampaignId: input.metaCampaignId,
       name: input.name,
       status: normalizeMetaStatus(input.metaStatus),
+      startTime: input.startTime ? new Date(input.startTime) : null,
+      stopTime: input.stopTime ? new Date(input.stopTime) : null,
       lastSyncAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -62,6 +69,8 @@ export async function upsertMetaCampaign(tenantId: string, adAccountRowId: strin
         name: sql`excluded.name`,
         status: sql`excluded.status`,
         metaAdAccountId: sql`excluded.meta_ad_account_id`,
+        startTime: sql`excluded.start_time`,
+        stopTime: sql`excluded.stop_time`,
         lastSyncAt: sql`excluded.last_sync_at`,
         updatedAt: new Date(),
       },
@@ -126,6 +135,8 @@ export async function listMetaCampaignsWithMapping(tenantId: string) {
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      startTime: metaCampaigns.startTime,
+      stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
@@ -166,6 +177,8 @@ export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string,
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      startTime: metaCampaigns.startTime,
+      stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
@@ -189,6 +202,8 @@ export async function getMetaCampaignWithMappingByRowId(tenantId: string, metaCa
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      startTime: metaCampaigns.startTime,
+      stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,

@@ -59,6 +59,8 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
       metaCampaignId: campaign.id,
       name: campaign.name,
       metaStatus: campaign.status,
+      startTime: campaign.startTime,
+      stopTime: campaign.stopTime,
     });
 
     if (!alreadySynced) {
