@@ -38,6 +38,7 @@ const ALL_SCOPES = [
   "pages_read_engagement",
   "pages_manage_metadata",
   "leads_retrieval",
+  "pages_manage_ads",
   "ads_read",
   "business_management",
   "instagram_basic",

@@ -38,7 +38,7 @@ vi.mock("../../infrastructure/meta/graphClient", async (importOriginal) => {
   };
 });
 
-const ALL_SCOPES = ["public_profile", "email", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "leads_retrieval", "ads_read", "business_management", "instagram_basic"];
+const ALL_SCOPES = ["public_profile", "email", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "leads_retrieval", "pages_manage_ads", "ads_read", "business_management", "instagram_basic"];
 
 /** Connects a fresh tenant with one Page + one Ad Account, both selected -
  * the prerequisite state syncCampaignsForSelectedAdAccount/

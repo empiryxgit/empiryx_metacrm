@@ -7,7 +7,22 @@
 import { SignJWT, jwtVerify } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 
-const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
+// Was 15 minutes - too tight for the Meta "Connect" round trip specifically:
+// a first-time Facebook Login consent screen (plus any Business
+// Verification/2FA prompts Meta shows) can easily take longer than that, so
+// a tenant who declines (or even completes) the dialog could come back to
+// find their RUTA session had expired mid-flow and land on /login.html
+// instead of straight back on meta-status.html. 60 minutes gives real-world
+// OAuth flows enough room without meaningfully weakening session security -
+// the refresh token (below) is still what actually bounds how long a
+// browser can stay signed in unattended.
+// Exported so api/auth/handler.ts can set the ACCESS cookie's own Max-Age
+// to match - it used to hardcode its own separate "15 * 60" literal here,
+// which meant bumping the JWT's expiration claim alone wouldn't actually
+// have fixed anything: the cookie itself would still have been deleted by
+// the browser after the old 15 minutes regardless of the token still being
+// valid inside it.
+export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60; // 60 minutes
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 export interface AccessTokenClaims {

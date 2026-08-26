@@ -32,6 +32,18 @@ const OAUTH_SCOPES = [
   "pages_read_engagement",
   "pages_manage_metadata",
   "leads_retrieval",
+  // Confirmed necessary (not just Meta's own documented note under
+  // leads_retrieval) via a real Graph API Explorer call: reading a Page's
+  // lead forms/leads created through Ads Manager - i.e. every normal Meta
+  // Lead Ads campaign, RUTA's actual use case - fails with "(#200) Requires
+  // pages_manage_ads permission to manage the object" without this scope,
+  // even with leads_retrieval + pages_show_list + pages_read_engagement all
+  // already granted. Used exactly like ads_read/business_management below:
+  // strictly read-only, to list/read a Page's own lead forms and lead
+  // submissions - RUTA never creates, edits, or manages ads with it. This
+  // IS still its own Advanced Access permission requiring a separate App
+  // Review submission - see docs/META_APP_REVIEW_PERMISSIONS.md.
+  "pages_manage_ads",
   "ads_read",
   "business_management",
   "instagram_basic",
@@ -44,12 +56,23 @@ const OAUTH_SCOPES = [
 // flow - this catches that here, at connect/reconnect time, with a clear
 // "here's exactly what's missing" error, rather than discovering it much
 // later as a confusing Graph API failure on some unrelated sync step.
+// pages_manage_ads is required here too (not just requested) - see its
+// comment above; without it, reading an ad-created Page's lead forms fails
+// outright, which is RUTA's core function for essentially every tenant.
 // Deliberately excludes: "public_profile"/"email" (Facebook Login's own
 // baseline - Meta itself won't complete the exchange without these, so
 // there's nothing to validate) and "instagram_basic" (Instagram linking is
 // already optional throughout this integration - see the selection
 // wizard's "You can continue without selecting one").
-const REQUIRED_OAUTH_SCOPES = ["pages_show_list", "pages_read_engagement", "pages_manage_metadata", "leads_retrieval", "ads_read", "business_management"];
+const REQUIRED_OAUTH_SCOPES = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_metadata",
+  "leads_retrieval",
+  "pages_manage_ads",
+  "ads_read",
+  "business_management",
+];
 
 export class MetaOAuthConfigError extends Error {}
 

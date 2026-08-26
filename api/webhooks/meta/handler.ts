@@ -99,7 +99,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyMetaSignature } from "../../../src/infrastructure/meta/verifySignature";
 import { ingestWebhookPayload } from "../../../src/application/ingestWebhook";
 import { getWebhookConfigBySlug, markWebhookVerified } from "../../../src/infrastructure/db/repositories/campaigns";
-import { requirePermission } from "../../../src/infrastructure/auth/context";
+import { getAuthContext, hasPermission, requirePermission } from "../../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../../src/domain/permissions";
 import { createOAuthState, verifyOAuthState } from "../../../src/infrastructure/auth/oauthState";
 import { buildAuthorizationUrl, completeMetaConnection, getAppSecret, MetaOAuthConfigError, MetaPermissionError } from "../../../src/application/metaOAuth";
@@ -179,14 +179,36 @@ const SETTINGS_META_PAGE = "/settings/integrations/meta-status.html";
 /** Step 1-3: generate secure state bound to the CALLER'S OWN verified
  * session (never a client-supplied tenantId), then send the browser to
  * Meta. Gated on integrations.manage, same permission the status endpoint
- * and the Settings page itself require. */
+ * and the Settings page itself require.
+ *
+ * Deliberately does NOT use requirePermission() here like every other
+ * handler in this file - this endpoint is reached via a raw top-level
+ * browser navigation (`window.location.href = "/api/integrations/meta/
+ * connect"` from meta-status.html/meta.html), never through app.js's
+ * apiJson() fetch wrapper. requirePermission's usual 401/403 JSON body
+ * would just render as raw text in the browser instead of going anywhere -
+ * especially easy to hit here specifically, since a real Meta OAuth consent
+ * screen (plus any Business Verification/2FA prompts) can run long enough
+ * for the access token to have expired by the time this endpoint is even
+ * reached. Redirecting to /login.html?next=... instead means the tenant
+ * lands back on this exact endpoint (auto-resuming straight into the Meta
+ * redirect) right after logging back in, rather than dead-ending. */
 async function handleOAuthConnect(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
-  if (!auth) return;
+
+  const authCtx = await getAuthContext(req);
+  if (!authCtx) {
+    res.redirect(302, `/login.html?next=${encodeURIComponent("/api/integrations/meta/connect")}`);
+    return;
+  }
+  if (!hasPermission(authCtx, PERMISSIONS.INTEGRATIONS_MANAGE)) {
+    res.redirect(302, `${SETTINGS_META_PAGE}?error=no_permission`);
+    return;
+  }
+  const auth = authCtx;
 
   try {
     const state = await createOAuthState({ tenantId: auth.companyId, userId: auth.userId });

@@ -42,7 +42,7 @@ vi.mock("../infrastructure/db/repositories/metaLeadEvents", async (importOrigina
   return { ...actual, insertMetaSyncLead: vi.fn(actual.insertMetaSyncLead) };
 });
 
-const ALL_SCOPES = ["public_profile", "email", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "leads_retrieval", "ads_read", "business_management", "instagram_basic"];
+const ALL_SCOPES = ["public_profile", "email", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "leads_retrieval", "pages_manage_ads", "ads_read", "business_management", "instagram_basic"];
 
 async function connectAndSubscribeOnePage(label: string): Promise<{ tenantId: string; userId: string; metaPageId: string }> {
   const { tenantId, userId } = await makeTenant(label);

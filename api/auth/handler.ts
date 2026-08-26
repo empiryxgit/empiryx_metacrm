@@ -17,6 +17,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { AuthError, login, logout, refresh, registerCompanyAndOwner } from "../../src/application/auth";
 import {
   ACCESS_COOKIE_NAME,
+  ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_COOKIE_NAME,
   REFRESH_TOKEN_TTL_SECONDS,
   cookieOptions,
@@ -91,7 +92,7 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
     });
 
     res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(15 * 60)}`,
+      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
       `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
     ]);
     res.status(201).json({ user: tokens.user });
@@ -126,7 +127,7 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
     });
 
     res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(15 * 60)}`,
+      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
       `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
     ]);
     res.status(200).json({ user: tokens.user });
@@ -156,7 +157,7 @@ async function handleRefresh(req: VercelRequest, res: VercelResponse) {
   try {
     const tokens = await refresh(refreshToken);
     res.setHeader("Set-Cookie", [
-      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(15 * 60)}`,
+      `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(ACCESS_TOKEN_TTL_SECONDS)}`,
       `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(REFRESH_TOKEN_TTL_SECONDS)}`,
     ]);
     res.status(200).json({ user: tokens.user });
