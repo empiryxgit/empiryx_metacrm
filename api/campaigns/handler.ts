@@ -23,10 +23,11 @@ import {
 import { getLeadCountsByMetaCampaignId, getLeadCountsForCampaigns } from "../../src/infrastructure/db/repositories";
 import {
   getMetaCampaignWithMappingByRowId,
-  listMetaCampaignsWithMapping,
+  listMetaCampaignsWithMappingForAdAccount,
   mapMetaCampaignToCrmCampaign,
   unmapMetaCampaign,
 } from "../../src/infrastructure/db/repositories/metaSync";
+import { getSelectedMetaAdAccount } from "../../src/infrastructure/db/repositories/metaIntegration";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
 import { listBranches } from "../../src/infrastructure/db/repositories/branches";
@@ -350,7 +351,19 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
   const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
   if (!auth) return;
 
-  const metaCampaigns = await listMetaCampaignsWithMapping(auth.companyId);
+  // Scoped to the tenant's CURRENTLY SELECTED ad account only - a tenant
+  // that disconnects Meta and reconnects with a different ad account must
+  // not keep seeing the previous account's campaigns here (see
+  // listMetaCampaignsWithMappingForAdAccount's own comment for why those
+  // stale rows still exist in the DB at all). No ad account selected yet
+  // (Meta not connected, or connected but Ad Account selection hasn't
+  // happened) simply means nothing to show - same empty state the
+  // Campaigns page's "Connect Meta" / "Finish setup" callouts already
+  // cover before ever calling this endpoint.
+  const selectedAdAccount = await getSelectedMetaAdAccount(auth.companyId);
+  const metaCampaigns = selectedAdAccount
+    ? await listMetaCampaignsWithMappingForAdAccount(auth.companyId, selectedAdAccount.id)
+    : [];
   // Leads are attributed by Meta's OWN raw campaign id (leads.campaignId),
   // independent of whether the Meta campaign has been mapped to a CRM
   // campaign yet - see getLeadCountsByMetaCampaignId's own comment.

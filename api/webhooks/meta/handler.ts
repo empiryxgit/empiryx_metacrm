@@ -122,7 +122,7 @@ import {
   saveFieldMappings,
   type SaveFieldMappingInput,
 } from "../../../src/infrastructure/db/repositories/metaFormMappings";
-import { listMetaCampaignsWithMapping } from "../../../src/infrastructure/db/repositories/metaSync";
+import { listMetaCampaignsWithMappingForAdAccount } from "../../../src/infrastructure/db/repositories/metaSync";
 import { getLastMetaLeadReceivedAt } from "../../../src/infrastructure/db/repositories";
 
 export const config = {
@@ -302,15 +302,25 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
     // Promise.all rather than a second request - this endpoint already
     // backs the full config screen's main card, and the status screen is
     // just a leaner rendering of the same underlying state.
-    const [connection, pages, instagramAccounts, adAccounts, campaigns, forms, lastLeadAt] = await Promise.all([
+    const [connection, pages, instagramAccounts, adAccounts, forms, lastLeadAt] = await Promise.all([
       getRelevantMetaConnectionView(auth.companyId),
       listMetaPages(auth.companyId),
       listMetaInstagramAccounts(auth.companyId),
       listMetaAdAccounts(auth.companyId),
-      listMetaCampaignsWithMapping(auth.companyId),
       listMetaFormsWithMappingCounts(auth.companyId),
       getLastMetaLeadReceivedAt(auth.companyId),
     ]);
+    // campaignsCount is scoped to the CURRENTLY SELECTED ad account only
+    // (found from the adAccounts list already fetched above, no extra
+    // query needed) - same fix as the Campaigns screen's "Meta Campaigns"
+    // table (see listMetaCampaignsWithMappingForAdAccount's own comment).
+    // Without this, reconnecting Meta with a different ad account would
+    // keep this status screen's count inflated with the previous account's
+    // campaigns even after the Campaigns page itself stopped showing them.
+    const selectedAdAccount = adAccounts.find((a) => a.isSelected) ?? null;
+    const campaigns = selectedAdAccount
+      ? await listMetaCampaignsWithMappingForAdAccount(auth.companyId, selectedAdAccount.id)
+      : [];
     res.status(200).json({
       connection,
       pages: pages.map((p) => ({

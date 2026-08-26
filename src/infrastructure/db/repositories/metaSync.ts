@@ -109,10 +109,14 @@ export async function listSyncedCampaignsForAdAccount(tenantId: string, adAccoun
 
 /**
  * Lists every synced Meta campaign for the tenant, joined with its mapped
- * CRM campaign's name/branch (null if unmapped) and lead count. Powers the
- * Campaigns screen's "Meta Campaigns" table - deliberately NOT scoped to
- * one ad account, since the screen shows everything synced regardless of
- * which ad account it came from.
+ * CRM campaign's name/branch (null if unmapped) and lead count. Unscoped by
+ * ad account - includes campaigns synced under an ad account the tenant is
+ * no longer connected to. That makes this the wrong function for anything
+ * tenant-facing (see listMetaCampaignsWithMappingForAdAccount below, which
+ * is what the Campaigns screen and the Meta status screen actually use) -
+ * this one is now kept for callers that genuinely want the full synced
+ * history regardless of which ad account it came from (currently just this
+ * file's own tests).
  */
 export async function listMetaCampaignsWithMapping(tenantId: string) {
   const db = await getDb();
@@ -130,6 +134,46 @@ export async function listMetaCampaignsWithMapping(tenantId: string) {
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
     .where(eq(metaCampaigns.tenantId, tenantId));
+  return rows;
+}
+
+/**
+ * Same joined shape as listMetaCampaignsWithMapping above, narrowed to
+ * campaigns synced under ONE ad account (metaCampaigns.metaAdAccountId) -
+ * what the Campaigns screen's "Meta Campaigns" table and the Meta status
+ * screen's campaign count actually want. Pass the tenant's CURRENTLY
+ * SELECTED ad account's row id (see getSelectedMetaAdAccount in
+ * metaIntegration.ts).
+ *
+ * Why this exists: disconnecting Meta and reconnecting with a DIFFERENT ad
+ * account never deletes the previously synced campaigns
+ * (disconnectActiveMetaConnection only revokes the connection row; synced
+ * Pages/ad accounts/campaigns are left as history) - without this scoping
+ * those stale rows from the no-longer-selected ad account would keep
+ * showing up forever, right alongside the new account's campaigns, which
+ * is exactly the "why am I seeing all this data" bug this function fixes.
+ * Reconnecting to the SAME Meta ad account resolves back to the same row
+ * id (upserted by the (tenantId, adAccountId) unique index - see
+ * replaceMetaAdAccounts), so that account's own synced history is
+ * preserved across a disconnect/reconnect; only a genuinely different ad
+ * account's old campaigns are excluded.
+ */
+export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string, adAccountRowId: string) {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: metaCampaigns.id,
+      metaCampaignId: metaCampaigns.metaCampaignId,
+      name: metaCampaigns.name,
+      status: metaCampaigns.status,
+      lastSyncAt: metaCampaigns.lastSyncAt,
+      crmCampaignId: metaCampaigns.crmCampaignId,
+      crmCampaignName: campaigns.name,
+      crmCampaignBranchId: campaigns.branchId,
+    })
+    .from(metaCampaigns)
+    .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
+    .where(and(eq(metaCampaigns.tenantId, tenantId), eq(metaCampaigns.metaAdAccountId, adAccountRowId)));
   return rows;
 }
 
