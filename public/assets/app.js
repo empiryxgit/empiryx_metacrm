@@ -113,6 +113,7 @@ const App = (() => {
     roles: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2.5 16 5v4.5c0 4-2.6 6.7-6 8-3.4-1.3-6-4-6-8V5l6-2.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7.8 10 9.2 11.5 12.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     branches: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 17.5S4.5 12.4 4.5 8.3a5.5 5.5 0 0 1 11 0c0 4.1-5.5 9.2-5.5 9.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="10" cy="8.2" r="1.9" stroke="currentColor" stroke-width="1.4"/></svg>`,
     settings: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.4"/><path d="M10 3v1.6M10 15.4V17M17 10h-1.6M4.6 10H3M14.9 5.1l-1.1 1.1M6.2 13.7l-1.1 1.1M14.9 14.9l-1.1-1.1M6.2 6.2 5.1 5.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    metaIntegration: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8 6.5 4.8 9.7a2.3 2.3 0 0 0 3.3 3.3L11.2 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 13.5 15.2 10.3a2.3 2.3 0 0 0-3.3-3.3L8.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   };
 
   const PRIMARY_LINKS = [
@@ -121,13 +122,25 @@ const App = (() => {
     { href: "/pipeline.html", label: "Pipeline", icon: NAV_ICONS.pipeline },
   ];
 
+  // Flat, top-level admin nav items - kept separate from the "Settings"
+  // master menu below (see SETTINGS_LINKS) to keep the top-level nav short
+  // enough to never wrap/overflow the header (no horizontal scrollbar).
   const ADMIN_LINKS = [
     { href: "/forms.html", label: "Forms", perm: "forms.view", icon: NAV_ICONS.forms },
     { href: "/submissions.html", label: "Submissions", perm: "submissions.view", icon: NAV_ICONS.submissions },
+  ];
+
+  // "Settings" is a master/parent menu (dropdown), not a link itself -
+  // Users, Roles, Branches and Meta Integration live under it instead of
+  // each being its own top-level nav item. "Meta Integration" points at
+  // the same /settings.html page the old flat "Settings" link used to -
+  // that page's content (Meta connection management) is unchanged, only
+  // where it's reached from and its label have changed.
+  const SETTINGS_LINKS = [
     { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
     { href: "/admin/branches.html", label: "Branches", perm: "branches.manage", icon: NAV_ICONS.branches },
-    { href: "/settings.html", label: "Settings", perm: "integrations.manage", icon: NAV_ICONS.settings },
+    { href: "/settings.html", label: "Meta Integration", perm: "integrations.manage", icon: NAV_ICONS.metaIntegration },
   ];
 
   function navLinkHtml(link, activeHref, extraClass) {
@@ -136,15 +149,44 @@ const App = (() => {
     return `<a href="${link.href}" class="${extraClass || "nav-link"}${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}>${icon}${link.label}</a>`;
   }
 
+  /** Desktop "Settings" master menu - a dropdown trigger (styled like a
+   * nav-link) plus its own .dropdown panel, following the same
+   * menu-wrap/dropdown/toggleMenu pattern as the notifications and user
+   * menus. Returns "" when the signed-in user holds none of the
+   * permissions behind its sub-items, so the trigger itself never shows
+   * for a user who couldn't open any of Users/Roles/Branches/Meta
+   * Integration anyway. */
+  function settingsMenuHtml(settingsLinks, activeHref) {
+    if (!settingsLinks.length) return "";
+    const isActive = settingsLinks.some((l) => l.href === activeHref);
+    const itemsHtml = settingsLinks.map((l) => {
+      const active = l.href === activeHref;
+      return `<a href="${l.href}" class="dropdown-item${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}><span class="nav-link-icon">${l.icon}</span>${l.label}</a>`;
+    }).join("");
+    return `
+      <div class="menu-wrap">
+        <button type="button" class="nav-link nav-link-btn${isActive ? " active" : ""}" id="settingsNavBtn" aria-haspopup="true" aria-expanded="false">
+          <span class="nav-link-icon">${NAV_ICONS.settings}</span>Settings
+          <svg class="chev" width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.5 5.25 7 8.75l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="dropdown nav-dropdown" id="settingsNavMenu" hidden>${itemsHtml}</div>
+      </div>
+    `;
+  }
+
   function renderNav(me, activeHref) {
     const nav = document.getElementById("topnav");
     if (!nav) return;
     nav.classList.add("topnav");
 
     const admin = ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
+    const settingsLinks = SETTINGS_LINKS.filter((l) => hasPermission(me, l.perm));
     const primaryHtml = PRIMARY_LINKS.map((l) => navLinkHtml(l, activeHref)).join("");
     const adminHtml = admin.length
       ? `<span class="nav-sep" aria-hidden="true"></span>` + admin.map((l) => navLinkHtml(l, activeHref)).join("")
+      : "";
+    const settingsHtml = settingsLinks.length
+      ? `${admin.length ? "" : '<span class="nav-sep" aria-hidden="true"></span>'}` + settingsMenuHtml(settingsLinks, activeHref)
       : "";
 
     const displayName = me?.user?.fullName ?? "";
@@ -167,7 +209,7 @@ const App = (() => {
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
 
-        <div class="shell-center">${primaryHtml}${adminHtml}</div>
+        <div class="shell-center">${primaryHtml}${adminHtml}${settingsHtml}</div>
 
         <div class="shell-right">
           <div class="branch-switch" id="branchSwitchSlot" style="display:none"></div>
@@ -208,12 +250,12 @@ const App = (() => {
       </div>
     `;
 
-    renderMobileDrawer(me, activeHref, admin);
+    renderMobileDrawer(me, activeHref, admin, settingsLinks);
     wireShellInteractions();
     loadBranchSwitcher(me);
   }
 
-  function renderMobileDrawer(me, activeHref, admin) {
+  function renderMobileDrawer(me, activeHref, admin, settingsLinks) {
     let drawer = document.getElementById("mobileDrawer");
     if (!drawer) {
       drawer = document.createElement("div");
@@ -237,6 +279,7 @@ const App = (() => {
         <div class="branch-switch branch-switch-mobile" id="branchSwitchSlotMobile" style="display:none"></div>
         <div class="mobile-nav-group">${groupHtml(PRIMARY_LINKS)}</div>
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
+        ${settingsLinks.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-section-label">Settings</div><div class="mobile-nav-group">${groupHtml(settingsLinks)}</div>` : ""}
         <div class="mobile-nav-divider"></div>
         <div class="mobile-nav-group">
           <a href="/change-password.html" class="mobile-nav-link">Account settings</a>
@@ -252,6 +295,8 @@ const App = (() => {
     document.getElementById("notifBtn")?.setAttribute("aria-expanded", "false");
     document.getElementById("userMenu")?.setAttribute("hidden", "");
     document.getElementById("userTrigger")?.setAttribute("aria-expanded", "false");
+    document.getElementById("settingsNavMenu")?.setAttribute("hidden", "");
+    document.getElementById("settingsNavBtn")?.setAttribute("aria-expanded", "false");
   }
 
   function toggleMenu(btnId, menuId) {
@@ -276,6 +321,10 @@ const App = (() => {
     document.getElementById("userTrigger")?.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleMenu("userTrigger", "userMenu");
+    });
+    document.getElementById("settingsNavBtn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMenu("settingsNavBtn", "settingsNavMenu");
     });
 
     const burger = document.getElementById("navBurger");

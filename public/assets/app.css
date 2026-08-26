@@ -194,14 +194,23 @@ h2.section-title:first-of-type{ margin-top:0; }
 .dropdown-head{ display:flex; align-items:center; gap:10px; padding:8px 8px 10px; }
 .dropdown-divider{ height:1px; background:var(--border); margin:4px 0; }
 .dropdown-item{
-  display:block; width:100%; text-align:left;
+  display:flex; align-items:center; gap:8px; width:100%; text-align:left;
   padding:8px 10px; border-radius:var(--radius-sm);
   font-size:13.5px; color:var(--text-primary);
   background:none; border:none; cursor:pointer; font-family:inherit;
 }
 .dropdown-item:hover{ background:var(--surface-sunken); text-decoration:none; }
+.dropdown-item.active{ color:var(--brand-primary-hover); background:var(--brand-primary-soft); font-weight:600; }
 .dropdown-item-danger{ color:var(--danger); }
 .dropdown-item-danger:hover{ background:var(--danger-soft); }
+
+/* "Settings" master menu in the primary nav (see settingsMenuHtml in
+   app.js) - a dropdown trigger styled like the other nav-links, with its
+   panel opening below-left rather than below-right (unlike the
+   notifications/user menus in shell-right, this trigger sits mid-header
+   so right:0 could push the panel off past the left edge). */
+.nav-link-btn{ background:none; border:none; cursor:pointer; font-family:inherit; }
+.nav-dropdown{ left:0; right:auto; }
 
 .avatar{
   display:inline-flex; align-items:center; justify-content:center;
@@ -249,6 +258,7 @@ h2.section-title:first-of-type{ margin-top:0; }
 .mobile-nav-link.active{ color:var(--brand-primary-hover); background:var(--brand-primary-soft); font-weight:600; }
 .mobile-nav-link-danger{ color:var(--danger); }
 .mobile-nav-divider{ height:1px; background:var(--border); margin:var(--space-3) 0; }
+.mobile-nav-section-label{ padding:4px 10px 2px; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
 
 /* =============================================================================
    Buttons
