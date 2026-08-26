@@ -98,24 +98,42 @@ const App = (() => {
       <path d="M6 20 C 6 8, 22 8, 22 20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" fill="none" />
     </svg>`;
 
+  // Small (16x16, stroke-based, currentColor) icons shown before each nav
+  // label - same visual language as the notification bell / brand mark
+  // above (1.4-1.6 stroke-width, round joins). Purely decorative alongside
+  // the text label, so each is aria-hidden and the link's own text still
+  // carries the accessible name.
+  const NAV_ICONS = {
+    dashboard: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="11" y="3" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="3" y="11" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4"/><rect x="11" y="11" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.4"/></svg>`,
+    campaigns: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 8.5v3a1 1 0 0 0 1 1h1.3l3.9 3.1c.6.5 1.6.1 1.6-.7V5.1c0-.8-1-1.2-1.6-.7L5.3 7.5H4a1 1 0 0 0-1 1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M14.5 7.7a3 3 0 0 1 0 4.6M17 6a5.6 5.6 0 0 1 0 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    pipeline: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 4h14l-4.8 5.6v5.1L8.8 16.6v-7L3 4Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
+    forms: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M6 2.5h6l3 3V16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 9h6M7 12h6M7 6h2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    submissions: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3.5 10 6 3.5h8L16.5 10" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M3.5 10v5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-5h-3.6a2.4 2.4 0 0 1-4.8 0H3.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
+    users: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="6.5" r="3" stroke="currentColor" stroke-width="1.4"/><path d="M4 17c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    roles: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 2.5 16 5v4.5c0 4-2.6 6.7-6 8-3.4-1.3-6-4-6-8V5l6-2.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7.8 10 9.2 11.5 12.5 8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    branches: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 17.5S4.5 12.4 4.5 8.3a5.5 5.5 0 0 1 11 0c0 4.1-5.5 9.2-5.5 9.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="10" cy="8.2" r="1.9" stroke="currentColor" stroke-width="1.4"/></svg>`,
+    settings: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.4"/><path d="M10 3v1.6M10 15.4V17M17 10h-1.6M4.6 10H3M14.9 5.1l-1.1 1.1M6.2 13.7l-1.1 1.1M14.9 14.9l-1.1-1.1M6.2 6.2 5.1 5.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+  };
+
   const PRIMARY_LINKS = [
-    { href: "/dashboard.html", label: "Dashboard" },
-    { href: "/campaigns.html", label: "Campaigns" },
-    { href: "/pipeline.html", label: "Pipeline" },
+    { href: "/dashboard.html", label: "Dashboard", icon: NAV_ICONS.dashboard },
+    { href: "/campaigns.html", label: "Campaigns", icon: NAV_ICONS.campaigns },
+    { href: "/pipeline.html", label: "Pipeline", icon: NAV_ICONS.pipeline },
   ];
 
   const ADMIN_LINKS = [
-    { href: "/forms.html", label: "Forms", perm: "forms.view" },
-    { href: "/submissions.html", label: "Submissions", perm: "submissions.view" },
-    { href: "/admin/users.html", label: "Users", perm: "users.manage" },
-    { href: "/admin/roles.html", label: "Roles", perm: "roles.manage" },
-    { href: "/admin/branches.html", label: "Branches", perm: "branches.manage" },
-    { href: "/settings.html", label: "Settings", perm: "integrations.manage" },
+    { href: "/forms.html", label: "Forms", perm: "forms.view", icon: NAV_ICONS.forms },
+    { href: "/submissions.html", label: "Submissions", perm: "submissions.view", icon: NAV_ICONS.submissions },
+    { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
+    { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
+    { href: "/admin/branches.html", label: "Branches", perm: "branches.manage", icon: NAV_ICONS.branches },
+    { href: "/settings.html", label: "Settings", perm: "integrations.manage", icon: NAV_ICONS.settings },
   ];
 
   function navLinkHtml(link, activeHref, extraClass) {
     const active = link.href === activeHref;
-    return `<a href="${link.href}" class="${extraClass || "nav-link"}${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}>${link.label}</a>`;
+    const icon = link.icon ? `<span class="nav-link-icon">${link.icon}</span>` : "";
+    return `<a href="${link.href}" class="${extraClass || "nav-link"}${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}>${icon}${link.label}</a>`;
   }
 
   function renderNav(me, activeHref) {
