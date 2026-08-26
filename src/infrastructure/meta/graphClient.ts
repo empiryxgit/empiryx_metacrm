@@ -474,6 +474,74 @@ interface GraphCampaignNode {
   status: string;
 }
 
+// Campaign performance trend (Reach/Impressions/Clicks/CTR) - Meta's
+// Insights endpoint, entirely separate from the catalog fields
+// (id/name/status) fetched above. Uses the SAME ads_read scope RUTA
+// already holds for the catalog sync, so no new OAuth permission or App
+// Review submission is needed for this. Deliberately fetched on demand
+// (see api/campaigns/handler.ts's insights route) rather than synced into
+// our own table: Meta retains this history itself for well over any
+// window this UI shows, so there is nothing durable worth storing, and
+// the tenant always sees Meta's own live numbers rather than a snapshot
+// that can silently drift from what Ads Manager shows.
+export interface MetaCampaignInsightDay {
+  date: string; // YYYY-MM-DD
+  reach: number;
+  impressions: number;
+  clicks: number;
+  ctr: number; // percent, e.g. 1.23 - Meta's own `ctr` field, already a percentage
+}
+
+interface GraphInsightNode {
+  date_start: string;
+  reach?: string;
+  impressions?: string;
+  clicks?: string;
+  ctr?: string;
+}
+
+/** Day-by-day insights for one campaign over the last `days` days
+ * (inclusive of today). Meta's Insights API only returns a row for a day
+ * that had at least some activity - a quiet day is simply absent from
+ * `data`, not returned as a zeroed row - so every day in the requested
+ * range is filled in explicitly here, defaulting to 0, rather than
+ * leaving the trend chart with a gap where a flat day should be. */
+export async function getCampaignInsights(metaCampaignId: string, userAccessToken: string, days: number): Promise<MetaCampaignInsightDay[]> {
+  const until = new Date();
+  const since = new Date(until);
+  since.setDate(since.getDate() - (days - 1));
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+  const timeRange = encodeURIComponent(JSON.stringify({ since: fmt(since), until: fmt(until) }));
+  const url =
+    `${getBaseUrl()}/${metaCampaignId}/insights?fields=reach,impressions,clicks,ctr` +
+    `&time_range=${timeRange}&time_increment=1&limit=500` +
+    `&access_token=${encodeURIComponent(userAccessToken)}`;
+
+  const response = await fetchWithRetry(url);
+  if (!response.ok) {
+    throw await buildMetaApiError(response, `Failed to load insights for campaign ${metaCampaignId}`);
+  }
+  const page = (await response.json()) as GraphPagedResponse<GraphInsightNode>;
+  const byDate = new Map(page.data.map((node) => [node.date_start, node]));
+
+  const results: MetaCampaignInsightDay[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(since);
+    d.setDate(d.getDate() + i);
+    const dateStr = fmt(d);
+    const node = byDate.get(dateStr);
+    results.push({
+      date: dateStr,
+      reach: Number(node?.reach ?? 0),
+      impressions: Number(node?.impressions ?? 0),
+      clicks: Number(node?.clicks ?? 0),
+      ctr: Number(node?.ctr ?? 0),
+    });
+  }
+  return results;
+}
+
 /** Every ad campaign under one ad account (e.g. "act_1234567890" - the id
  * as stored in meta_ad_accounts.adAccountId, prefix included). Uses the
  * connection's user token, same as getUserAdAccounts (ads_read scope). */

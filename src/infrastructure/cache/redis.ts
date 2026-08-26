@@ -135,3 +135,44 @@ export async function getMetaSyncProgress(tenantId: string): Promise<MetaSyncPro
     return null;
   }
 }
+
+// ---------------------------------------------------------------------
+// Campaign performance trend (Reach/Impressions/Clicks/CTR - see
+// getCampaignInsights in src/infrastructure/meta/graphClient.ts). Cached
+// briefly so expanding a campaign row on the Campaigns screen, collapsing
+// it, and expanding it again (or another user on the same tenant doing the
+// same) doesn't cost a fresh Graph API call every time. Insights numbers
+// don't move meaningfully faster than this TTL in practice, so a short
+// cache trades a little staleness for materially fewer Graph API calls.
+// Same fail-open posture as the rest of this file: a Redis miss/outage
+// just means the request falls through to a live Meta fetch instead of
+// failing outright.
+// ---------------------------------------------------------------------
+
+const CAMPAIGN_INSIGHTS_KEY_PREFIX = "campaigninsights:";
+const CAMPAIGN_INSIGHTS_TTL_SECONDS = 30 * 60; // 30 minutes
+
+function campaignInsightsKey(tenantId: string, metaCampaignId: string, days: number): string {
+  return `${CAMPAIGN_INSIGHTS_KEY_PREFIX}${tenantId}:${metaCampaignId}:${days}`;
+}
+
+export async function getCachedCampaignInsights<T = unknown>(tenantId: string, metaCampaignId: string, days: number): Promise<T | null> {
+  try {
+    const redis = getRedis();
+    const raw = await redis.get<T | string>(campaignInsightsKey(tenantId, metaCampaignId, days));
+    if (!raw) return null;
+    return typeof raw === "string" ? (JSON.parse(raw) as T) : raw;
+  } catch (err) {
+    console.warn(`[campaign-insights] Redis unavailable while reading cache for ${metaCampaignId}:`, err);
+    return null;
+  }
+}
+
+export async function setCachedCampaignInsights(tenantId: string, metaCampaignId: string, days: number, data: unknown): Promise<void> {
+  try {
+    const redis = getRedis();
+    await redis.set(campaignInsightsKey(tenantId, metaCampaignId, days), JSON.stringify(data), { ex: CAMPAIGN_INSIGHTS_TTL_SECONDS });
+  } catch (err) {
+    console.warn(`[campaign-insights] Redis unavailable while writing cache for ${metaCampaignId}:`, err);
+  }
+}

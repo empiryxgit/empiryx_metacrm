@@ -31,6 +31,9 @@ import { PERMISSIONS } from "../../src/domain/permissions";
 import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
 import { listBranches } from "../../src/infrastructure/db/repositories/branches";
 import { evaluateLegacyWebhookMigration } from "../../src/application/metaSync/legacyMigration";
+import { getConnectionForSync, flagConnectionIfAuthError, MetaSyncNotConnectedError } from "../../src/application/metaSync/metaConnectionService";
+import { getCampaignInsights, MetaApiError } from "../../src/infrastructure/meta/graphClient";
+import { getCachedCampaignInsights, setCachedCampaignInsights } from "../../src/infrastructure/cache/redis";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -286,6 +289,7 @@ async function handleMetaCampaigns(req: VercelRequest, res: VercelResponse) {
   if (!metaCampaignId) return handleMetaCampaignsCollection(req, res);
   if (subresource === "map") return handleMapMetaCampaign(req, res, metaCampaignId);
   if (subresource === "unmap") return handleUnmapMetaCampaign(req, res, metaCampaignId);
+  if (subresource === "insights") return handleMetaCampaignInsights(req, res, metaCampaignId);
   if (!subresource) return handleGetOneMetaCampaign(req, res, metaCampaignId);
 
   res.status(404).json({ error: "Not found" });
@@ -412,4 +416,62 @@ async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, 
   }
 
   res.status(200).json({ unmapped: true });
+}
+
+// Day-by-day Reach/Impressions/Clicks/CTR for one Meta campaign - powers
+// the "expand a row" trend chart on the Campaigns screen. Same
+// CAMPAIGNS_VIEW gate as every other read in this file; deliberately no
+// branch check, matching handleGetOneMetaCampaign above - a Meta campaign
+// itself isn't branch-scoped (only its optional CRM mapping is), and this
+// is read-only performance data, not lead PII.
+const ALLOWED_INSIGHTS_DAYS = [7, 14, 30, 90];
+
+async function handleMetaCampaignInsights(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  if (!auth) return;
+
+  const metaCampaign = await getMetaCampaignWithMappingByRowId(auth.companyId, metaCampaignId);
+  if (!metaCampaign) {
+    res.status(404).json({ error: "Meta campaign not found." });
+    return;
+  }
+
+  const requestedDays = Number(getQueryString(req, "days"));
+  const days = ALLOWED_INSIGHTS_DAYS.includes(requestedDays) ? requestedDays : 30;
+
+  const cached = await getCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, days);
+  if (cached) {
+    res.status(200).json({ insights: cached });
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await getConnectionForSync(auth.companyId);
+  } catch (err) {
+    if (err instanceof MetaSyncNotConnectedError) {
+      res.status(409).json({ error: "Meta is not connected for this tenant." });
+      return;
+    }
+    throw err;
+  }
+
+  try {
+    const insights = await getCampaignInsights(metaCampaign.metaCampaignId, connection.accessToken, days);
+    await setCachedCampaignInsights(auth.companyId, metaCampaign.metaCampaignId, days, insights);
+    res.status(200).json({ insights });
+  } catch (err) {
+    // Same Phase 16 posture as the sync pipeline (see runMetaSync.ts): an
+    // auth-classified failure flags the connection so the tenant sees
+    // "Needs Reauthorization" on Settings, rather than this screen alone
+    // silently failing to load a chart.
+    await flagConnectionIfAuthError(auth.companyId, err, "Campaign insights");
+    const message = err instanceof MetaApiError ? err.message : "Failed to load campaign insights from Meta.";
+    res.status(502).json({ error: message });
+  }
 }

@@ -42,6 +42,7 @@
     { "source": "/api/campaigns/meta", "destination": "/api/campaigns/handler?resource=meta-campaigns" },
     { "source": "/api/campaigns/meta/:metaCampaignId/map", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=map" },
     { "source": "/api/campaigns/meta/:metaCampaignId/unmap", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=unmap" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/insights", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=insights" },
     { "source": "/api/campaigns/meta/:metaCampaignId", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId" },
     { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },
     { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },

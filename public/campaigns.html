@@ -21,6 +21,24 @@
 
   .manual-campaigns-section{ margin-top:32px; padding-top:24px; border-top:1px solid var(--border); }
   .manual-campaigns-section .section-title{ margin-top:0; }
+
+  /* Meta Campaigns row expand -> performance trend (Reach/Impressions/
+     Clicks/CTR). Reuses app.css's .chart-legend/.chart-svg-wrap/.chart-empty
+     (dashboard.html's own chart pieces) for the actual charts, so only the
+     expand affordance + panel layout need their own rules here. */
+  .expand-btn{ background:none; border:none; cursor:pointer; padding:4px; display:inline-flex; align-items:center; justify-content:center; color:var(--text-muted); border-radius:var(--radius-sm); }
+  .expand-btn:hover{ background:var(--surface-sunken); color:var(--text-primary); }
+  .expand-btn svg{ transition:transform .15s ease; }
+  .expand-btn.open svg{ transform:rotate(90deg); }
+  .insights-row td{ padding:0 !important; border-top:none !important; }
+  .insights-panel{ padding:16px 20px 20px; background:var(--surface-sunken); }
+  .insights-head{ display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px; }
+  .insights-stats{ display:flex; gap:22px; flex-wrap:wrap; }
+  .insights-stat .n{ display:block; font-size:18px; font-weight:700; color:var(--text-primary); }
+  .insights-stat .l{ display:block; font-size:11.5px; color:var(--text-muted); margin-top:1px; }
+  .insights-chart-block{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin-bottom:12px; }
+  .insights-chart-block:last-child{ margin-bottom:0; }
+  .insights-loading{ padding:20px 0; text-align:center; color:var(--text-muted); font-size:12.5px; }
 </style>
 </head>
 <body>
@@ -154,8 +172,8 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Campaign</th><th>Status</th><th>Leads</th><th>Mapped CRM campaign</th></tr></thead>
-          <tbody id="metaRows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+          <thead><tr><th style="width:30px"></th><th>Campaign</th><th>Status</th><th>Leads</th><th>Mapped CRM campaign</th></tr></thead>
+          <tbody id="metaRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
     `;
@@ -170,12 +188,12 @@
     try {
       ({ metaCampaigns } = await App.apiJson("/api/campaigns/meta"));
     } catch (err) {
-      metaRows.innerHTML = `<tr><td colspan="4" class="empty">Unable to load Meta campaigns right now.</td></tr>`;
+      metaRows.innerHTML = `<tr><td colspan="5" class="empty">Unable to load Meta campaigns right now.</td></tr>`;
       return;
     }
 
     if (!metaCampaigns.length) {
-      metaRows.innerHTML = `<tr><td colspan="4">
+      metaRows.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">No campaigns synced yet</p>
           <p class="state-desc">Meta is connected - campaigns from your selected ad account appear here automatically once synced.</p>
@@ -185,12 +203,250 @@
     }
     metaRows.innerHTML = metaCampaigns.map((c) => `
       <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
+        <td onclick="event.stopPropagation()">
+          <button type="button" class="expand-btn" onclick="toggleCampaignInsights(this, '${c.id}')" aria-label="Show performance trend for ${App.escapeHtml(c.name)}" aria-expanded="false">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 1l5 4-5 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </td>
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>
         <td>${c.crmCampaignName ? App.escapeHtml(c.crmCampaignName) : '<span style="color:var(--text-muted)">Unmapped — Map to CRM →</span>'}</td>
       </tr>
+      <tr class="insights-row" id="insightsRow-${c.id}" style="display:none"><td colspan="5"><div class="insights-panel" id="insightsPanel-${c.id}"></div></td></tr>
     `).join("");
+  }
+
+  // =======================================================================
+  // Meta Campaigns - performance trend (Reach/Impressions/Clicks/CTR).
+  // Expanding a row fetches /api/campaigns/meta/{id}/insights (backed by
+  // Meta's own Insights API, cached briefly server-side - see
+  // api/campaigns/handler.ts) and renders it inline, right under that row,
+  // rather than a separate page - this is deliberately "built into the
+  // existing Campaigns page" rather than a new screen. Reach/Impressions/
+  // Clicks share one chart (same unit: counts) with a togglable legend,
+  // matching dashboard.html's own chart pattern; CTR is a percentage on an
+  // entirely different scale, so it gets its own small chart underneath
+  // rather than being squashed flat on the counts axis.
+  // =======================================================================
+
+  const insightsState = new Map(); // metaCampaignId -> { days, visible:Set, data:Array|null }
+  const INSIGHT_SERIES = [
+    { key: "reach", label: "Reach", color: "var(--brand-primary)" },
+    { key: "impressions", label: "Impressions", color: "var(--brand-dark)" },
+    { key: "clicks", label: "Clicks", color: "var(--success)" },
+  ];
+
+  function toggleCampaignInsights(btn, id) {
+    const row = document.getElementById(`insightsRow-${id}`);
+    if (!row) return;
+    const isOpen = row.style.display !== "none";
+    if (isOpen) {
+      row.style.display = "none";
+      btn.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+      return;
+    }
+    row.style.display = "";
+    btn.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    if (!insightsState.has(id)) {
+      insightsState.set(id, { days: 30, visible: new Set(["reach", "impressions", "clicks"]), data: null });
+    }
+    renderInsightsPanel(id);
+    if (!insightsState.get(id).data) loadCampaignInsights(id);
+  }
+
+  function renderInsightsPanel(id) {
+    const state = insightsState.get(id);
+    const panel = document.getElementById(`insightsPanel-${id}`);
+    if (!state || !panel) return;
+    panel.innerHTML = `
+      <div class="insights-head">
+        <div class="insights-stats" id="insightsStats-${id}"><div class="insights-loading">Loading…</div></div>
+        <div class="segmented" id="insightsRangeToggle-${id}">
+          ${[7, 14, 30, 90].map(d => `<button type="button" data-days="${d}" class="${d === state.days ? "active" : ""}">${d}D</button>`).join("")}
+        </div>
+      </div>
+      <div class="insights-chart-block">
+        <div class="chart-legend" id="insightsLegend-${id}"></div>
+        <div class="chart-svg-wrap" id="insightsChart-${id}"><div class="insights-loading">Loading trend…</div></div>
+      </div>
+      <div class="insights-chart-block">
+        <p class="dash-card-sub" style="margin:0 0 8px">Click-through rate (CTR)</p>
+        <div class="chart-svg-wrap" id="insightsCtrChart-${id}"></div>
+      </div>
+    `;
+    panel.querySelectorAll(`#insightsRangeToggle-${id} button`).forEach(rangeBtn => {
+      rangeBtn.addEventListener("click", () => {
+        const days = Number(rangeBtn.dataset.days);
+        if (days === state.days) return;
+        state.days = days;
+        state.data = null;
+        renderInsightsPanel(id);
+        loadCampaignInsights(id);
+      });
+    });
+    renderInsightsLegend(id);
+  }
+
+  function renderInsightsLegend(id) {
+    const state = insightsState.get(id);
+    const legend = document.getElementById(`insightsLegend-${id}`);
+    if (!state || !legend) return;
+    legend.innerHTML = INSIGHT_SERIES.map(s => `
+      <button type="button" class="chart-legend-item ${state.visible.has(s.key) ? "" : "off"}" data-series="${s.key}">
+        <span class="dot" style="background:${s.color}"></span>${App.escapeHtml(s.label)}
+      </button>`).join("");
+    legend.querySelectorAll(".chart-legend-item").forEach(legendBtn => {
+      legendBtn.addEventListener("click", () => {
+        const key = legendBtn.dataset.series;
+        if (state.visible.has(key)) state.visible.delete(key); else state.visible.add(key);
+        renderInsightsLegend(id);
+        renderInsightsChart(id);
+      });
+    });
+  }
+
+  async function loadCampaignInsights(id) {
+    const state = insightsState.get(id);
+    if (!state) return;
+    try {
+      const { insights } = await App.apiJson(`/api/campaigns/meta/${id}/insights?days=${state.days}`);
+      state.data = insights;
+      renderInsightsStats(id);
+      renderInsightsChart(id);
+      renderInsightsCtrChart(id);
+    } catch (err) {
+      const statsEl = document.getElementById(`insightsStats-${id}`);
+      const chartEl = document.getElementById(`insightsChart-${id}`);
+      if (statsEl) statsEl.innerHTML = `<div class="insights-loading">Unable to load performance data right now.</div>`;
+      if (chartEl) chartEl.innerHTML = `<div class="chart-empty">Unable to load trend data.</div>`;
+    }
+  }
+
+  function renderInsightsStats(id) {
+    const state = insightsState.get(id);
+    const el = document.getElementById(`insightsStats-${id}`);
+    if (!state || !el || !state.data) return;
+    const totals = state.data.reduce((acc, d) => {
+      acc.reach += d.reach; acc.impressions += d.impressions; acc.clicks += d.clicks;
+      return acc;
+    }, { reach: 0, impressions: 0, clicks: 0 });
+    // Averaged from totals (clicks / impressions), not an average of Meta's
+    // own daily ctr values - correct regardless of how activity is spread
+    // across the range, unlike a plain mean of per-day percentages.
+    const avgCtr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+    const stats = [
+      { label: "Reach", value: totals.reach.toLocaleString() },
+      { label: "Impressions", value: totals.impressions.toLocaleString() },
+      { label: "Clicks", value: totals.clicks.toLocaleString() },
+      { label: "Avg. CTR", value: `${avgCtr.toFixed(2)}%` },
+    ];
+    el.innerHTML = stats.map(s => `<div class="insights-stat"><span class="n">${s.value}</span><span class="l">${s.label}</span></div>`).join("");
+  }
+
+  // Same hand-rolled inline-SVG line/area chart approach as
+  // dashboard.html's renderChart - no charting library in this codebase.
+  function renderInsightsChart(id) {
+    const state = insightsState.get(id);
+    const wrap = document.getElementById(`insightsChart-${id}`);
+    if (!state || !wrap || !state.data) return;
+    const buckets = state.data;
+    if (!buckets.length) { wrap.innerHTML = `<div class="chart-empty">No data for this period yet.</div>`; return; }
+
+    const height = 180;
+    const padding = { top: 12, right: 12, bottom: 24, left: 34 };
+    const pxPerPoint = buckets.length > 20 ? 26 : 40;
+    const width = Math.max(480, buckets.length * pxPerPoint);
+    const innerW = width - padding.left - padding.right;
+    const innerH = height - padding.top - padding.bottom;
+
+    const activeSeries = INSIGHT_SERIES.filter(s => state.visible.has(s.key));
+    const maxVal = Math.max(1, ...buckets.flatMap(b => activeSeries.map(s => b[s.key] || 0)));
+    const niceMax = Math.ceil(maxVal / 4) * 4 || 4;
+
+    const xAt = (i) => padding.left + (buckets.length === 1 ? innerW / 2 : (i / (buckets.length - 1)) * innerW);
+    const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
+
+    const gridLines = [0, 0.5, 1].map(f => {
+      const y = padding.top + innerH * (1 - f);
+      const val = Math.round(niceMax * f);
+      return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="9.5" fill="var(--text-muted)" text-anchor="end">${val}</text>`;
+    }).join("");
+
+    const labelEvery = Math.ceil(buckets.length / 7) || 1;
+    const xLabels = buckets.map((b, i) => {
+      if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
+      const d = new Date(b.date);
+      const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+    }).join("");
+
+    const seriesSvg = activeSeries.map(s => {
+      const points = buckets.map((b, i) => [xAt(i), yAt(b[s.key] || 0)]);
+      const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+      const areaPath = linePath + ` L${xAt(buckets.length - 1).toFixed(1)},${(padding.top + innerH).toFixed(1)} L${xAt(0).toFixed(1)},${(padding.top + innerH).toFixed(1)} Z`;
+      const dots = points.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="${s.color}" />`).join("");
+      return `<path d="${areaPath}" fill="${s.color}" opacity="0.07" />
+              <path d="${linePath}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" />
+              ${dots}`;
+    }).join("");
+
+    wrap.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Campaign performance chart">
+      ${gridLines}${xLabels}${seriesSvg}
+    </svg>`;
+  }
+
+  // Own scale (percent, not counts) - kept as a separate small chart rather
+  // than a fourth series on the chart above, where a CTR of a few percent
+  // would be visually flattened to nothing against reach/impressions counts
+  // in the thousands.
+  function renderInsightsCtrChart(id) {
+    const state = insightsState.get(id);
+    const wrap = document.getElementById(`insightsCtrChart-${id}`);
+    if (!state || !wrap || !state.data) return;
+    const buckets = state.data;
+    if (!buckets.length) { wrap.innerHTML = `<div class="chart-empty">No data for this period yet.</div>`; return; }
+
+    const height = 140;
+    const padding = { top: 10, right: 12, bottom: 24, left: 40 };
+    const pxPerPoint = buckets.length > 20 ? 26 : 40;
+    const width = Math.max(480, buckets.length * pxPerPoint);
+    const innerW = width - padding.left - padding.right;
+    const innerH = height - padding.top - padding.bottom;
+
+    const maxVal = Math.max(0.5, ...buckets.map(b => b.ctr || 0));
+    const niceMax = Math.ceil(maxVal * 4) / 4 || 0.5; // nearest 0.25%
+
+    const xAt = (i) => padding.left + (buckets.length === 1 ? innerW / 2 : (i / (buckets.length - 1)) * innerW);
+    const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
+
+    const gridLines = [0, 0.5, 1].map(f => {
+      const y = padding.top + innerH * (1 - f);
+      const val = (niceMax * f).toFixed(2);
+      return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="9.5" fill="var(--text-muted)" text-anchor="end">${val}%</text>`;
+    }).join("");
+
+    const labelEvery = Math.ceil(buckets.length / 7) || 1;
+    const xLabels = buckets.map((b, i) => {
+      if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
+      const d = new Date(b.date);
+      const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="9.5" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+    }).join("");
+
+    const points = buckets.map((b, i) => [xAt(i), yAt(b.ctr || 0)]);
+    const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+    const dots = points.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="var(--warning)" />`).join("");
+
+    wrap.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Campaign CTR trend chart">
+      ${gridLines}${xLabels}
+      <path d="${linePath}" fill="none" stroke="var(--warning)" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" />
+      ${dots}
+    </svg>`;
   }
 
   // Fetched once (Meta connection/Page/Ad Account selection isn't
