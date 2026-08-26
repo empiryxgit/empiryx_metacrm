@@ -176,7 +176,8 @@ export async function runMetaSync(tenantId: string): Promise<MetaSyncResult> {
       if (result.skipped) {
         setStep("forms", "skipped", result.reason);
       } else {
-        setStep("forms", "done", pluralize(result.formsCount, "form"));
+        const historicalNote = result.historicalLeadsCreated > 0 ? `, ${pluralize(result.historicalLeadsCreated, "historical lead")} captured` : "";
+        setStep("forms", "done", `${pluralize(result.formsCount, "form")}${historicalNote}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

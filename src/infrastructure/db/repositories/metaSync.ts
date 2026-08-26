@@ -327,6 +327,23 @@ export async function replaceMetaAds(tenantId: string, adSetRowId: string, ads: 
 
 // ---- Lead forms (reuses the existing meta_forms table from Phase 2) -------
 
+/** Existence check by Meta's OWN form id, BEFORE the upsert - lets
+ * metaFormService.ts tell a brand-new form (never synced for this tenant
+ * before) from a re-sync of one it's already seen, the same
+ * check-before-upsert pattern metaCampaignService.ts uses to gate
+ * "auto-map on first sync". Used to gate the one-time historical lead
+ * backfill (see syncHistoricalLeadsForForm) so it only ever runs once per
+ * form, not on every regular "Sync now". */
+export async function getMetaFormByFormId(tenantId: string, formId: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select({ id: metaForms.id })
+    .from(metaForms)
+    .where(and(eq(metaForms.tenantId, tenantId), eq(metaForms.formId, formId)))
+    .limit(1);
+  return row ?? null;
+}
+
 export interface ReplaceMetaFormInput {
   formId: string;
   formName: string;

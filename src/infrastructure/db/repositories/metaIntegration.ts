@@ -5,9 +5,9 @@
 // views for anything an API response returns, decrypted values only ever
 // returned from the "*Internal" functions Graph API calls actually need.
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { metaAdAccounts, metaConnections, metaInstagramAccounts, metaPages } from "../schema";
+import { metaAdAccounts, metaConnections, metaForms, metaInstagramAccounts, metaPages } from "../schema";
 import { firstOrThrow } from "../util";
 import { decryptSecret, encryptSecret } from "../../security/encryption";
 
@@ -229,6 +229,44 @@ export async function getActiveMetaConnectionInternal(tenantId: string) {
   return { ...row, accessToken: decryptSecret(row.accessTokenEncrypted) };
 }
 
+/**
+ * Proactive token refresh support (see
+ * src/application/metaSync/metaTokenRefreshService.ts) - every ACTIVE
+ * connection, across every tenant, whose long-lived user token is due to
+ * expire on or before `cutoff`, decrypted and ready to hand to
+ * exchangeForLongLivedToken. A connection with no known expiry
+ * (tokenExpiresAt null - only happens if Meta's token response omitted
+ * expires_in entirely at connect time, see completeMetaConnection's own
+ * comment) is left out - there is nothing to act on for it, same as
+ * before this function existed. Unpaginated, same convention as every
+ * other cross-tenant sweep in this codebase (e.g. listActiveWebhookConfigs
+ * in repositories/campaigns.ts) - correct for any realistic number of
+ * tenants.
+ */
+export async function listActiveMetaConnectionsExpiringBefore(cutoff: Date) {
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(metaConnections)
+    .where(and(eq(metaConnections.status, "active"), isNotNull(metaConnections.tokenExpiresAt), lte(metaConnections.tokenExpiresAt, cutoff)));
+  return rows.map((row) => ({ ...row, accessToken: decryptSecret(row.accessTokenEncrypted) }));
+}
+
+/**
+ * Updates an already-ACTIVE connection's token material in place after a
+ * successful proactive refresh - narrower than upsertMetaConnection (which
+ * is for a brand NEW OAuth grant and demotes any prior active row to
+ * "revoked" before inserting a new one); this never touches `status`,
+ * `metaUserId`, or `metaUserName` - only the token itself and its expiry.
+ */
+export async function updateMetaConnectionToken(connectionId: string, accessToken: string, tokenExpiresAt: Date | null): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(metaConnections)
+    .set({ accessTokenEncrypted: encryptSecret(accessToken), tokenExpiresAt, updatedAt: new Date() })
+    .where(eq(metaConnections.id, connectionId));
+}
+
 // ---- Pages ------------------------------------------------------------------
 
 export interface ReplaceMetaPageInput {
@@ -365,6 +403,64 @@ export async function getSelectedMetaPage(tenantId: string) {
     .where(and(eq(metaPages.tenantId, tenantId), eq(metaPages.isSelected, true)))
     .limit(1);
   return row ?? null;
+}
+
+export interface TenantMetaReconciliationTarget {
+  tenantId: string;
+  metaPageId: string; // the selected Page's OWN Meta id (not our row id)
+  pageAccessToken: string; // decrypted - internal use only, same posture as getActiveMetaConnectionInternal
+  formIds: string[]; // Meta's own form ids, scoped to the tenant's SELECTED Page only
+}
+
+/**
+ * Every tenant eligible for the tenant-level pipeline's own missing-lead
+ * reconciliation sweep (see src/application/reconcile.ts) - one with an
+ * ACTIVE Meta connection, a SELECTED Page, and at least one synced Lead
+ * Form under that Page. A tenant with no active connection, no selected
+ * Page, or zero synced forms simply doesn't appear in the result - nothing
+ * to reconcile for it yet.
+ *
+ * Scoped to the SELECTED page only (metaForms.pageId = the selected page's
+ * OWN Meta id) - same reasoning as listMetaFormsWithMappingCountsForPage:
+ * a tenant that disconnects and reconnects with a DIFFERENT Page must
+ * never have reconciliation reach into a no-longer-relevant Page's old,
+ * stale forms.
+ *
+ * `isSelected` is enforced single-per-tenant by a partial unique index
+ * (ux_meta_pages_one_selected_per_tenant), so the join below can never
+ * fan out into more than one Page per tenant. Unpaginated, same convention
+ * as every other cross-tenant sweep in this codebase (e.g.
+ * listActiveWebhookConfigs) - correct for any realistic number of tenants.
+ */
+export async function listTenantsForMetaLeadReconciliation(): Promise<TenantMetaReconciliationTarget[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      tenantId: metaConnections.tenantId,
+      metaPageId: metaPages.pageId,
+      pageAccessTokenEncrypted: metaPages.pageAccessTokenEncrypted,
+      metaFormId: metaForms.formId,
+    })
+    .from(metaConnections)
+    .innerJoin(metaPages, and(eq(metaPages.tenantId, metaConnections.tenantId), eq(metaPages.isSelected, true)))
+    .innerJoin(metaForms, and(eq(metaForms.tenantId, metaConnections.tenantId), eq(metaForms.pageId, metaPages.pageId)))
+    .where(eq(metaConnections.status, "active"));
+
+  const byTenant = new Map<string, TenantMetaReconciliationTarget>();
+  for (const row of rows) {
+    let target = byTenant.get(row.tenantId);
+    if (!target) {
+      target = {
+        tenantId: row.tenantId,
+        metaPageId: row.metaPageId,
+        pageAccessToken: decryptSecret(row.pageAccessTokenEncrypted),
+        formIds: [],
+      };
+      byTenant.set(row.tenantId, target);
+    }
+    target.formIds.push(row.metaFormId);
+  }
+  return Array.from(byTenant.values());
 }
 
 /** Phase 7: subscribe attempt succeeded - webhookLastVerifiedAt is the

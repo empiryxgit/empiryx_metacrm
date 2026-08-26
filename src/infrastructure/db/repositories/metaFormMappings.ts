@@ -163,9 +163,11 @@ export async function saveFieldMappings(tenantId: string, metaFormRowId: string,
  * helper for the Meta Forms table, joined with a mapped/total question
  * count so the admin screen can show "4 of 5 fields mapped" without a
  * second round trip per form. */
-export async function listMetaFormsWithMappingCounts(tenantId: string) {
+/** Shared by listMetaFormsWithMappingCounts and
+ * listMetaFormsWithMappingCountsForPage below - the mapped-count join is
+ * identical either way, only which `forms` rows it's computed for differs. */
+async function attachMappingCounts(tenantId: string, forms: (typeof metaForms.$inferSelect)[]) {
   const db = await getDb();
-  const forms = await db.select().from(metaForms).where(eq(metaForms.tenantId, tenantId));
   if (forms.length === 0) return [];
   const mappings = await db
     .select({ metaFormId: metaFormFieldMappings.metaFormId, mappingType: metaFormFieldMappings.mappingType })
@@ -188,6 +190,36 @@ export async function listMetaFormsWithMappingCounts(tenantId: string) {
     questionCount: (f.questions as MetaFormQuestion[]).length,
     mappedCount: mappedCountByForm.get(f.id) ?? 0,
   }));
+}
+
+/** Unscoped by Page - includes forms synced under a Page the tenant is no
+ * longer connected to. Kept for callers that genuinely want the full
+ * synced history regardless of which Page it came from (currently just
+ * this file's own tests) - see listMetaFormsWithMappingCountsForPage
+ * below, which is what the admin mapping screen and the Meta status
+ * screen actually use. */
+export async function listMetaFormsWithMappingCounts(tenantId: string) {
+  const db = await getDb();
+  const forms = await db.select().from(metaForms).where(eq(metaForms.tenantId, tenantId));
+  return attachMappingCounts(tenantId, forms);
+}
+
+/**
+ * Same shape as listMetaFormsWithMappingCounts above, narrowed to forms
+ * synced under ONE Page (metaForms.pageId, Meta's own Page id - pass the
+ * tenant's CURRENTLY SELECTED Page's pageId, see getSelectedMetaPage in
+ * metaIntegration.ts). Review finding: disconnecting Meta and reconnecting
+ * with a DIFFERENT Page never deletes the previously synced forms
+ * (disconnectActiveMetaConnection only revokes the connection row; synced
+ * Pages/forms are left as history) - without this scoping those stale
+ * forms would keep showing up on the field-mapping screen forever, right
+ * alongside the new Page's forms. Same fix, same reasoning, as
+ * listMetaCampaignsWithMappingForAdAccount in metaSync.ts.
+ */
+export async function listMetaFormsWithMappingCountsForPage(tenantId: string, pageId: string) {
+  const db = await getDb();
+  const forms = await db.select().from(metaForms).where(and(eq(metaForms.tenantId, tenantId), eq(metaForms.pageId, pageId)));
+  return attachMappingCounts(tenantId, forms);
 }
 
 export async function getMetaFormById(tenantId: string, metaFormRowId: string) {

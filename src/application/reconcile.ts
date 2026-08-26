@@ -29,6 +29,7 @@ import { getRecentLeadsForForm } from "../infrastructure/meta/graphClient";
 import { listActiveWebhookConfigs } from "../infrastructure/db/repositories/campaigns";
 import {
   getRecentMetaLeadIds,
+  getRecentMetaLeadIdsForCompany,
   getUnenqueuedRawEvents,
   insertRecoveredLead,
   logEvent,
@@ -36,9 +37,12 @@ import {
   markRawEventEnqueueFailed,
   recordReconciliationRun,
 } from "../infrastructure/db/repositories";
-import { getUnenqueuedMetaLeadEvents, markMetaLeadEventEnqueued } from "../infrastructure/db/repositories/metaLeadEvents";
+import { getUnenqueuedMetaLeadEvents, insertMetaSyncLead, markMetaLeadEventEnqueued } from "../infrastructure/db/repositories/metaLeadEvents";
+import { listTenantsForMetaLeadReconciliation } from "../infrastructure/db/repositories/metaIntegration";
+import { getMetaCampaignByMetaCampaignId } from "../infrastructure/db/repositories/metaSync";
 import { publishLeadReceived, publishTenantLeadReceived } from "../infrastructure/queue/qstash";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
+import { refreshExpiringMetaTokens } from "./metaSync/metaTokenRefreshService";
 import { LeadPlatform } from "../domain/types";
 
 const LOOKBACK_HOURS = Number(process.env.RECONCILIATION_LOOKBACK_HOURS ?? 6);
@@ -55,6 +59,31 @@ export interface ReconciliationSummary {
   // publish call, a different failure mode) rather than folded into one
   // combined number.
   unenqueuedMetaLeadEventsRetried: number;
+  // Review finding - the tenant-level pipeline's own MISSING LEAD recovery
+  // (as opposed to unenqueuedMetaLeadEventsRetried above, which only
+  // retries publishing an event that WAS captured but never confirmed
+  // enqueued). Before this, a webhook delivery that Meta simply never sent
+  // - the network blip / brief subscription hiccup that leaves no
+  // meta_lead_events row at all - had no recovery path for this pipeline,
+  // unlike the legacy per-campaign one (missingLeadsFound/Recovered
+  // above), which has always self-healed this exact failure mode. Kept as
+  // its own separate count, same "different table, different pipeline,
+  // never folded together" convention as every other Phase-11-and-later
+  // addition in this summary.
+  tenantPipelineFormsScanned: number;
+  tenantPipelineLeadsSeen: number;
+  tenantPipelineMissingLeadsFound: number;
+  tenantPipelineMissingLeadsRecovered: number;
+  // Review finding - proactive long-lived token refresh (see
+  // metaTokenRefreshService.ts). tokensChecked is how many active
+  // connections were within the refresh window this run;
+  // tokensRefreshFailed is not itself an error condition worth bumping
+  // `errors` for (see the loop below) - most failures here just mean "try
+  // again next sweep, still time left" - but is surfaced separately so a
+  // persistently-failing refresh is visible without digging through logs.
+  tokensChecked: number;
+  tokensRefreshed: number;
+  tokensRefreshFailed: number;
   errors: number;
 }
 
@@ -193,6 +222,84 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     }
   }
 
+  // Review finding - the tenant-level pipeline's own MISSING LEAD recovery,
+  // bringing it to parity with the legacy per-campaign sweep above (which
+  // has always self-healed a webhook delivery Meta simply never sent, not
+  // just one that arrived but failed to enqueue). Same shape as the legacy
+  // loop: page through each eligible tenant's forms via the SAME
+  // getRecentLeadsForForm generator, compare against what's already in
+  // Postgres for that tenant, and recover anything missing directly
+  // through insertMetaSyncLead - the identical field-resolution/
+  // attribution path processMetaLeadEvent.ts and the historical backfill
+  // (metaFormService.ts) both already use, so a lead recovered here is
+  // indistinguishable in shape from one that arrived live.
+  const reconciliationTargets = await listTenantsForMetaLeadReconciliation();
+  let tenantPipelineFormsScanned = 0;
+  let tenantPipelineLeadsSeen = 0;
+  let tenantPipelineMissingFound = 0;
+  let tenantPipelineMissingRecovered = 0;
+
+  for (const target of reconciliationTargets) {
+    const knownLeadIds = await getRecentMetaLeadIdsForCompany(target.tenantId, sinceIso);
+
+    for (const formId of target.formIds) {
+      tenantPipelineFormsScanned++;
+      try {
+        for await (const lead of getRecentLeadsForForm(formId, sinceUnix, target.pageAccessToken)) {
+          tenantPipelineLeadsSeen++;
+          if (knownLeadIds.has(lead.id)) continue;
+
+          tenantPipelineMissingFound++;
+          const contact = await resolveLeadFields(target.tenantId, lead.formId, lead.fieldData);
+          const metaCampaign = lead.campaignId ? await getMetaCampaignByMetaCampaignId(target.tenantId, lead.campaignId) : null;
+
+          const result = await insertMetaSyncLead({
+            companyId: target.tenantId,
+            branchId: metaCampaign?.crmCampaignBranchId ?? null,
+            crmCampaignId: metaCampaign?.crmCampaignId ?? null,
+            metaLeadId: lead.id,
+            platform: LeadPlatform.Facebook,
+            pageId: lead.pageId ?? target.metaPageId,
+            formId: lead.formId,
+            formName: contact.formName,
+            adId: lead.adId,
+            adName: lead.adName,
+            adSetId: lead.adSetId,
+            adSetName: lead.adSetName,
+            campaignId: lead.campaignId,
+            campaignName: lead.campaignName,
+            fullName: contact.fullName,
+            email: contact.email,
+            phoneNumber: contact.phoneNumber,
+            customFields: contact.customFields,
+            formResponses: lead.fieldData,
+            metaCreatedAt: new Date(lead.createdTime),
+          });
+
+          if (result.outcome === "inserted") {
+            tenantPipelineMissingRecovered++;
+            await logEvent({
+              leadId: result.id,
+              eventType: "Reconciled",
+              detail: `Recovered missing Meta Lead ID ${lead.id} for form ${formId} (tenant-level pipeline)`,
+            });
+          }
+        }
+      } catch (err) {
+        errors++;
+        console.error(`[reconciliation] Error scanning form ${formId} for tenant ${target.tenantId} (tenant-level pipeline):`, err);
+      }
+    }
+  }
+
+  // Review finding - proactive long-lived token refresh (see
+  // metaTokenRefreshService.ts's own header comment for why this needs to
+  // exist at all). A refresh failure is not counted against `errors` -
+  // most failures here just mean "try again on the next sweep, there's
+  // still time before the token actually expires" - tokensRefreshFailed
+  // surfaces it separately instead.
+  const tokenRefreshResult = await refreshExpiringMetaTokens();
+
   return {
     campaignsScanned: activeCampaigns.length,
     formsScanned,
@@ -201,6 +308,13 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     missingLeadsRecovered: missingRecovered,
     unenqueuedEventsRetried: retried,
     unenqueuedMetaLeadEventsRetried: metaLeadEventsRetried,
+    tenantPipelineFormsScanned,
+    tenantPipelineLeadsSeen,
+    tenantPipelineMissingLeadsFound: tenantPipelineMissingFound,
+    tenantPipelineMissingLeadsRecovered: tenantPipelineMissingRecovered,
+    tokensChecked: tokenRefreshResult.checked,
+    tokensRefreshed: tokenRefreshResult.refreshed,
+    tokensRefreshFailed: tokenRefreshResult.failed,
     errors,
   };
 }

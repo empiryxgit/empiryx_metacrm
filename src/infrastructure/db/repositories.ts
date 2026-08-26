@@ -166,6 +166,21 @@ export async function getRecentMetaLeadIds(crmCampaignId: string, sinceIso: stri
   return new Set(rows.map((r) => r.metaLeadId));
 }
 
+/** Same shape as getRecentMetaLeadIds above, scoped by companyId (tenant)
+ * rather than crmCampaignId - what the tenant-level pipeline's own
+ * reconciliation sweep needs (see src/application/reconcile.ts), since a
+ * lead ingested through that pipeline doesn't necessarily have a
+ * crmCampaignId at all (an unmapped Meta campaign - see
+ * processMetaLeadEvent.ts's header comment - still captures the lead). */
+export async function getRecentMetaLeadIdsForCompany(companyId: string, sinceIso: string): Promise<Set<string>> {
+  const db = await getDb();
+  const rows = await db
+    .select({ metaLeadId: leads.metaLeadId })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), gte(leads.createdAt, new Date(sinceIso))));
+  return new Set(rows.map((r) => r.metaLeadId));
+}
+
 export async function insertRecoveredLead(input: InsertLeadInput): Promise<InsertLeadResult> {
   const db = await getDb();
   try {

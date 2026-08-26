@@ -106,6 +106,7 @@ import { buildAuthorizationUrl, completeMetaConnection, getAppSecret, MetaOAuthC
 import {
   disconnectActiveMetaConnection,
   getRelevantMetaConnectionView,
+  getSelectedMetaPage,
   listMetaAdAccounts,
   listMetaInstagramAccounts,
   listMetaPages,
@@ -118,7 +119,7 @@ import { captureLeadgenEvents, enqueueCapturedLeadgenEvents } from "../../../src
 import {
   getMetaFormById,
   listFieldMappingsForForm,
-  listMetaFormsWithMappingCounts,
+  listMetaFormsWithMappingCountsForPage,
   saveFieldMappings,
   type SaveFieldMappingInput,
 } from "../../../src/infrastructure/db/repositories/metaFormMappings";
@@ -302,25 +303,28 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
     // Promise.all rather than a second request - this endpoint already
     // backs the full config screen's main card, and the status screen is
     // just a leaner rendering of the same underlying state.
-    const [connection, pages, instagramAccounts, adAccounts, forms, lastLeadAt] = await Promise.all([
+    const [connection, pages, instagramAccounts, adAccounts, lastLeadAt] = await Promise.all([
       getRelevantMetaConnectionView(auth.companyId),
       listMetaPages(auth.companyId),
       listMetaInstagramAccounts(auth.companyId),
       listMetaAdAccounts(auth.companyId),
-      listMetaFormsWithMappingCounts(auth.companyId),
       getLastMetaLeadReceivedAt(auth.companyId),
     ]);
-    // campaignsCount is scoped to the CURRENTLY SELECTED ad account only
-    // (found from the adAccounts list already fetched above, no extra
-    // query needed) - same fix as the Campaigns screen's "Meta Campaigns"
-    // table (see listMetaCampaignsWithMappingForAdAccount's own comment).
-    // Without this, reconnecting Meta with a different ad account would
-    // keep this status screen's count inflated with the previous account's
-    // campaigns even after the Campaigns page itself stopped showing them.
+    // campaignsCount/leadFormsCount are scoped to the CURRENTLY SELECTED ad
+    // account / Page only (found from the adAccounts/pages lists already
+    // fetched above, no extra query needed) - review finding, same fix as
+    // the Campaigns screen's "Meta Campaigns" table (see
+    // listMetaCampaignsWithMappingForAdAccount's own comment). Without
+    // this, reconnecting Meta with a different ad account or Page would
+    // keep this status screen's counts inflated with the previous
+    // account's/Page's campaigns/forms even after the Campaigns page and
+    // the field-mapping screen themselves stopped showing them.
     const selectedAdAccount = adAccounts.find((a) => a.isSelected) ?? null;
     const campaigns = selectedAdAccount
       ? await listMetaCampaignsWithMappingForAdAccount(auth.companyId, selectedAdAccount.id)
       : [];
+    const selectedPage = pages.find((p) => p.isSelected) ?? null;
+    const forms = selectedPage ? await listMetaFormsWithMappingCountsForPage(auth.companyId, selectedPage.pageId) : [];
     res.status(200).json({
       connection,
       pages: pages.map((p) => ({
@@ -646,7 +650,12 @@ async function handleMetaFormsCollection(req: VercelRequest, res: VercelResponse
   const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
 
-  const forms = await listMetaFormsWithMappingCounts(auth.companyId);
+  // Scoped to the tenant's CURRENTLY SELECTED Page only - review finding,
+  // same fix as the Campaigns screen's ad-account scoping: reconnecting
+  // Meta with a different Page must not keep showing the previous Page's
+  // forms here (see listMetaFormsWithMappingCountsForPage's own comment).
+  const selectedPage = await getSelectedMetaPage(auth.companyId);
+  const forms = selectedPage ? await listMetaFormsWithMappingCountsForPage(auth.companyId, selectedPage.pageId) : [];
   res.status(200).json({
     forms: forms.map((f) => ({
       id: f.id,
