@@ -289,6 +289,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
     .sort((a, b) => b.leads - a.leads);
 
+  // ---- Lead list (date-range scoped - the Dashboard's "Lead List" card,
+  // just above Lead Performance). Same cohort as the KPIs/chart/sources
+  // above (leads CREATED in the selected range), just listed individually
+  // instead of aggregated - so switching the range toggle re-fetches this
+  // whole endpoint and the list updates for free, exactly like every other
+  // section here. currentCohort is already newest-first (filtered out of
+  // allLeads, which was queried ORDER BY created_at DESC), so no extra sort
+  // is needed. Capped at LEAD_LIST_LIMIT - this is a "what just came in"
+  // glance, not a replacement for Pipeline's full, paginated list.
+  const LEAD_LIST_LIMIT = 50;
+  const leadList = currentCohort.slice(0, LEAD_LIST_LIMIT).map((row) => {
+    const c = classify(row);
+    return {
+      id: row.id,
+      fullName: row.fullName,
+      email: row.email,
+      phoneNumber: row.phoneNumber,
+      source: row.source,
+      sourceLabel: sourceLabel(row.source),
+      stageKey: c.stageKey,
+      stageLabel: c.stageLabel,
+      isWon: c.isWon,
+      isLost: c.isLost,
+      campaignName: row.crmCampaignId ? campaignNameById.get(row.crmCampaignId) ?? null : null,
+      ownerName: row.ownerId ? ownerNameById.get(row.ownerId) ?? null : null,
+      createdAt: row.createdAt.toISOString(),
+    };
+  });
+
   // ---- Recent activity (derived from createdAt/updatedAt - no separate
   // audit table exists, so this is the honest signal available) --------
   const lookback = new Date(Date.now() - 2 * DAY_MS);
@@ -361,6 +390,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     funnel,
     sources,
     campaigns: campaignRows,
+    leads: leadList,
+    leadsTotal: currentCohort.length,
     activity: activity.slice(0, 8),
     followUps,
   });

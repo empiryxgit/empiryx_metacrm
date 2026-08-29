@@ -49,6 +49,35 @@
         <div class="dash-card">
           <div class="dash-card-head">
             <div>
+              <p class="dash-card-title">Lead List</p>
+              <p class="dash-card-sub" id="leadListRangeLabel"></p>
+            </div>
+            <a href="/pipeline.html" class="dash-card-link">View all in Pipeline</a>
+          </div>
+          <div class="table-wrap" id="leadListTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Contact</th>
+                  <th>Source</th>
+                  <th>Stage</th>
+                  <th>Campaign</th>
+                  <th>Owner</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="leadListBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+            </table>
+          </div>
+          <p class="hint" id="leadListMore" style="margin:8px 2px 0; display:none"></p>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
               <p class="dash-card-title">Lead Performance</p>
               <p class="dash-card-sub" id="chartRangeLabel"></p>
             </div>
@@ -132,7 +161,7 @@
   // session always renders from /api/dashboard - see load() below.
   // -------------------------------------------------------------------
   const MOCK = {
-    range: { key: "30d", days: 30 },
+    range: { key: "7d", days: 7 },
     template: {
       milestoneLabel: "Site Visits",
       stages: [
@@ -169,6 +198,12 @@
       { id: "mock-1", name: "Project Acstya", branchName: "Ahmedabad", leads: 84, qualified: 31, won: 7, conversionRate: 8.3 },
       { id: "mock-2", name: "Diwali Offer", branchName: null, leads: 52, qualified: 19, won: 4, conversionRate: 7.7 },
     ],
+    leads: [
+      { id: "mock-1", fullName: "Rahul Patel", email: "rahul.patel@example.com", phoneNumber: "+919812345678", sourceLabel: "Meta Lead Ads", stageKey: "qualified", stageLabel: "Qualified", isWon: false, isLost: false, campaignName: "Project Acstya", ownerName: "Mitul", createdAt: new Date(Date.now() - 20 * 60000).toISOString() },
+      { id: "mock-2", fullName: "Priya Menon", email: null, phoneNumber: "+919876500000", sourceLabel: "Website", stageKey: "site_visit", stageLabel: "Site Visit", isWon: false, isLost: false, campaignName: null, ownerName: "Mitul", createdAt: new Date(Date.now() - 90 * 60000).toISOString() },
+      { id: "mock-3", fullName: "Amit Shah", email: "amit.shah@example.com", phoneNumber: null, sourceLabel: "Referral", stageKey: "won", stageLabel: "Won", isWon: true, isLost: false, campaignName: "Diwali Offer", ownerName: null, createdAt: new Date(Date.now() - 3 * 3600000).toISOString() },
+    ],
+    leadsTotal: 3,
     activity: [
       { text: "Rahul Patel moved to Qualified", timestamp: new Date(Date.now() - 20 * 60000).toISOString() },
       { text: "Amit Shah added as customer", timestamp: new Date(Date.now() - 90 * 60000).toISOString() },
@@ -188,7 +223,7 @@
   let chartVisible = new Set(["new", "qualified", "won"]);
   let campaignRows = [];
   let campaignSort = { field: "leads", dir: "desc" };
-  let rangeKey = "30d";
+  let rangeKey = "7d";
   let customFrom = "";
   let customTo = "";
 
@@ -370,6 +405,42 @@
       </div>`;
   }
 
+  // ---- Lead list (date-range scoped - see api/dashboard/index.ts's own
+  // comment on `leadList`). Re-fetched and re-rendered on every range
+  // change exactly like every other section on this page - no separate
+  // fetch/state of its own, see renderAll/fetchAndRender below. ----------
+  function fmtLeadDate(iso) {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+  function stagePillClass(row) {
+    return row.isWon ? "processed" : row.isLost ? "failed" : "pending";
+  }
+  function renderLeadList(leadsList, total) {
+    const body = document.getElementById("leadListBody");
+    if (!leadsList.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty">No leads in this period yet.</td></tr>`;
+      document.getElementById("leadListMore").style.display = "none";
+      return;
+    }
+    body.innerHTML = leadsList.map(l => `
+      <tr>
+        <td>${App.escapeHtml(l.fullName || "Unnamed lead")}</td>
+        <td>${App.escapeHtml(l.email || l.phoneNumber || "—")}</td>
+        <td>${App.escapeHtml(l.sourceLabel)}</td>
+        <td><span class="pill ${stagePillClass(l)}">${App.escapeHtml(l.stageLabel)}</span></td>
+        <td>${l.campaignName ? App.escapeHtml(l.campaignName) : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${l.ownerName ? App.escapeHtml(l.ownerName) : '<span style="color:var(--text-muted)">Unassigned</span>'}</td>
+        <td>${fmtLeadDate(l.createdAt)}</td>
+      </tr>`).join("");
+    const more = document.getElementById("leadListMore");
+    if (total > leadsList.length) {
+      more.textContent = `Showing the latest ${leadsList.length} of ${total} leads in this period — view all in Pipeline.`;
+      more.style.display = "";
+    } else {
+      more.style.display = "none";
+    }
+  }
+
   // ---- Campaign performance table ---------------------------------------
   function renderCampaigns() {
     const body = document.getElementById("campaignBody");
@@ -451,6 +522,7 @@
 
   function renderAll(data) {
     renderKpis(data.kpis, data.template);
+    renderLeadList(data.leads || [], data.leadsTotal ?? (data.leads || []).length);
     renderChartLegend();
     renderChart(data.chart);
     renderFunnel(data.funnel);
@@ -460,6 +532,7 @@
     renderActivity(data.activity);
     renderFollowUps(data.followUps);
     const rangeLabel = rangeKey === "today" ? "today" : rangeKey === "7d" ? "the last 7 days" : rangeKey === "30d" ? "the last 30 days" : "the selected range";
+    document.getElementById("leadListRangeLabel").textContent = "Leads captured " + rangeLabel;
     document.getElementById("chartRangeLabel").textContent = "New, qualified and won leads over " + rangeLabel;
     document.getElementById("sourceRangeLabel").textContent = "New leads and customers, " + rangeLabel;
     document.getElementById("campaignRangeLabel").textContent = "Leads generated " + rangeLabel;
@@ -557,7 +630,7 @@
     if (customFrom && customTo) load();
   });
 
-  document.querySelectorAll("#rangeToggle button")[2].classList.add("active"); // "30d" default
+  document.querySelectorAll("#rangeToggle button")[1].classList.add("active"); // "7d" default
   load();
 </script>
 </body>
