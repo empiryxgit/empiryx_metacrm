@@ -19,14 +19,14 @@
 //
 // Optional overrides:
 //
-//   BASE_URL=https://empiryx-metacrm.vercel.app node seed-demo-data.mjs
-//   node seed-demo-data.mjs https://empiryx-metacrm.vercel.app
+//   BASE_URL=https://ruta.empiryx.com node seed-demo-data.mjs
+//   node seed-demo-data.mjs https://ruta.empiryx.com
 //
 // The script prints the new company's login email/password at the end —
 // save that, it is not shown again after this run.
 // -----------------------------------------------------------------------
 
-const BASE_URL = (process.argv[2] || process.env.BASE_URL || "https://empiryx-metacrm.vercel.app").replace(/\/+$/, "");
+const BASE_URL = (process.argv[2] || process.env.BASE_URL || "https://ruta.empiryx.com").replace(/\/+$/, "");
 
 // ---- Node version guard -------------------------------------------------
 {
