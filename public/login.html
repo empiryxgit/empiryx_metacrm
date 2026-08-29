@@ -10,9 +10,20 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/login.css" />
+<style>
+  /* Hidden by default until checkExistingSession() (below) has had a chance
+     to silently confirm there's no already-valid ("remembered") session -
+     see that function's comment for why. Removed the instant the check
+     resolves either way, so this only ever delays the form, never blocks
+     it. If JS is disabled the check can never run, so unhide immediately -
+     the form still needs JS to submit anyway, but there's no reason to
+     also hide it in that case. */
+  .setu-shell.is-checking-session { visibility: hidden; }
+</style>
+<noscript><style>.setu-shell { visibility: visible !important; }</style></noscript>
 </head>
 <body>
-  <div class="setu-shell">
+  <div class="setu-shell is-checking-session">
 
     <!-- Brand panel — hidden on tablet/mobile, see login.css -->
     <aside class="brand-panel" aria-hidden="true">
@@ -150,6 +161,61 @@
     const toggleBtn = document.getElementById("togglePassword");
     const rememberInput = document.getElementById("remember");
     const params = new URLSearchParams(window.location.search);
+    const shell = document.querySelector(".setu-shell");
+
+    // Bug fix: previously this page had no idea whether the browser already
+    // held a valid, signed-in session - so clicking "Access LMS" from
+    // index.html (or any other link back to /login.html) always showed the
+    // login form again, even for someone who checked "Remember me", signed
+    // in, and simply closed the tab/browser rather than logging out. Their
+    // persistent cookies (see tokens.ts's cookieOptions/setAuthCookies -
+    // real Max-Age is only set when rememberMe was true) were still sitting
+    // in the browser the whole time; this page just never asked about them.
+    //
+    // Fixes that by silently checking /api/auth/me before the form is ever
+    // shown, mirroring the exact one-shot-refresh-then-give-up pattern
+    // App.api() already uses on every OTHER page (see app.js) - if the
+    // short-lived access-token cookie has expired but a "remembered"
+    // refresh cookie is still valid, one POST /api/auth/refresh silently
+    // re-establishes the session before the check gives up. Deliberately
+    // NOT using App.api()/App.requireAuth() directly: their own
+    // failure path redirects to this very page, which would just reload it
+    // pointlessly - here, "not authenticated" is the expected, normal
+    // outcome and should simply fall through to showing the form.
+    async function redirectAuthenticated(me) {
+      if (me.user.mustChangePassword) {
+        window.location.replace("/change-password.html");
+        return;
+      }
+      if (!me.company.onboardingCompleted) {
+        window.location.replace("/onboarding.html");
+        return;
+      }
+      const next = params.get("next");
+      window.location.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard.html");
+    }
+
+    async function checkExistingSession() {
+      try {
+        let res = await fetch("/api/auth/me", { credentials: "same-origin" });
+        if (res.status === 401) {
+          const refreshRes = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin" });
+          if (refreshRes.ok) {
+            res = await fetch("/api/auth/me", { credentials: "same-origin" });
+          }
+        }
+        if (res.ok) {
+          await redirectAuthenticated(await res.json());
+          return; // leave the form hidden - a redirect is already in flight
+        }
+      } catch {
+        // Network error, server hiccup, etc. - fail safe by just showing
+        // the login form normally rather than leaving the page stuck.
+      }
+      if (shell) shell.classList.remove("is-checking-session");
+    }
+
+    checkExistingSession();
 
     // Bug fix: landing here used to be a dead end for anyone who didn't
     // actually want to log in right now - e.g. clicking "Connect Meta" (or
