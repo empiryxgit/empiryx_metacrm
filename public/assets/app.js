@@ -61,7 +61,14 @@ const App = (() => {
       }
       return me;
     } catch {
-      window.location.href = "/login.html?next=" + encodeURIComponent(window.location.pathname);
+      // Bug fix: this used to send just window.location.pathname, dropping
+      // any query string - a page that reads its own state out of the URL
+      // (e.g. meta-status.html's ?error=access_denied banner after a
+      // declined Meta OAuth attempt, or ?connected=1) would land back on
+      // itself with that context silently gone once the tenant logged back
+      // in. Matching api()'s own already-correct "pathname + search"
+      // pattern above keeps it intact across the round trip.
+      window.location.href = "/login.html?next=" + encodeURIComponent(window.location.pathname + window.location.search);
       return null;
     }
   }

@@ -59,6 +59,8 @@
           <span class="logo-text">RUTA</span>
         </div>
 
+        <a href="#" id="backLink" class="link-back" style="display:none">← Back</a>
+
         <header class="login-header">
           <h2>Welcome back</h2>
           <p>Sign in to continue managing your customers, leads and conversations.</p>
@@ -148,6 +150,48 @@
     const toggleBtn = document.getElementById("togglePassword");
     const rememberInput = document.getElementById("remember");
     const params = new URLSearchParams(window.location.search);
+
+    // Bug fix: landing here used to be a dead end for anyone who didn't
+    // actually want to log in right now - e.g. clicking "Connect Meta" (or
+    // returning from a declined/erroring Meta OAuth attempt) with a
+    // lapsed session bounces the browser here, and there was previously no
+    // way back to that page short of completing login. Resolves the
+    // safest available same-origin destination and only then reveals the
+    // link - it stays hidden rather than linking to something guessed.
+    (function setupBackLink() {
+      const backLink = document.getElementById("backLink");
+      let dest = null;
+
+      // Prefer where the browser actually came from - the most reliable
+      // source, and (for the Meta OAuth case above) resolves straight back
+      // to meta-status.html, ?error= banner and all, rather than through
+      // an intermediate API redirect. Ignored if it's this login page
+      // itself or a different origin entirely.
+      try {
+        if (document.referrer) {
+          const ref = new URL(document.referrer);
+          if (ref.origin === window.location.origin && ref.pathname !== "/login.html") {
+            dest = ref.pathname + ref.search;
+          }
+        }
+      } catch {
+        // Malformed/inaccessible referrer - fall through to ?next= below.
+      }
+
+      // Falls back to ?next= (the same param App.requireAuth()/App.api()
+      // set when they redirected here) when no usable referrer is
+      // available. Only ever a root-relative path - never "//host/..." or
+      // an absolute URL - so this can never become an open redirect.
+      if (!dest) {
+        const next = params.get("next");
+        if (next && next.startsWith("/") && !next.startsWith("//")) dest = next;
+      }
+
+      if (dest) {
+        backLink.href = dest;
+        backLink.style.display = "";
+      }
+    })();
 
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     let submitting = false;

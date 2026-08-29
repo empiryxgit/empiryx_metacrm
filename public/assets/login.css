@@ -284,6 +284,26 @@ input[aria-invalid="true"]:focus{
 .link-forgot:hover{ color:var(--orange-dark); text-decoration:underline; }
 .link-forgot:focus-visible{ outline:2px solid var(--orange); outline-offset:2px; border-radius:3px; }
 
+/* Bug fix: a person forced here (session expired) from a page they were
+   already on - e.g. Meta's OAuth dialog declining/erroring back to
+   meta-status.html, which then found no valid session and bounced here -
+   previously had no way back except completing login. This link only
+   renders when login.html's own script resolves a safe, same-origin
+   place to send them (see the ?next= handling there); it stays absent
+   otherwise rather than linking to something guessed. */
+.link-back{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  margin-bottom:18px;
+  font-size:13px;
+  font-weight:600;
+  color:var(--text-muted);
+  text-decoration:none;
+}
+.link-back:hover{ color:var(--text); }
+.link-back:focus-visible{ outline:2px solid var(--orange); outline-offset:2px; border-radius:3px; }
+
 /* ---- Primary CTA ---- */
 .btn-primary{
   width:100%;
