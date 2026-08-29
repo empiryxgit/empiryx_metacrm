@@ -248,6 +248,29 @@
     return `<div class="context-line">${App.escapeHtml(cardField.label)}: ${fmtFieldValue(cardField, value)}</div>`;
   }
 
+  // Rule-based lead quality badge (v1 - see src/domain/leadQuality.ts).
+  // qualityLabel is null for a lead captured before this feature existed
+  // or a manually-entered customer (insertManualLead never scores) - no
+  // badge shown either way, rather than a misleading "unscored" pill.
+  // "likely_fake" still renders like every other lead (per this feature's
+  // own design: flag, never hide) - just with a warning-colored badge, and
+  // the specific reasons are one hover away via the title tooltip rather
+  // than hidden entirely.
+  const QUALITY_BADGES = {
+    hot: { emoji: "🔥", label: "Hot" },
+    warm: { emoji: "🌤", label: "Warm" },
+    cold: { emoji: "❄", label: "Cold" },
+    likely_fake: { emoji: "⚠", label: "Review" },
+  };
+
+  function qualityBadge(row){
+    const meta = QUALITY_BADGES[row.qualityLabel];
+    if (!meta) return "";
+    const flags = Array.isArray(row.qualityFlags) ? row.qualityFlags : [];
+    const title = flags.length ? App.escapeHtml(flags.join(" · ")) : "";
+    return `<span class="quality-badge quality-${App.escapeHtml(row.qualityLabel)}" title="${title}">${meta.emoji} ${meta.label}</span>`;
+  }
+
   function leadCard(row){
     const owners_ = ownerById();
     const name = row.fullName || "Unnamed lead";
@@ -261,6 +284,7 @@
       <div class="name">${App.escapeHtml(name)}</div>
       ${contact ? `<div class="meta">${App.escapeHtml(contact)}</div>` : ""}
       <span class="source">${App.escapeHtml(sourceLabel(row.source))}</span>
+      ${qualityBadge(row)}
       ${cardContextLine(row)}
       <div class="lead-card-meta-row">
         ${ownerName ? `<span class="avatar avatar-sm" title="${App.escapeHtml(ownerName)}">${App.escapeHtml(App.initials(ownerName))}</span>` : "<span></span>"}

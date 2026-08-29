@@ -4,6 +4,7 @@ import { getDb } from "./client";
 import { leadFollowUps, leadProcessingLog, leads, rawMetaEvents, reconciliationRuns, users } from "./schema";
 import { firstOrThrow } from "./util";
 import type { IntegrationCounts } from "../../domain/types";
+import { computeLeadQuality } from "../../domain/leadQuality";
 
 // ---- Raw events ---------------------------------------------------------
 
@@ -128,6 +129,7 @@ export type InsertLeadResult =
  */
 export async function insertLead(input: InsertLeadInput): Promise<InsertLeadResult> {
   const db = await getDb();
+  const quality = await scoreLeadSafely(input.companyId, input.fullName, input.email, input.phoneNumber, input.formResponses);
   try {
     const rows = await db
       .insert(leads)
@@ -135,6 +137,10 @@ export async function insertLead(input: InsertLeadInput): Promise<InsertLeadResu
         ...input,
         status: "processed",
         processedAt: new Date(),
+        qualityScore: quality.qualityScore,
+        qualityLabel: quality.qualityLabel,
+        qualityFlags: quality.qualityFlags,
+        qualityScoredAt: new Date(),
       })
       .returning();
     return { outcome: "inserted", id: firstOrThrow(rows).id };
@@ -153,6 +159,74 @@ export async function insertLead(input: InsertLeadInput): Promise<InsertLeadResu
 export function isUniqueViolation(err: unknown): boolean {
   const pgError = err as { code?: string; cause?: { code?: string } };
   return pgError?.code === "23505" || pgError?.cause?.code === "23505";
+}
+
+/** Whether this tenant already captured another lead sharing the same
+ * phone number or email within the last `withinMinutes` - the one signal
+ * computeLeadQuality (src/domain/leadQuality.ts) needs that isn't
+ * computable without a DB read (see that file's own header comment for
+ * why the split exists). Backed by ix_leads_company_id_phone_number for
+ * the phone half of the check; the email half is an unindexed filter on
+ * the same query, acceptable at this table's realistic scale. Purely a
+ * soft quality signal, never an idempotency guard - leads.meta_lead_id's
+ * unique index (see isUniqueViolation above) remains the only thing that
+ * actually blocks a duplicate insert. */
+export async function hasRecentLeadWithSameContact(
+  companyId: string,
+  phoneNumber: string | null | undefined,
+  email: string | null | undefined,
+  withinMinutes = 10,
+): Promise<boolean> {
+  const phone = (phoneNumber ?? "").trim();
+  const mail = (email ?? "").trim().toLowerCase();
+  if (!phone && !mail) return false;
+
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - withinMinutes * 60_000);
+  const contactConditions = [];
+  if (phone) contactConditions.push(eq(leads.phoneNumber, phone));
+  if (mail) contactConditions.push(eq(leads.email, mail));
+
+  const [row] = await db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), gte(leads.createdAt, cutoff), or(...contactConditions)))
+    .limit(1);
+  return Boolean(row);
+}
+
+export interface LeadQualityColumns {
+  qualityScore: number | null;
+  qualityLabel: string | null;
+  qualityFlags: string[];
+}
+
+/** Scores a new lead's contact-quality signals for insertion, wrapping the
+ * whole thing (the duplicate lookup above included) so a scoring failure
+ * of any kind - a transient DB error, anything unexpected - can NEVER
+ * fail the lead's own insert. Falls back to "unscored" (all null/empty)
+ * rather than throwing - the exact same "enrichment must never block
+ * persistence" principle every other enrichment step in this codebase
+ * (resolveLeadFields, campaign attribution, historical backfill, ...)
+ * already follows. Every leads.insert(...) values() for a DIGITAL lead
+ * should call this - see insertLead/insertRecoveredLead below and
+ * metaLeadEvents.ts's insertMetaSyncLead. insertManualLead deliberately
+ * never calls this (a human already vetted that record by typing it in). */
+export async function scoreLeadSafely(
+  companyId: string,
+  fullName: string | null | undefined,
+  email: string | null | undefined,
+  phoneNumber: string | null | undefined,
+  formResponses: unknown,
+): Promise<LeadQualityColumns> {
+  try {
+    const isRecentDuplicateSubmission = await hasRecentLeadWithSameContact(companyId, phoneNumber, email);
+    const result = computeLeadQuality({ fullName, email, phoneNumber, formResponses, isRecentDuplicateSubmission });
+    return { qualityScore: result.score, qualityLabel: result.label, qualityFlags: result.flags };
+  } catch (err) {
+    console.error(`[lead-quality] Failed to score a new lead for tenant ${companyId} - inserting it unscored rather than failing it:`, err);
+    return { qualityScore: null, qualityLabel: null, qualityFlags: [] };
+  }
 }
 
 /** Scoped to a single CRM campaign - reconciliation sweeps one campaign's Meta
@@ -183,6 +257,7 @@ export async function getRecentMetaLeadIdsForCompany(companyId: string, sinceIso
 
 export async function insertRecoveredLead(input: InsertLeadInput): Promise<InsertLeadResult> {
   const db = await getDb();
+  const quality = await scoreLeadSafely(input.companyId, input.fullName, input.email, input.phoneNumber, input.formResponses);
   try {
     const rows = await db
       .insert(leads)
@@ -191,6 +266,10 @@ export async function insertRecoveredLead(input: InsertLeadInput): Promise<Inser
         status: "processed",
         processedAt: new Date(),
         recoveredByReconciliation: true,
+        qualityScore: quality.qualityScore,
+        qualityLabel: quality.qualityLabel,
+        qualityFlags: quality.qualityFlags,
+        qualityScoredAt: new Date(),
       })
       .returning();
     return { outcome: "inserted", id: firstOrThrow(rows).id };

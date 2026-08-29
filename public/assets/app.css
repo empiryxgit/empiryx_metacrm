@@ -634,6 +634,16 @@ th.sortable.active .sort-arrow{ opacity:1; color:var(--brand-primary); }
 .lead-card .meta{ color:var(--text-muted); font-size:11.5px; margin-top:3px; }
 .lead-card .source{ margin-top:6px; display:inline-block; font-size:10.5px; font-weight:600; color:var(--brand-primary-hover); background:var(--brand-primary-soft); border-radius:999px; padding:2px 7px; }
 
+/* Rule-based lead quality badge (v1 - see src/domain/leadQuality.ts).
+   Same pill shape as .source above, right next to it - "likely_fake"
+   still renders (this feature flags, never hides), just in the warning
+   color so it reads as "worth a second look" rather than a hard error. */
+.quality-badge{ margin-top:6px; margin-left:5px; display:inline-block; font-size:10.5px; font-weight:600; border-radius:999px; padding:2px 7px; cursor:default; }
+.quality-badge.quality-hot{ color:var(--success); background:var(--success-soft); }
+.quality-badge.quality-warm{ color:var(--warning); background:var(--warning-soft); }
+.quality-badge.quality-cold{ color:var(--text-muted); background:var(--surface-sunken); }
+.quality-badge.quality-likely_fake{ color:var(--danger); background:var(--danger-soft); }
+
 /* =============================================================================
    Recent leads / lead identity cell
 ============================================================================= */

@@ -10,7 +10,7 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { leads, metaLeadEvents, metaPages } from "../schema";
 import { firstOrThrow } from "../util";
-import { isUniqueViolation, type InsertLeadResult } from "../repositories";
+import { isUniqueViolation, scoreLeadSafely, type InsertLeadResult } from "../repositories";
 
 /**
  * Which tenant(s) currently own this Meta Page, for routing an incoming
@@ -271,6 +271,7 @@ export interface InsertMetaSyncLeadInput {
  */
 export async function insertMetaSyncLead(input: InsertMetaSyncLeadInput): Promise<InsertLeadResult> {
   const db = await getDb();
+  const quality = await scoreLeadSafely(input.companyId, input.fullName, input.email, input.phoneNumber, input.formResponses);
   try {
     const rows = await db
       .insert(leads)
@@ -300,6 +301,10 @@ export async function insertMetaSyncLead(input: InsertMetaSyncLeadInput): Promis
         rawEventId: null, // no raw_meta_events row behind this pipeline - see comment above
         status: "processed",
         processedAt: new Date(),
+        qualityScore: quality.qualityScore,
+        qualityLabel: quality.qualityLabel,
+        qualityFlags: quality.qualityFlags,
+        qualityScoredAt: new Date(),
       })
       .returning();
     return { outcome: "inserted", id: firstOrThrow(rows).id };

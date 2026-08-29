@@ -889,6 +889,19 @@ export const leads = crm.table(
     processedAt: timestamp("processed_at", { withTimezone: true }),
     recoveredByReconciliation: boolean("recovered_by_reconciliation").notNull().default(false),
 
+    // Rule-based lead quality scoring (v1 - see src/domain/leadQuality.ts).
+    // All three are null for a digital lead captured before this feature
+    // existed, AND for every manually-entered customer (insertManualLead
+    // never sets these - a human already vetted that record by typing it
+    // in themselves) - always distinct from an actual computed score of 0.
+    // Never gates or blocks a lead's insert; a scoring failure just leaves
+    // these null rather than losing the lead (see scoreLeadSafely in
+    // repositories.ts).
+    qualityScore: integer("quality_score"), // 0-100, higher is better
+    qualityLabel: text("quality_label"), // "hot" | "warm" | "cold" | "likely_fake"
+    qualityFlags: jsonb("quality_flags").notNull().default(sql`'[]'::jsonb`), // string[] of human-readable reasons
+    qualityScoredAt: timestamp("quality_scored_at", { withTimezone: true }),
+
     // Null for manually-created customers - there is no raw Meta event
     // behind them.
     rawEventId: uuid("raw_event_id"),
@@ -908,6 +921,11 @@ export const leads = crm.table(
     ownerIdx: index("ix_leads_owner_id").on(t.ownerId),
     branchIdx: index("ix_leads_branch_id").on(t.branchId),
     companyBranchIdx: index("ix_leads_company_id_branch_id").on(t.companyId, t.branchId),
+    // Backs hasRecentLeadWithSameContact's duplicate-submission lookup
+    // (repositories.ts) - one new lead's quality check queries this by
+    // (companyId, phoneNumber) on every insert, so it's worth an index
+    // rather than a table scan.
+    companyPhoneIdx: index("ix_leads_company_id_phone_number").on(t.companyId, t.phoneNumber),
   }),
 );
 
