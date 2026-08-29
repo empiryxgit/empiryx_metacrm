@@ -126,7 +126,7 @@ const App = (() => {
   const PRIMARY_LINKS = [
     { href: "/dashboard.html", label: "Dashboard", icon: NAV_ICONS.dashboard },
     { href: "/campaigns.html", label: "Campaigns", icon: NAV_ICONS.campaigns },
-    { href: "/pipeline.html", label: "Pipeline", icon: NAV_ICONS.pipeline },
+    { href: "/pipeline.html", label: "Leads", icon: NAV_ICONS.pipeline },
   ];
 
   // Flat, top-level admin nav items - kept separate from the "Settings"
