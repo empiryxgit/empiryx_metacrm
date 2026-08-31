@@ -12,27 +12,29 @@
 // ordinary public registration flow - there is no separate accept/decline
 // afterward the way inviteExistingClient needs one.
 //
-// Security model (see agencyOnboardingTokens' own doc comment in schema.ts
-// and generateOnboardingToken in src/infrastructure/auth/tokens.ts for the
-// mechanics): the link's token is the ONLY credential either endpoint below
-// accepts - never an id in the URL. getOnboardingLinkPreview and
-// completeAgencyOnboarding both resolve agencyCompanyId purely by hashing
-// the caller-supplied token and looking that hash up; neither function
-// takes an agencyCompanyId or clientCompanyId parameter at all, so there is
-// no id-shaped input for a caller to tamper with in the first place.
+// Security model (see organizationInvitations' own doc comment in
+// schema.ts and generateOnboardingToken in src/infrastructure/auth/
+// tokens.ts for the mechanics): the link's token is the ONLY credential
+// either endpoint below accepts - never an id in the URL. Neither
+// getOnboardingLinkPreview nor completeAgencyOnboarding takes an
+// agencyCompanyId or clientCompanyId parameter at all - both resolve the
+// agency purely by hashing the caller-supplied token and looking that hash
+// up - so there is no id-shaped input for a caller to tamper with in order
+// to pick their own agency in the first place.
 
 import { AuthError } from "./auth";
 import { uniqueSlug } from "./auth";
 import { hashPassword } from "../infrastructure/auth/password";
 import { generateOnboardingToken, hashOnboardingToken, ONBOARDING_TOKEN_TTL_SECONDS } from "../infrastructure/auth/tokens";
 import {
-  claimOnboardingTokenByHash,
-  createOnboardingToken,
-  getOnboardingTokenByHash,
-  listOnboardingTokensForAgency,
-  revokeOnboardingToken,
-  setOnboardingTokenResultingCompany,
-} from "../infrastructure/db/repositories/agencyOnboardingTokens";
+  acceptInvitationByHash,
+  createInvitation,
+  getInvitationByHash,
+  listInvitationsForAgency,
+  revokeInvitation,
+  setInvitationResultingCompany,
+} from "../infrastructure/db/repositories/organizationInvitations";
+import { effectiveInvitationStatus } from "../domain/organizationInvitationStatus";
 import {
   createCompany,
   createOwnerRole,
@@ -67,22 +69,23 @@ export interface GenerateOnboardingLinkResult {
  * the right primitive here. clientName/contactEmail are purely descriptive
  * (shown back on the public landing page before an account exists to read
  * them from) - they place no constraint on what completeAgencyOnboarding
- * ultimately creates. */
+ * ultimately creates. Always creates a PENDING invitation - see
+ * createInvitation's own comment on why nothing else is possible here. */
 export async function generateOnboardingLink(input: GenerateOnboardingLinkInput): Promise<GenerateOnboardingLinkResult> {
   const clientName = input.clientName.trim();
-  const contactEmail = input.contactEmail.trim().toLowerCase();
-  if (!clientName || !contactEmail) {
+  const email = input.contactEmail.trim().toLowerCase();
+  if (!clientName || !email) {
     throw new AuthError("Client name and contact email are both required.");
   }
 
   const { token, hash } = generateOnboardingToken();
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_SECONDS * 1000);
 
-  await createOnboardingToken({
+  await createInvitation({
     agencyCompanyId: input.agencyCompanyId,
     tokenHash: hash,
     clientName,
-    contactEmail,
+    email,
     expiresAt,
     createdBy: input.actingUserId,
   });
@@ -90,37 +93,38 @@ export async function generateOnboardingLink(input: GenerateOnboardingLinkInput)
   return { token, expiresAt };
 }
 
-/** Every onboarding link this agency has generated - the Clients page's own
- * management list (pending links to copy/revoke, plus used/expired
- * history). Never returns tokenHash - there is no legitimate reason for
- * this response to carry even the hash of a live credential, and the raw
- * token was never stored in the first place. */
+/** Every onboarding invitation this agency has generated - the Clients
+ * page's own management list (pending links to copy/revoke, plus
+ * accepted/expired/revoked history). Tenant-scoped by construction
+ * (listInvitationsForAgency only ever queries the calling agency's own
+ * id). Never returns tokenHash - there is no legitimate reason for this
+ * response to carry even the hash of a live credential, and the raw token
+ * was never stored in the first place. `status` here is the DISPLAYED
+ * status (PENDING/ACCEPTED/EXPIRED/REVOKED) - see
+ * effectiveInvitationStatus's own comment on why EXPIRED is computed
+ * rather than read straight off the stored column. */
 export async function listOnboardingLinks(agencyCompanyId: string) {
-  const rows = await listOnboardingTokensForAgency(agencyCompanyId);
-  const now = new Date();
+  const rows = await listInvitationsForAgency(agencyCompanyId);
   return rows.map((r) => ({
     id: r.id,
     clientName: r.clientName,
-    contactEmail: r.contactEmail,
+    contactEmail: r.email,
     createdAt: r.createdAt,
     expiresAt: r.expiresAt,
-    usedAt: r.usedAt,
+    acceptedAt: r.acceptedAt,
     revokedAt: r.revokedAt,
     resultingCompanyId: r.resultingCompanyId,
-    // Derived, not stored - see agencyOnboardingTokens' own doc comment in
-    // schema.ts on why expiry is a plain timestamp comparison rather than a
-    // status column: "expired" only means something once you compare
-    // expiresAt to "now", which a stored value can never itself express.
-    status: r.revokedAt ? "revoked" : r.usedAt ? "used" : r.expiresAt < now ? "expired" : "pending",
+    status: effectiveInvitationStatus(r),
   }));
 }
 
-/** Scoped by agencyCompanyId inside the repository call - an agency can
- * only revoke a link it actually generated. Revoking an already-used or
- * already-expired link is harmless (it can't be redeemed either way) so
- * this never bothers rejecting that case specially. */
-export async function revokeOnboardingLink(agencyCompanyId: string, tokenId: string): Promise<void> {
-  await revokeOnboardingToken(agencyCompanyId, tokenId);
+/** Scoped by agencyCompanyId inside the repository call - tenant-aware by
+ * construction: an agency can only revoke an invitation it actually
+ * generated, never another agency's. Revoking an already-accepted or
+ * already-expired invitation is harmless (it can't be redeemed either way)
+ * so this never bothers rejecting that case specially. */
+export async function revokeOnboardingLink(agencyCompanyId: string, invitationId: string): Promise<void> {
+  await revokeInvitation(agencyCompanyId, invitationId);
 }
 
 export interface OnboardingLinkPreview {
@@ -130,7 +134,7 @@ export interface OnboardingLinkPreview {
 }
 
 // One shared, deliberately generic message for every "this token doesn't
-// work right now" case (not found / expired / already used / revoked).
+// work right now" case (not found / expired / already accepted / revoked).
 // Distinguishing them for the visitor would mean confirming details about
 // someone else's invite to whoever happens to be holding a guessed or
 // stale link - the same "don't leak more than the outcome" posture
@@ -139,17 +143,19 @@ const INVALID_LINK_MESSAGE = "This invitation link is invalid, has expired, or h
 
 /** Read-only lookup for the public landing page
  * (public/onboarding-agency.html, reached via /onboarding/agency/{token}) -
- * shows "ABC Digital invited ABC Realty to join RUTA" WITHOUT consuming the
- * token. Never called by the actual redemption step below, which re-checks
- * validity itself via the atomic claim. */
+ * shows "Welcome to ABC Digital" WITHOUT consuming the token. Never called
+ * by the actual redemption step below, which re-validates atomically on
+ * its own via acceptInvitationByHash rather than trusting a prior preview
+ * call. Takes only the raw token - no agencyCompanyId/clientCompanyId
+ * input exists here for a tampered request to override. */
 export async function getOnboardingLinkPreview(rawToken: string): Promise<OnboardingLinkPreview> {
-  const row = await getOnboardingTokenByHash(hashOnboardingToken(rawToken));
-  if (!row || row.revokedAt || row.usedAt || row.expiresAt < new Date()) {
+  const row = await getInvitationByHash(hashOnboardingToken(rawToken));
+  if (!row || effectiveInvitationStatus(row) !== "PENDING") {
     throw new AuthError(INVALID_LINK_MESSAGE, 410);
   }
   const agency = await getCompanyById(row.agencyCompanyId);
   if (!agency) throw new AuthError(INVALID_LINK_MESSAGE, 410);
-  return { agencyName: agency.name, clientName: row.clientName, contactEmail: row.contactEmail };
+  return { agencyName: agency.name, clientName: row.clientName, contactEmail: row.email };
 }
 
 export interface CompleteAgencyOnboardingInput {
@@ -167,17 +173,21 @@ export interface CompleteAgencyOnboardingResult {
 }
 
 /**
- * Redeems the link: atomically claims the token (see
- * claimOnboardingTokenByHash's own doc comment for why that specific
+ * Redeems the invitation: atomically accepts it (see
+ * acceptInvitationByHash's own doc comment for why that specific
  * statement, not a plain SELECT-then-UPDATE, is what makes this genuinely
  * single-use under concurrent requests), then creates a brand-new company +
- * Owner user from what the PERSON filled in - not from the token's own
- * clientName/contactEmail, which are just what the agency guessed before
- * this person ever saw the form. Links the new company as an "active"
- * client of the inviting agency immediately: unlike inviteExistingClient,
- * there is no further accept/decline step, because completing this form at
- * all only happens via a link that already had to be privately handed to
- * this person - same trust level addClientOrganization's own doc comment
+ * Owner user from what the PERSON filled in - not from the invitation's own
+ * clientName/email, which are just what the agency guessed before this
+ * person ever saw the form. Links the new company as an "active" client of
+ * whichever agency the ACCEPTED INVITATION ROW names
+ * (claimed.agencyCompanyId) - never anything the request body supplies;
+ * this input type has no agencyCompanyId field for a tampered request to
+ * populate in the first place, so there is nothing for frontend
+ * manipulation to override here. Unlike inviteExistingClient, there is no
+ * further accept/decline step, because completing this form at all only
+ * happens via a link that already had to be privately handed to this
+ * person - same trust level addClientOrganization's own doc comment
  * describes for the agency-originates-it case.
  */
 export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingInput): Promise<CompleteAgencyOnboardingResult> {
@@ -193,15 +203,16 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
     throw new AuthError("Password must be at least 10 characters.");
   }
 
-  const claimed = await claimOnboardingTokenByHash(hashOnboardingToken(input.token));
+  const claimed = await acceptInvitationByHash(hashOnboardingToken(input.token));
   if (!claimed) {
     throw new AuthError(INVALID_LINK_MESSAGE, 410);
   }
 
-  // The token is now consumed regardless of what happens below - a failure
-  // past this point is the same rare, admin-visible, manually-recoverable
-  // case registerCompanyAndOwner's own comment accepts for the equivalent
-  // non-transactional steps on the ordinary registration flow.
+  // The invitation is now consumed (status='ACCEPTED') regardless of what
+  // happens below - a failure past this point is the same rare,
+  // admin-visible, manually-recoverable case registerCompanyAndOwner's own
+  // comment accepts for the equivalent non-transactional steps on the
+  // ordinary registration flow.
   if (await emailExists(ownerEmail)) {
     throw new AuthError("An account with this email already exists. Log in instead.", 409);
   }
@@ -229,7 +240,7 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
   });
 
   try {
-    await setOnboardingTokenResultingCompany(claimed.id, company.id);
+    await setInvitationResultingCompany(claimed.id, company.id);
   } catch (err) {
     console.error("[agency-onboarding/complete] Failed to record resultingCompanyId:", err);
   }

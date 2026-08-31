@@ -182,66 +182,105 @@ export const agencyClients = crm.table(
 );
 
 /**
- * A single-use, tokenized "Generate Onboarding Link" invite (Clients ->
- * Add Client -> Generate Onboarding Link) - distinct from agencyClients
- * above, which records an actual (agency, client) RELATIONSHIP once one
- * exists. This table exists ONLY to hand a prospective client - someone
- * with no RUTA account yet - a secure link that self-registers them as this
- * agency's client, without the agency ever typing in a password on their
- * behalf (contrast addClientOrganization's system-generated temp password
- * in src/application/agency.ts) and without exposing agencyCompanyId or any
- * future clientCompanyId in the URL as the authorization mechanism.
+ * The invitation/onboarding-token model backing "Generate Onboarding Link"
+ * (Clients -> Add Client -> Generate Onboarding Link) - distinct from
+ * agencyClients above, which records an actual (agency, client)
+ * RELATIONSHIP once one exists. This table exists ONLY to hand a
+ * prospective client - someone with no RUTA account yet - a secure link
+ * that self-registers them as this agency's client, without the agency
+ * ever typing in a password on their behalf (contrast
+ * addClientOrganization's system-generated temp password in
+ * src/application/agency.ts) and without exposing an agency or client id in
+ * the URL as the authorization mechanism.
  *
- * Security model - same shape as sessions.refreshTokenHash above, applied
- * to an invite instead of a login: the raw token is a cryptographically
- * random value, generated in src/infrastructure/auth/tokens.ts, shown to
- * the agency admin exactly once (the generate response) and embedded in the
- * link's path (/onboarding/agency/{token}). Only tokenHash - its SHA-256
- * digest - is ever persisted, so a leaked database dump can't be replayed
- * as a working invite link any more than a leaked sessions table can be
- * replayed as a login. Every property the security requirements asked for
- * maps onto a plain column here rather than a new sub-system: cryptographic
- * randomness lives in how the token itself is generated (not this table);
- * time-limited is expiresAt; single-use is usedAt (once set, redeeming
- * again is refused - see completeAgencyOnboarding in
- * src/application/agencyOnboarding.ts); revocable is revokedAt.
+ * Named and shaped after the conventional `organization_invitations` /
+ * onboarding-token model (id, agency_organization_id, email, token_hash,
+ * expires_at, accepted_at, status, created_by, created_at): every one of
+ * those columns is here, plus two this feature specifically needs
+ * (clientName, resultingCompanyId - see their own comments below).
+ * `agencyCompanyId` is this table's `agency_organization_id`: this
+ * codebase's tenant/organization row IS a `companies` row - see
+ * companies.accountType's own comment - there is no separate `organizations`
+ * table to point at, so every other agency-facing table here
+ * (agencyClients above included) already names this same FK
+ * `agencyCompanyId`/`agency_company_id`; this table matches that existing
+ * convention rather than introducing a one-off different name for the same
+ * concept.
+ *
+ * Rules this schema enforces or supports (see
+ * src/infrastructure/db/repositories/organizationInvitations.ts and
+ * src/application/agencyOnboarding.ts for where each is actually applied):
+ *   - Token must expire: expiresAt, checked by every read/accept path.
+ *   - Token can be revoked: status='REVOKED' (+ revokedAt for when),
+ *     scoped to the generating agency - see revokeInvitation.
+ *   - Token cannot be guessed: the token itself is a 256-bit
+ *     cryptographically random value (generateOnboardingToken in
+ *     src/infrastructure/auth/tokens.ts); only its SHA-256 digest
+ *     (tokenHash) is ever persisted, so a leaked database dump can't be
+ *     replayed as a working invite link any more than a leaked sessions
+ *     table can be replayed as a login.
+ *   - Accepted token cannot be reused: acceptInvitation does one atomic
+ *     UPDATE ... WHERE status = 'PENDING' AND expires_at > now() ...
+ *     RETURNING, not a check-then-write pair - a second acceptance (or two
+ *     concurrent ones racing each other) can never both succeed.
+ *   - Tenant-aware: every row is scoped to the inviting agencyCompanyId;
+ *     listing/revoking is always scoped to the calling agency's own id
+ *     (see listInvitationsForAgency/revokeInvitation).
+ *   - The client cannot pick their own agency: agencyCompanyId is set once,
+ *     server-side, at generation time from the AUTHENTICATED agency
+ *     session that called generateOnboardingLink - never from anything the
+ *     public redemption request supplies. completeAgencyOnboarding/
+ *     getOnboardingLinkPreview take a token and nothing else; there is no
+ *     agencyCompanyId-shaped input for a tampered request to submit in the
+ *     first place, so there is nothing for frontend manipulation to
+ *     override.
  */
-export const agencyOnboardingTokens = crm.table(
-  "agency_onboarding_tokens",
+export const organizationInvitations = crm.table(
+  "organization_invitations",
   {
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     // SHA-256 hex digest of the raw token - never the token itself. See
     // hashOnboardingToken in src/infrastructure/auth/tokens.ts.
     tokenHash: text("token_hash").notNull(),
-    // What the agency typed into "Client Name" / "Contact Email" when
-    // generating the link - shown on the public landing page ("ABC Digital
-    // invited ABC Realty...") before the prospective client has an account
-    // at all, so this can't simply read from a companies/users row the way
-    // every other agency-facing screen does. Purely informational - the
-    // prospective client can still type a different company name and email
-    // on the actual registration form the link leads to; nothing here
-    // constrains what completeAgencyOnboarding ultimately creates.
+    // What the agency typed into "Client Name" when generating the link -
+    // shown on the public landing page ("ABC Digital invited you...")
+    // before the prospective client has an account at all, so this can't
+    // simply read from a companies row the way every other agency-facing
+    // screen does. Purely informational, and not part of the conventional
+    // invitation schema this table is otherwise modeled on - kept because
+    // the public landing page has nothing else to show a name from until
+    // the invitation is accepted. Purely a label: the prospective client
+    // can still type a different company name on the actual registration
+    // form the link leads to; nothing here constrains what
+    // completeAgencyOnboarding ultimately creates.
     clientName: text("client_name").notNull(),
-    contactEmail: text("contact_email").notNull(),
+    email: text("email").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    usedAt: timestamp("used_at", { withTimezone: true }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    // The company this link actually created, once redeemed - nullable
-    // until then. ON DELETE SET NULL so deleting that company later (not a
-    // flow this codebase has today) can't cascade into silently deleting
-    // this audit row.
+    // PENDING | ACCEPTED | EXPIRED | REVOKED - see
+    // src/domain/organizationInvitationStatus.ts for the fixed catalog and
+    // its own comment on why EXPIRED is never actually written here.
+    status: text("status").notNull().default("PENDING"),
+    // The company this invitation actually created, once accepted -
+    // nullable until then. Not part of the conventional invitation schema
+    // this table is otherwise modeled on, but kept as the audit trail
+    // linking a redeemed invitation to what it produced - the same reason
+    // sessions.userId links a session to who it belongs to. ON DELETE SET
+    // NULL so deleting that company later (not a flow this codebase has
+    // today) can't cascade into silently deleting this audit row.
     resultingCompanyId: uuid("resulting_company_id").references(() => companies.id, { onDelete: "set null" }),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
-    agencyIdx: index("ix_agency_onboarding_tokens_agency_company_id").on(t.agencyCompanyId),
+    agencyIdx: index("ix_organization_invitations_agency_company_id").on(t.agencyCompanyId),
     // The one lookup the public redemption endpoint actually does - unique
     // so two tokens can never collide (astronomically unlikely given 256
     // bits of entropy, but the index still needs to exist for the lookup
     // itself to be fast, and uniqueness costs nothing extra to declare).
-    tokenHashIdx: uniqueIndex("ux_agency_onboarding_tokens_token_hash").on(t.tokenHash),
+    tokenHashIdx: uniqueIndex("ux_organization_invitations_token_hash").on(t.tokenHash),
   }),
 );
 

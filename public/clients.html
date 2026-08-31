@@ -256,10 +256,15 @@
     });
   }
 
+  // Statuses come from the server as PENDING | ACCEPTED | EXPIRED | REVOKED
+  // - see src/domain/organizationInvitationStatus.ts for the fixed catalog.
   function onboardingStatusPillClass(status) {
-    if (status === "used") return "active";
-    if (status === "pending") return "pending";
-    return "paused"; // revoked | expired
+    if (status === "ACCEPTED") return "active";
+    if (status === "PENDING") return "pending";
+    return "paused"; // EXPIRED | REVOKED
+  }
+  function onboardingStatusLabel(status) {
+    return status.charAt(0) + status.slice(1).toLowerCase();
   }
 
   function renderOnboardingLinks(links) {
@@ -270,9 +275,9 @@
       <tr>
         <td>${App.escapeHtml(l.clientName)}</td>
         <td>${App.escapeHtml(l.contactEmail)}</td>
-        <td><span class="pill ${onboardingStatusPillClass(l.status)}">${App.escapeHtml(l.status.charAt(0).toUpperCase() + l.status.slice(1))}</span></td>
+        <td><span class="pill ${onboardingStatusPillClass(l.status)}">${App.escapeHtml(onboardingStatusLabel(l.status))}</span></td>
         <td>${new Date(l.expiresAt).toLocaleDateString()}</td>
-        <td>${l.status === "pending" ? `<button class="btn secondary sm" type="button" data-revoke="${l.id}">Revoke</button>` : ""}</td>
+        <td>${l.status === "PENDING" ? `<button class="btn secondary sm" type="button" data-revoke="${l.id}">Revoke</button>` : ""}</td>
       </tr>`).join("");
 
     document.getElementById("onboardingLinksBody").querySelectorAll("[data-revoke]").forEach((btn) => {
