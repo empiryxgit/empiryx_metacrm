@@ -37,7 +37,8 @@ import {
   setPrimaryBranch,
   updateBranch,
 } from "../../../src/infrastructure/db/repositories/branches";
-import { AuthError } from "../../../src/application/auth";
+import { AuthError, login } from "../../../src/application/auth";
+import { setAuthCookies } from "../../../src/infrastructure/auth/tokens";
 import {
   addClientOrganization,
   getAgencyDashboardSummary,
@@ -914,6 +915,25 @@ async function handleAgencyOnboardingComplete(req: VercelRequest, res: VercelRes
   }
   try {
     const result = await completeAgencyOnboarding({ token, companyName, ownerName, ownerEmail, phoneNumber, password });
+
+    // Client Organization Created -> Linked to Agency -> Client Dashboard:
+    // the redirect only actually lands signed-in if a session exists yet,
+    // so log the new owner in immediately - same "registration and first
+    // login are the same moment" reasoning, and the same setAuthCookies
+    // call, as handleRegister in api/auth/handler.ts. Uses the plaintext
+    // password straight from this request's own body (never a value
+    // completeAgencyOnboarding returns - it never returns the password at
+    // all, same as every other flow in this codebase that only ever
+    // returns a system-GENERATED temp password, never a user-CHOSEN one).
+    const tokens = await login({
+      email: ownerEmail,
+      password,
+      userAgent: req.headers["user-agent"],
+      ipAddress: (req.headers["x-forwarded-for"] as string) ?? req.socket.remoteAddress,
+      rememberMe: true,
+    });
+    setAuthCookies(res, tokens);
+
     res.status(201).json(result);
   } catch (err) {
     if (err instanceof AuthError) {

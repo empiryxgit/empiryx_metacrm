@@ -151,3 +151,31 @@ export function clearCookieOptions(): string {
   const secure = process.env.NODE_ENV !== "development";
   return ["Path=/", "HttpOnly", "SameSite=Lax", secure ? "Secure" : "", "Max-Age=0"].filter(Boolean).join("; ");
 }
+
+// THE single place both auth cookies get set, from EVERY handler that ever
+// needs to log someone in - register/login/refresh in api/auth/handler.ts,
+// plus completeAgencyOnboarding's caller in api/admin/users/handler.ts (the
+// "Generate Onboarding Link" flow - see that file's own comment) - so
+// "remember me" and both TTLs stay honored identically everywhere rather
+// than reimplemented per handler file. Originally lived as a private
+// function inside api/auth/handler.ts (see git history) until a second
+// handler file needed it too; moved here rather than duplicated, which is
+// exactly the class of drift this function's own existence was meant to
+// prevent in the first place (see its own comment history - a prior
+// version hardcoded a separate TTL literal per handler for the access
+// cookie alone).
+//
+// Takes a structural subset of application/auth.ts's AuthTokens rather than
+// importing that type directly - src/application/auth.ts already imports
+// FROM this file (ACCESS_TOKEN_TTL_SECONDS etc.), so importing its
+// AuthTokens type back here would create a circular module dependency.
+export function setAuthCookies(
+  res: { setHeader(name: string, value: string[]): void },
+  tokens: { accessToken: string; refreshToken: string; rememberMe: boolean },
+): void {
+  const refreshTtl = tokens.rememberMe ? REFRESH_TOKEN_TTL_SECONDS : SESSION_REFRESH_TOKEN_TTL_SECONDS;
+  res.setHeader("Set-Cookie", [
+    `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(tokens.rememberMe ? ACCESS_TOKEN_TTL_SECONDS : null)}`,
+    `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(tokens.rememberMe ? refreshTtl : null)}`,
+  ]);
+}

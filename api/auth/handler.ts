@@ -14,15 +14,13 @@
 // matching api/system.ts which already worked this way.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { AuthError, login, logout, refresh, registerCompanyAndOwner, type AuthTokens } from "../../src/application/auth";
+import { AuthError, login, logout, refresh, registerCompanyAndOwner } from "../../src/application/auth";
 import {
   ACCESS_COOKIE_NAME,
-  ACCESS_TOKEN_TTL_SECONDS,
   REFRESH_COOKIE_NAME,
-  REFRESH_TOKEN_TTL_SECONDS,
-  SESSION_REFRESH_TOKEN_TTL_SECONDS,
   cookieOptions,
   clearCookieOptions,
+  setAuthCookies,
 } from "../../src/infrastructure/auth/tokens";
 import { getAuthContext, parseCookies, requireAuth } from "../../src/infrastructure/auth/context";
 import {
@@ -67,33 +65,11 @@ async function enforceRateLimit(res: VercelResponse, key: string, limit: number,
   return true;
 }
 
-// THE single place both auth cookies get set, from register/login/refresh
-// alike, so "remember me" is honored identically everywhere rather than
-// re-implemented per handler (a prior version of this file hardcoded a
-// separate hardcoded TTL literal per handler for the access cookie alone -
-// see tokens.ts's own comment on that bug - this exists so that class of
-// drift can't happen again for the remember-me persistence flag either).
-//
-// tokens.rememberMe (set once at login, then carried forward unchanged by
-// every subsequent refresh() rotation - see src/application/auth.ts) drives
-// TWO independent things, and both matter for this to actually be secure:
-//   1. The cookie's OWN persistence - Max-Age set (survives a browser
-//      restart) when remembered, a plain session cookie (gone the moment
-//      the browser closes) when not.
-//   2. The refresh cookie's Max-Age, when set, is capped at the SAME TTL
-//      the underlying session row was actually issued with server-side
-//      (REFRESH_TOKEN_TTL_SECONDS vs SESSION_REFRESH_TOKEN_TTL_SECONDS) -
-//      never a client-controlled duration. A tampered/oversized Max-Age in
-//      a replayed cookie buys nothing: the session row's own expiresAt
-//      (checked in getActiveSessionByHash) is what's actually authoritative,
-//      the cookie is just how long the browser bothers holding onto it.
-function setAuthCookies(res: VercelResponse, tokens: AuthTokens): void {
-  const refreshTtl = tokens.rememberMe ? REFRESH_TOKEN_TTL_SECONDS : SESSION_REFRESH_TOKEN_TTL_SECONDS;
-  res.setHeader("Set-Cookie", [
-    `${ACCESS_COOKIE_NAME}=${tokens.accessToken}; ${cookieOptions(tokens.rememberMe ? ACCESS_TOKEN_TTL_SECONDS : null)}`,
-    `${REFRESH_COOKIE_NAME}=${tokens.refreshToken}; ${cookieOptions(tokens.rememberMe ? refreshTtl : null)}`,
-  ]);
-}
+// setAuthCookies itself now lives in src/infrastructure/auth/tokens.ts -
+// see that file's own comment on why (a second handler file,
+// api/admin/users/handler.ts's "Generate Onboarding Link" completion, needs
+// to log someone in too, and duplicating this per-handler is exactly the
+// class of drift this function's own history exists to prevent).
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   switch (getAction(req)) {

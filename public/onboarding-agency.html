@@ -15,7 +15,18 @@
      (?token=...), the same way every other dynamic route in this project
      turns a path segment into one - see vercel.json's own comment on why.
      No session exists here and none is required: the token itself, never
-     an id, is the only thing that authorizes anything on this page. -->
+     an id, is the only thing that authorizes anything on this page - the
+     visitor is never asked which agency invited them (there's no field for
+     it anywhere below); every request that matters
+     (getOnboardingLinkPreview, completeAgencyOnboarding) resolves the
+     agency purely from the token itself.
+
+     Two screens, matching the flow this page was built from:
+       1. Welcome ("Welcome to {agency}" + Accept Invitation) - a deliberate
+          pause before collecting anything, so the link doesn't drop a
+          stranger straight into a form with no idea who's asking or why.
+       2. Create Your Account (Company Name / Contact Name / Email / Mobile
+          / Password) - the actual registration. -->
 <body>
   <div class="auth-shell">
     <div class="auth-card" style="width:440px" id="card">
@@ -27,6 +38,7 @@
 <script>
   const token = new URLSearchParams(window.location.search).get("token");
   const card = document.getElementById("card");
+  let currentPreview = null;
 
   function renderInvalid(message) {
     card.innerHTML = `
@@ -35,16 +47,31 @@
       <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
   }
 
-  function renderForm(preview) {
+  // Screen 1 - Welcome.
+  function renderWelcome(preview) {
     card.innerHTML = `
-      <h1>Create Account</h1>
-      <p class="sub"><strong>${App.escapeHtml(preview.agencyName)}</strong> invited you to join RUTA as a client.</p>
+      <h1>Welcome to ${App.escapeHtml(preview.agencyName)}</h1>
+      <p class="sub">${App.escapeHtml(preview.agencyName)} has invited you to use the CRM.</p>
+      <button class="btn full" type="button" id="acceptBtn">Accept Invitation</button>
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
+    document.getElementById("acceptBtn").addEventListener("click", () => renderCreateAccount(preview));
+  }
+
+  // Screen 2 - Create Your Account. Company Name / Email default to what
+  // the agency typed in when generating the link (Client Name / Contact
+  // Email) - editable, not binding, same as before: whatever the person
+  // completing this form actually submits is what gets created, not the
+  // agency's guess. Note there is no "which agency" field here at all -
+  // the token alone determines that server-side.
+  function renderCreateAccount(preview) {
+    card.innerHTML = `
+      <h1>Create Your Account</h1>
       <div id="banner"></div>
       <form id="onboardForm">
-        <label for="companyName">Business / Organization Name</label>
+        <label for="companyName">Company Name</label>
         <input id="companyName" required autocomplete="organization" value="${App.escapeHtml(preview.clientName)}" />
 
-        <label for="fullName">Name</label>
+        <label for="fullName">Contact Name</label>
         <input id="fullName" required autocomplete="name" />
 
         <label for="email">Email</label>
@@ -69,6 +96,13 @@
       submitBtn.disabled = true;
       submitBtn.textContent = "Creating…";
       try {
+        // Client Organization Created -> Linked to Agency -> Client
+        // Dashboard: this one call does the first two (see
+        // completeAgencyOnboarding in src/application/agencyOnboarding.ts -
+        // it creates the company and links it to whichever agency the
+        // token names, "active", with no further accept step needed) and
+        // also logs the new owner straight in, so the redirect below lands
+        // on an already-signed-in dashboard rather than a login screen.
         await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}/complete`, {
           method: "POST",
           body: {
@@ -94,8 +128,8 @@
       return;
     }
     try {
-      const preview = await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}`);
-      renderForm(preview);
+      currentPreview = await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}`);
+      renderWelcome(currentPreview);
     } catch (err) {
       renderInvalid(err.message);
     }
