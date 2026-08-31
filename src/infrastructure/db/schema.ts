@@ -182,6 +182,70 @@ export const agencyClients = crm.table(
 );
 
 /**
+ * A single-use, tokenized "Generate Onboarding Link" invite (Clients ->
+ * Add Client -> Generate Onboarding Link) - distinct from agencyClients
+ * above, which records an actual (agency, client) RELATIONSHIP once one
+ * exists. This table exists ONLY to hand a prospective client - someone
+ * with no RUTA account yet - a secure link that self-registers them as this
+ * agency's client, without the agency ever typing in a password on their
+ * behalf (contrast addClientOrganization's system-generated temp password
+ * in src/application/agency.ts) and without exposing agencyCompanyId or any
+ * future clientCompanyId in the URL as the authorization mechanism.
+ *
+ * Security model - same shape as sessions.refreshTokenHash above, applied
+ * to an invite instead of a login: the raw token is a cryptographically
+ * random value, generated in src/infrastructure/auth/tokens.ts, shown to
+ * the agency admin exactly once (the generate response) and embedded in the
+ * link's path (/onboarding/agency/{token}). Only tokenHash - its SHA-256
+ * digest - is ever persisted, so a leaked database dump can't be replayed
+ * as a working invite link any more than a leaked sessions table can be
+ * replayed as a login. Every property the security requirements asked for
+ * maps onto a plain column here rather than a new sub-system: cryptographic
+ * randomness lives in how the token itself is generated (not this table);
+ * time-limited is expiresAt; single-use is usedAt (once set, redeeming
+ * again is refused - see completeAgencyOnboarding in
+ * src/application/agencyOnboarding.ts); revocable is revokedAt.
+ */
+export const agencyOnboardingTokens = crm.table(
+  "agency_onboarding_tokens",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // SHA-256 hex digest of the raw token - never the token itself. See
+    // hashOnboardingToken in src/infrastructure/auth/tokens.ts.
+    tokenHash: text("token_hash").notNull(),
+    // What the agency typed into "Client Name" / "Contact Email" when
+    // generating the link - shown on the public landing page ("ABC Digital
+    // invited ABC Realty...") before the prospective client has an account
+    // at all, so this can't simply read from a companies/users row the way
+    // every other agency-facing screen does. Purely informational - the
+    // prospective client can still type a different company name and email
+    // on the actual registration form the link leads to; nothing here
+    // constrains what completeAgencyOnboarding ultimately creates.
+    clientName: text("client_name").notNull(),
+    contactEmail: text("contact_email").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    // The company this link actually created, once redeemed - nullable
+    // until then. ON DELETE SET NULL so deleting that company later (not a
+    // flow this codebase has today) can't cascade into silently deleting
+    // this audit row.
+    resultingCompanyId: uuid("resulting_company_id").references(() => companies.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agencyIdx: index("ix_agency_onboarding_tokens_agency_company_id").on(t.agencyCompanyId),
+    // The one lookup the public redemption endpoint actually does - unique
+    // so two tokens can never collide (astronomically unlikely given 256
+    // bits of entropy, but the index still needs to exist for the lookup
+    // itself to be fast, and uniqueness costs nothing extra to declare).
+    tokenHashIdx: uniqueIndex("ux_agency_onboarding_tokens_token_hash").on(t.tokenHash),
+  }),
+);
+
+/**
  * A role's permission set. `isSystem` marks the built-in "Owner" role every
  * company gets at signup (always holds every permission, cannot be edited
  * or deleted) - everything else is a fully custom role the admin defines

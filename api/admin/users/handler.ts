@@ -47,6 +47,13 @@ import {
   respondToAgencyInvite,
   setClientRelationshipStatus,
 } from "../../../src/application/agency";
+import {
+  completeAgencyOnboarding,
+  generateOnboardingLink,
+  getOnboardingLinkPreview,
+  listOnboardingLinks,
+  revokeOnboardingLink,
+} from "../../../src/application/agencyOnboarding";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -76,6 +83,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (resource === "agencyInvite") {
     return handleAgencyInviteResource(req, res);
+  }
+  if (resource === "agencyOnboardingPublic") {
+    return handleAgencyOnboardingPublicResource(req, res);
   }
 
   const userId = getUserId(req);
@@ -635,6 +645,9 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth.companyId);
   if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId);
+  if (action === "generate-onboarding-link") return handleAgencyGenerateOnboardingLink(req, res, auth.companyId, auth.userId);
+  if (action === "list-onboarding-links") return handleAgencyListOnboardingLinks(req, res, auth.companyId);
+  if (action === "revoke-onboarding-link") return handleAgencyRevokeOnboardingLink(req, res, auth.companyId);
 
   res.status(404).json({ error: "Not found" });
 }
@@ -746,6 +759,52 @@ async function handleAgencySetClientStatus(req: VercelRequest, res: VercelRespon
   }
 }
 
+async function handleAgencyGenerateOnboardingLink(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { clientName, contactEmail } = (req.body ?? {}) as { clientName?: string; contactEmail?: string };
+  if (!clientName || !contactEmail) {
+    res.status(400).json({ error: "clientName and contactEmail are required." });
+    return;
+  }
+  try {
+    const result = await generateOnboardingLink({ agencyCompanyId, actingUserId, clientName, contactEmail });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/generate-onboarding-link] Failed:", err);
+    res.status(500).json({ error: "Failed to generate onboarding link." });
+  }
+}
+
+async function handleAgencyListOnboardingLinks(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const links = await listOnboardingLinks(agencyCompanyId);
+  res.status(200).json({ links });
+}
+
+async function handleAgencyRevokeOnboardingLink(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const tokenId = getQueryString(req, "tokenId");
+  if (!tokenId) {
+    res.status(400).json({ error: "tokenId is required." });
+    return;
+  }
+  await revokeOnboardingLink(agencyCompanyId, tokenId);
+  res.status(200).json({ ok: true });
+}
+
 // ---- Agency invite: the CLIENT side (any accountType) ---------------------
 // Unlike handleAgencyResource above, this is NOT gated on accountType ===
 // "agency" - any company can be the target of an invite, so this only ever
@@ -792,5 +851,76 @@ async function handleAgencyInviteRespond(req: VercelRequest, res: VercelResponse
     }
     console.error("[agency-invite/respond] Failed:", err);
     res.status(500).json({ error: "Failed to respond to invitation." });
+  }
+}
+
+// ---- Agency onboarding link: the PUBLIC side (no auth at all) -------------
+// Backs /onboarding/agency/{token} (public/onboarding-agency.html, reached
+// via the vercel.json rewrite that turns that path into
+// ?token=... on this same static page - see that page's own header
+// comment). Deliberately calls neither requireAuth nor requirePermission -
+// whoever is completing this link usually has no RUTA account yet. The
+// token itself, hashed and looked up in getOnboardingLinkPreview /
+// completeAgencyOnboarding (src/application/agencyOnboarding.ts), is the
+// only thing that authorizes anything here; nothing in this function reads
+// an agencyCompanyId/clientCompanyId from the request at all. Same
+// unauthenticated-by-design posture as handlePublicGet/handlePublicSubmit
+// above for public form links.
+async function handleAgencyOnboardingPublicResource(req: VercelRequest, res: VercelResponse) {
+  const action = getQueryString(req, "action");
+  const token = getQueryString(req, "token");
+  if (!token) {
+    res.status(400).json({ error: "token is required." });
+    return;
+  }
+
+  if (action === "complete") return handleAgencyOnboardingComplete(req, res, token);
+  return handleAgencyOnboardingPreview(req, res, token);
+}
+
+async function handleAgencyOnboardingPreview(req: VercelRequest, res: VercelResponse, token: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  try {
+    const preview = await getOnboardingLinkPreview(token);
+    res.status(200).json(preview);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency-onboarding/preview] Failed:", err);
+    res.status(500).json({ error: "Failed to load invitation." });
+  }
+}
+
+async function handleAgencyOnboardingComplete(req: VercelRequest, res: VercelResponse, token: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { companyName, ownerName, ownerEmail, phoneNumber, password } = (req.body ?? {}) as {
+    companyName?: string;
+    ownerName?: string;
+    ownerEmail?: string;
+    phoneNumber?: string;
+    password?: string;
+  };
+  if (!companyName || !ownerName || !ownerEmail || !phoneNumber || !password) {
+    res.status(400).json({ error: "companyName, ownerName, ownerEmail, phoneNumber and password are all required." });
+    return;
+  }
+  try {
+    const result = await completeAgencyOnboarding({ token, companyName, ownerName, ownerEmail, phoneNumber, password });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency-onboarding/complete] Failed:", err);
+    res.status(500).json({ error: "Failed to complete registration." });
   }
 }

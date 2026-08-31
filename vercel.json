@@ -70,6 +70,15 @@
     { "source": "/api/agency/invites/pending", "destination": "/api/admin/users/handler?resource=agencyInvite&action=pending" },
     { "source": "/api/agency/invites/respond", "destination": "/api/admin/users/handler?resource=agencyInvite&action=respond" },
 
+    { "source": "/api/agency/onboarding-links", "destination": "/api/admin/users/handler?resource=agency&action=list-onboarding-links" },
+    { "source": "/api/agency/onboarding-links/generate", "destination": "/api/admin/users/handler?resource=agency&action=generate-onboarding-link" },
+    { "source": "/api/agency/onboarding-links/:tokenId/revoke", "destination": "/api/admin/users/handler?resource=agency&action=revoke-onboarding-link&tokenId=:tokenId" },
+
+    { "source": "/api/public/agency-onboarding/:token/complete", "destination": "/api/admin/users/handler?resource=agencyOnboardingPublic&token=:token&action=complete" },
+    { "source": "/api/public/agency-onboarding/:token", "destination": "/api/admin/users/handler?resource=agencyOnboardingPublic&token=:token" },
+
+    { "source": "/onboarding/agency/:token", "destination": "/onboarding-agency.html?token=:token" },
+
     { "source": "/api/forms/default-internal", "destination": "/api/forms/handler?sub=default-internal" },
     { "source": "/api/forms/:formId/publish", "destination": "/api/forms/handler?formId=:formId&sub=publish" },
     { "source": "/api/forms/:formId/archive", "destination": "/api/forms/handler?formId=:formId&sub=archive" },

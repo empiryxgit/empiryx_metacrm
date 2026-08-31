@@ -134,6 +134,13 @@
       "when": 1788174564527,
       "tag": "0018_add_user_phone_number",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788194618791,
+      "tag": "0019_add_agency_onboarding_tokens",
+      "breakpoints": true
     }
   ]
 }

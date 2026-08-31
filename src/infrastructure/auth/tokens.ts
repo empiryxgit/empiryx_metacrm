@@ -100,6 +100,31 @@ export function hashRefreshToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// How long a "Generate Onboarding Link" invite (Clients -> Add Client ->
+// Generate Onboarding Link) stays redeemable before it must be regenerated -
+// see agencyOnboardingTokens.expiresAt in schema.ts. A week, not the 24h a
+// login-adjacent token would get: this link is typically handed to someone
+// outside the product entirely (an email, a text, a sales call follow-up),
+// so it needs enough slack to actually get opened, not just enough to
+// survive one browser session.
+export const ONBOARDING_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
+/** Same opaque-random-value + SHA-256-hash shape as generateRefreshToken
+ * above, reused here for the "Generate Onboarding Link" invite rather than
+ * a login session - see agencyOnboardingTokens' own doc comment in
+ * schema.ts for why a session-grade token is exactly the right primitive
+ * for this. The raw `token` is what goes in the link
+ * (/onboarding/agency/{token}) and is returned to the caller exactly once;
+ * only `hash` is ever persisted. */
+export function generateOnboardingToken(): { token: string; hash: string } {
+  const token = randomBytes(32).toString("base64url");
+  return { token, hash: hashOnboardingToken(token) };
+}
+
+export function hashOnboardingToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export const ACCESS_COOKIE_NAME = "mla_access";
 export const REFRESH_COOKIE_NAME = "mla_refresh";
 

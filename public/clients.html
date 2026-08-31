@@ -36,6 +36,7 @@
       </div>
       <div class="page-head-actions" id="headActions" style="display:none">
         <button class="btn secondary" type="button" id="inviteClientBtn">Invite Client</button>
+        <button class="btn secondary" type="button" id="generateLinkBtn">Generate Onboarding Link</button>
         <button class="btn" type="button" id="addClientBtn">+ Add Client</button>
       </div>
     </div>
@@ -45,6 +46,23 @@
     <input class="client-search" id="searchInput" type="search" placeholder="Search client…" />
 
     <div class="client-cards" id="clientCards"><p class="empty">Loading…</p></div>
+
+    <div class="dash-section" id="onboardingLinksSection" style="display:none">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Onboarding Links</p>
+            <p class="dash-card-sub">Self-serve signup links you've generated for prospective clients.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Client Name</th><th>Contact Email</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+            <tbody id="onboardingLinksBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Add Client modal - identical contract to the one on agency-dashboard.html;
@@ -129,6 +147,66 @@
     </div>
   </div>
 
+  <!-- Generate Onboarding Link modal - see generateOnboardingLink() in
+       src/application/agencyOnboarding.ts. Unlike Invite Client above, this
+       needs no existing account at all: it hands out a secure, single-use,
+       time-limited link a prospective client uses to register themselves
+       (their own company name, their own password) as this agency's
+       client. The token itself is the only thing shown here - never a
+       client_id/agency_id - and only its hash is ever stored server-side,
+       so it's shown exactly once, right here, and never retrievable again. -->
+  <div class="modal-overlay" id="generateLinkModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Generate Onboarding Link</h2>
+          <p>Create a secure signup link for a prospective client to complete themselves.</p>
+        </div>
+        <button class="modal-close" type="button" id="generateLinkModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="generateLinkError"></div>
+        <form id="generateLinkForm">
+          <label for="gl_clientName">Client Name</label>
+          <input id="gl_clientName" required autocomplete="off" placeholder="ABC Realty" />
+          <label for="gl_contactEmail">Contact Email</label>
+          <input id="gl_contactEmail" type="email" required autocomplete="off" placeholder="client@example.com" />
+          <p class="hint">This is just a label for your own reference - the person who opens the link fills in their own account details.</p>
+        </form>
+        <div id="generateLinkResult" style="display:none">
+          <label for="gl_resultUrl">Onboarding link</label>
+          <input id="gl_resultUrl" readonly onclick="this.select()" />
+          <p class="hint" id="generateLinkExpiry"></p>
+          <p class="hint">This link won't be shown again - copy it now and send it to your client. It can only be used once.</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="generateLinkCancel">Cancel</button>
+        <button class="btn" type="button" id="generateLinkSubmit">Generate Onboarding Link</button>
+        <button class="btn" type="button" id="generateLinkCopy" style="display:none">Copy Link</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Revoke-link confirmation - this codebase's modal-overlay confirm
+       convention, not a native confirm(). -->
+  <div class="modal-overlay" id="revokeLinkModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Revoke Onboarding Link</h2>
+          <p>This link will stop working immediately. It can't be un-revoked.</p>
+        </div>
+        <button class="modal-close" type="button" id="revokeLinkModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body"><div id="revokeLinkError"></div></div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="revokeLinkCancel">Cancel</button>
+        <button class="btn danger" type="button" id="revokeLinkConfirm">Revoke Link</button>
+      </div>
+    </div>
+  </div>
+
 <script src="/assets/app.js"></script>
 <script>
   let allClients = [];
@@ -178,6 +256,40 @@
     });
   }
 
+  function onboardingStatusPillClass(status) {
+    if (status === "used") return "active";
+    if (status === "pending") return "pending";
+    return "paused"; // revoked | expired
+  }
+
+  function renderOnboardingLinks(links) {
+    const section = document.getElementById("onboardingLinksSection");
+    if (!links.length) { section.style.display = "none"; return; }
+    section.style.display = "";
+    document.getElementById("onboardingLinksBody").innerHTML = links.map((l) => `
+      <tr>
+        <td>${App.escapeHtml(l.clientName)}</td>
+        <td>${App.escapeHtml(l.contactEmail)}</td>
+        <td><span class="pill ${onboardingStatusPillClass(l.status)}">${App.escapeHtml(l.status.charAt(0).toUpperCase() + l.status.slice(1))}</span></td>
+        <td>${new Date(l.expiresAt).toLocaleDateString()}</td>
+        <td>${l.status === "pending" ? `<button class="btn secondary sm" type="button" data-revoke="${l.id}">Revoke</button>` : ""}</td>
+      </tr>`).join("");
+
+    document.getElementById("onboardingLinksBody").querySelectorAll("[data-revoke]").forEach((btn) => {
+      btn.addEventListener("click", () => openRevokeLinkModal(btn.dataset.revoke));
+    });
+  }
+
+  async function loadOnboardingLinks() {
+    try {
+      const { links } = await App.apiJson("/api/agency/onboarding-links");
+      renderOnboardingLinks(links);
+    } catch {
+      // Non-critical to the page's main purpose - fail quietly rather than
+      // blocking the Clients list itself over this section.
+    }
+  }
+
   async function load() {
     document.getElementById("banner").innerHTML = "";
     const me = await App.requireAuth();
@@ -195,6 +307,8 @@
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       document.getElementById("clientCards").innerHTML = "";
     }
+
+    await loadOnboardingLinks();
   }
 
   document.getElementById("searchInput").addEventListener("input", renderClients);
@@ -304,6 +418,106 @@
     } finally {
       inviteSendBtn.disabled = false;
       inviteSendBtn.textContent = "Send Invitation";
+    }
+  });
+
+  // ---- Generate Onboarding Link modal --------------------------------------
+  const generateLinkModal = document.getElementById("generateLinkModalOverlay");
+  const generateLinkForm = document.getElementById("generateLinkForm");
+  const generateLinkError = document.getElementById("generateLinkError");
+  const generateLinkResult = document.getElementById("generateLinkResult");
+  const generateLinkSubmitBtn = document.getElementById("generateLinkSubmit");
+  const generateLinkCopyBtn = document.getElementById("generateLinkCopy");
+
+  function openGenerateLinkModal() {
+    generateLinkForm.reset();
+    generateLinkError.innerHTML = "";
+    generateLinkForm.style.display = "";
+    generateLinkResult.style.display = "none";
+    generateLinkSubmitBtn.style.display = "";
+    generateLinkCopyBtn.style.display = "none";
+    generateLinkModal.style.display = "flex";
+    document.getElementById("gl_clientName").focus();
+  }
+  function closeGenerateLinkModal() { generateLinkModal.style.display = "none"; }
+
+  document.getElementById("generateLinkBtn").addEventListener("click", openGenerateLinkModal);
+  document.getElementById("generateLinkModalClose").addEventListener("click", closeGenerateLinkModal);
+  document.getElementById("generateLinkCancel").addEventListener("click", closeGenerateLinkModal);
+  generateLinkModal.addEventListener("click", (e) => { if (e.target === generateLinkModal) closeGenerateLinkModal(); });
+
+  generateLinkSubmitBtn.addEventListener("click", async () => {
+    generateLinkError.innerHTML = "";
+    const clientName = document.getElementById("gl_clientName").value.trim();
+    const contactEmail = document.getElementById("gl_contactEmail").value.trim();
+    if (!clientName || !contactEmail) {
+      generateLinkError.innerHTML = `<div class="banner error">Client name and contact email are both required.</div>`;
+      return;
+    }
+    generateLinkSubmitBtn.disabled = true;
+    generateLinkSubmitBtn.textContent = "Generating…";
+    try {
+      const result = await App.apiJson("/api/agency/onboarding-links/generate", {
+        method: "POST",
+        body: { clientName, contactEmail },
+      });
+      const url = `${window.location.origin}/onboarding/agency/${encodeURIComponent(result.token)}`;
+      document.getElementById("gl_resultUrl").value = url;
+      document.getElementById("generateLinkExpiry").textContent = `Expires ${new Date(result.expiresAt).toLocaleString()}.`;
+      generateLinkForm.style.display = "none";
+      generateLinkResult.style.display = "";
+      generateLinkSubmitBtn.style.display = "none";
+      generateLinkCopyBtn.style.display = "";
+      await loadOnboardingLinks();
+    } catch (err) {
+      generateLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      generateLinkSubmitBtn.disabled = false;
+      generateLinkSubmitBtn.textContent = "Generate Onboarding Link";
+    }
+  });
+
+  generateLinkCopyBtn.addEventListener("click", async () => {
+    const input = document.getElementById("gl_resultUrl");
+    input.select();
+    try {
+      await navigator.clipboard.writeText(input.value);
+      generateLinkCopyBtn.textContent = "Copied!";
+      setTimeout(() => { generateLinkCopyBtn.textContent = "Copy Link"; }, 1500);
+    } catch {
+      // Clipboard permission can be denied - the field is still selected
+      // and readonly, so a manual Ctrl/Cmd+C always works as a fallback.
+    }
+  });
+
+  // ---- Revoke Onboarding Link modal -----------------------------------------
+  const revokeLinkModal = document.getElementById("revokeLinkModalOverlay");
+  const revokeLinkError = document.getElementById("revokeLinkError");
+  let revokeLinkTargetId = null;
+
+  function openRevokeLinkModal(tokenId) {
+    revokeLinkTargetId = tokenId;
+    revokeLinkError.innerHTML = "";
+    revokeLinkModal.style.display = "flex";
+  }
+  function closeRevokeLinkModal() { revokeLinkModal.style.display = "none"; revokeLinkTargetId = null; }
+
+  document.getElementById("revokeLinkModalClose").addEventListener("click", closeRevokeLinkModal);
+  document.getElementById("revokeLinkCancel").addEventListener("click", closeRevokeLinkModal);
+  revokeLinkModal.addEventListener("click", (e) => { if (e.target === revokeLinkModal) closeRevokeLinkModal(); });
+
+  document.getElementById("revokeLinkConfirm").addEventListener("click", async () => {
+    if (!revokeLinkTargetId) return;
+    const btn = document.getElementById("revokeLinkConfirm");
+    btn.disabled = true;
+    try {
+      await App.apiJson(`/api/agency/onboarding-links/${encodeURIComponent(revokeLinkTargetId)}/revoke`, { method: "POST" });
+      closeRevokeLinkModal();
+      await loadOnboardingLinks();
+    } catch (err) {
+      revokeLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
     }
   });
 
