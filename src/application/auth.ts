@@ -86,12 +86,14 @@ export interface RegisterInput {
   // choice" reason industry is - resolveAccountType() defaults an absent/
   // unrecognized value to "individual" rather than rejecting the request.
   accountType?: string;
-  // The registering ("Contact Person") user's mobile number - collected by
-  // public/register.html's Agency form only (labeled "Mobile" there);
-  // Individual registration never sends this. Unlike industry/accountType,
-  // this is genuinely REQUIRED once accountType resolves to "agency" - see
-  // the check in registerCompanyAndOwner below - an agency account with no
-  // way to reach its contact person defeats the point of asking for one.
+  // The registering user's mobile number - collected by both of
+  // public/register.html's forms (labeled "Mobile" in each). Unlike
+  // industry/accountType, this is genuinely REQUIRED regardless of
+  // accountType - see the check in registerCompanyAndOwner below - an
+  // account with no way to reach whoever registered it defeats the point
+  // of asking for one. Typed optional here only because it arrives as a
+  // plain string over the wire before that check runs, same convention as
+  // every other field in this interface.
   phoneNumber?: string;
 }
 
@@ -120,9 +122,11 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   // Enforced here, not just as an HTML `required` attribute on
   // register.html's Mobile field - a request that skips the client
   // entirely (a direct API call, or a tampered form) must not be able to
-  // create an agency account with no way to reach its contact person.
-  if (accountType === "agency" && !input.phoneNumber?.trim()) {
-    throw new AuthError("Mobile number is required for an agency account.");
+  // create an account with no way to reach whoever registered it.
+  // Required for every accountType (not just "agency") - see
+  // RegisterInput.phoneNumber's own comment above.
+  if (!input.phoneNumber?.trim()) {
+    throw new AuthError("Mobile number is required.");
   }
 
   const slug = await uniqueSlug(input.companyName);
@@ -144,23 +148,24 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     phoneNumber: input.phoneNumber?.trim() || undefined,
   });
 
-  // An agency account has no onboarding wizard of its own to complete - the
-  // existing one (POST /api/onboarding/company + /complete) only makes
-  // sense for a company running its own campaigns (company size, timezone,
-  // "create your first campaign"), which isn't what a freshly-registered
-  // agency is here to do. Per the intended flow (Agency Account Created ->
-  // straight to Agency Dashboard, no onboarding step shown in between),
-  // mark onboarding complete immediately so App.requireAuth() on
-  // agency-dashboard.html (and any other page an agency user visits next)
-  // never redirects them into that individual/campaign-oriented wizard.
-  // Best-effort, same posture as every other post-creation step here - a
-  // failure must never block account creation itself.
-  if (accountType === "agency") {
-    try {
-      await completeOnboarding(company.id);
-    } catch (err) {
-      console.error("[auth/register] Failed to mark agency onboarding complete:", err);
-    }
+  // Every new account skips the onboarding wizard (POST /api/onboarding/
+  // company + /complete - company size/timezone, then a guided "create
+  // your first campaign" step) and lands straight on its dashboard: Agency
+  // Account Created -> Agency Dashboard, Account Created -> Individual CRM
+  // Dashboard. Marking onboarding complete immediately here is what makes
+  // that true - App.requireAuth() on dashboard.html/agency-dashboard.html
+  // (and every other protected page) redirects into onboarding.html only
+  // when onboardingCompletedAt is still null, so without this a fresh
+  // Individual signup would still get funneled into that wizard first.
+  // A new Individual company gets no campaign created on their behalf as
+  // a result - they create their first one themselves from the Campaigns
+  // page, same as any company created via any other path. Best-effort,
+  // same posture as every other post-creation step here - a failure must
+  // never block account creation itself.
+  try {
+    await completeOnboarding(company.id);
+  } catch (err) {
+    console.error("[auth/register] Failed to mark onboarding complete:", err);
   }
 
   // Best-effort backfill of companies.createdBy - the owner user didn't
