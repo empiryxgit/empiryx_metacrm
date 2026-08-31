@@ -18,6 +18,8 @@ import {
   bigserial,
   index,
   uniqueIndex,
+  check,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -65,6 +67,34 @@ export const companies = crm.table("companies", {
   // never branch on this column's raw string outside resolveAccountType()/
   // ACCOUNT_TYPE_CATALOG.
   accountType: text("account_type").notNull().default("individual"),
+  // The organization's own lifecycle - independent of any one user's
+  // users.status (a company can be suspended while its users' individual
+  // accounts stay "active"). Not a DB enum, same convention as every other
+  // status column in this schema ("active" | "suspended" today). NOT
+  // enforced anywhere yet (no login/API gate checks this) - the column
+  // exists so that gate can be added later without a further migration;
+  // every existing company defaults to "active", identical to how it
+  // behaved before this column existed.
+  status: text("status").notNull().default("active"),
+  // Which user caused this organization to exist. Null for the ordinary
+  // self-registration path (see registerCompanyAndOwner in
+  // src/application/auth.ts) - the owner user doesn't exist yet at the
+  // moment the company row is inserted, so this is best-effort backfilled
+  // via setCompanyCreatedBy() right after that user is created; a failure
+  // there never blocks registration itself, same "best-effort, never
+  // blocking" posture as provisionDefaultForms in that same function.
+  // Populated going forward for the one path where a creator genuinely
+  // predates the company: an agency company creating a CLIENT company on
+  // a client's behalf (see agencyOrganizations below) - createdBy there is
+  // the agency user who created the link. ON DELETE SET NULL: the creating
+  // user being removed later must never delete the organization they created.
+  // Explicit AnyPgColumn return type (rather than plain inference) on
+  // purpose - companies <-> users is a genuine circular reference
+  // (users.companyId already points back at companies.id), which trips
+  // TypeScript's circular-inference check unless the callback's return type
+  // is annotated. This is Drizzle's own documented pattern for a circular
+  // FK, not a workaround specific to this codebase.
+  createdBy: uuid("created_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
   companySize: text("company_size"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
@@ -73,6 +103,65 @@ export const companies = crm.table("companies", {
 }, (t) => ({
   slugIdx: uniqueIndex("ux_companies_slug").on(t.slug),
 }));
+
+// ---------------------------------------------------------------------------
+// Agency <-> Client organization relationships
+// ---------------------------------------------------------------------------
+//
+// "An agency can own/manage multiple client organizations." Deliberately a
+// RELATIONSHIP, not a third account_type value - a "CLIENT" account_type
+// would conflate two different questions ("what kind of organization is
+// this" vs "who currently manages it"), and would need to keep changing
+// every time a client organization's managing agency changes. This table
+// is the only place that fact lives; `companies.accountType` stays exactly
+// AccountType ("individual" | "agency" - see src/domain/accountType.ts),
+// never "client". A client organization is simply an ordinary `companies`
+// row - typically accountType "individual", but nothing here requires
+// that - that happens to have a row here pointing at it.
+//
+// Both sides reference `companies.id` (an agency and its client are each a
+// first-class tenant/organization in their own right, with their own
+// users/branches/campaigns/leads) - this table only records the
+// relationship between two organizations, never merges their data or
+// their tenant isolation. Wiring actual cross-tenant access (an agency
+// user being able to act inside a client's tenant) is a separate, later
+// phase - same "schema now, pipeline wiring later" split already used for
+// meta_connections/meta_pages above when tenant-level Meta auth was added.
+export const agencyOrganizations = crm.table(
+  "agency_organizations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    clientCompanyId: uuid("client_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // "active" | "revoked" - not a DB enum, same convention as every other
+    // status column in this schema. Revoking never deletes the row (see
+    // the partial unique index below) - same "keep history, don't delete"
+    // posture as meta_connections' own revoked/error rows.
+    status: text("status").notNull().default("active"),
+    // The (typically agency-side) user who created this link. Nullable +
+    // ON DELETE SET NULL - that user being removed later must never delete
+    // the relationship itself.
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    agencyIdx: index("ix_agency_organizations_agency_company_id").on(t.agencyCompanyId),
+    clientIdx: index("ix_agency_organizations_client_company_id").on(t.clientCompanyId),
+    // THE cardinality rule: a client organization has at most one ACTIVE
+    // managing agency at a time (confirmed - not many-to-many). A partial
+    // unique index (not a plain unique on clientCompanyId) so a client can
+    // be re-linked to a different agency later, or unlinked and relinked
+    // to the same one, without deleting the earlier relationship's history
+    // - identical pattern to meta_connections.ux_meta_connections_one_active_per_tenant
+    // and meta_pages.ux_meta_pages_one_selected_per_tenant above.
+    oneActiveAgencyPerClientIdx: uniqueIndex("ux_agency_organizations_one_active_per_client")
+      .on(t.clientCompanyId)
+      .where(sql`status = 'active'`),
+    // An organization can never be its own client.
+    notSelfLinkCheck: check("ck_agency_organizations_not_self", sql`${t.agencyCompanyId} <> ${t.clientCompanyId}`),
+  }),
+);
 
 /**
  * A role's permission set. `isSystem` marks the built-in "Owner" role every

@@ -13,6 +13,7 @@ import {
   getSessionByHashIncludingRevoked,
   revokeAllSessionsForUser,
   revokeSession,
+  setCompanyCreatedBy,
 } from "../infrastructure/db/repositories/tenancy";
 import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
 import { hashPassword, verifyPassword } from "../infrastructure/auth/password";
@@ -125,6 +126,17 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     passwordHash,
     fullName: input.fullName,
   });
+
+  // Best-effort backfill of companies.createdBy - the owner user didn't
+  // exist yet when createCompany() ran above, so this couldn't be set as
+  // part of that insert. Never blocks registration on failure, same
+  // posture as provisionDefaultForms below - createdBy is provenance
+  // metadata, not something anything else in the app depends on being set.
+  try {
+    await setCompanyCreatedBy(company.id, user.id);
+  } catch (err) {
+    console.error("[auth/register] Failed to set company.createdBy:", err);
+  }
 
   // Auto-provision the company's default Forms (one published+default
   // internal form, one draft public form) straight from the industry

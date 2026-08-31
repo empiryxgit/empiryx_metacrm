@@ -24,6 +24,15 @@ export async function slugExists(slug: string): Promise<boolean> {
   return Boolean(row);
 }
 
+/** Best-effort backfill of companies.createdBy right after the owner user is
+ * created (see registerCompanyAndOwner in src/application/auth.ts) - the
+ * user doesn't exist yet at the moment createCompany() itself runs, so this
+ * is a deliberate second step, not part of the insert. */
+export async function setCompanyCreatedBy(companyId: string, userId: string) {
+  const db = await getDb();
+  await db.update(companies).set({ createdBy: userId, updatedAt: new Date() }).where(eq(companies.id, companyId));
+}
+
 export async function updateCompanyProfile(
   companyId: string,
   input: { industry?: string; companySize?: string; timezone?: string },
