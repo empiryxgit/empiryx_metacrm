@@ -202,7 +202,18 @@ const App = (() => {
     const isAgency = me?.company?.accountType === "agency";
     const primaryLinks = isAgency ? AGENCY_PRIMARY_LINKS : PRIMARY_LINKS;
     const admin = isAgency ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
-    const settingsLinks = SETTINGS_LINKS.filter((l) => hasPermission(me, l.perm));
+    // Settings (Users/Roles/Branches/Meta Integration) is deliberately
+    // hidden entirely while an agency user is "managing" a client (see
+    // src/application/agencyClientContext.ts's header comment): those
+    // endpoints always act on the caller's OWN real company, never the
+    // client's, regardless of any active client context - showing them here
+    // would let a user believe "Managing: ABC Realty" also scopes team/role
+    // administration, which it never does. Forms/Submissions (`admin`
+    // above) are NOT hidden - those five operational CRM handlers DO honor
+    // the client context, so they correctly keep showing while managing a
+    // client.
+    const inClientContext = Boolean(me?.clientContext);
+    const settingsLinks = inClientContext ? [] : SETTINGS_LINKS.filter((l) => hasPermission(me, l.perm));
     const primaryHtml = primaryLinks.map((l) => navLinkHtml(l, activeHref)).join("");
     const adminHtml = admin.length
       ? `<span class="nav-sep" aria-hidden="true"></span>` + admin.map((l) => navLinkHtml(l, activeHref)).join("")
@@ -234,6 +245,7 @@ const App = (() => {
         <div class="shell-center">${primaryHtml}${adminHtml}${settingsHtml}</div>
 
         <div class="shell-right">
+          <div class="agency-context-switch" id="agencyContextSlot" style="display:none"></div>
           <div class="branch-switch" id="branchSwitchSlot" style="display:none"></div>
 
           <div class="menu-wrap">
@@ -275,6 +287,7 @@ const App = (() => {
     renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks);
     wireShellInteractions();
     loadBranchSwitcher(me);
+    loadAgencyContextSwitcher(me);
   }
 
   function renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks) {
@@ -298,6 +311,7 @@ const App = (() => {
           <span class="avatar avatar-lg">${escapeHtml(initials(displayName))}</span>
           <div><div class="user-name">${escapeHtml(displayName)}</div>${roleName ? `<div class="user-role">${escapeHtml(roleName)}</div>` : ""}</div>
         </div>
+        <div class="agency-context-switch agency-context-switch-mobile" id="agencyContextSlotMobile" style="display:none"></div>
         <div class="branch-switch branch-switch-mobile" id="branchSwitchSlotMobile" style="display:none"></div>
         <div class="mobile-nav-group">${groupHtml(primaryLinks || PRIMARY_LINKS)}</div>
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
@@ -372,6 +386,148 @@ const App = (() => {
         document.body.classList.remove("drawer-open");
       }
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Agency client switcher ("Agency Context -> Client Context -> CRM
+  // Dashboard"): lets an agency user pick one of their agency's clients and,
+  // for the rest of the browser session, have the app operate on THAT
+  // CLIENT's data instead of the agency's own - see
+  // src/application/agencyClientContext.ts for the full server-side design
+  // this mirrors (that file's header comment explains exactly which pages
+  // honor this and which never do). Unlike the branch switcher below,
+  // switching here is a FULL-PAGE NAVIGATION, not a live re-filter -
+  // GET /api/auth/me's `company` field itself changes (to the client's own
+  // record) once the switch takes effect, which is what flips the whole
+  // nav (isAgency, admin/settings links) over to the ordinary per-tenant
+  // shell for free - see renderNav's own isAgency/inClientContext.
+  //
+  // Populated from GET /api/agency/dashboard's `clients` array - already
+  // scoped to exactly the clients this user is allowed to manage (see
+  // resolveAgencyClientAccess/canAccessClient) - so this control can only
+  // ever offer a switch the backend would actually accept.
+  // ---------------------------------------------------------------------
+
+  // null until GET /api/auth/me + GET /api/agency/dashboard have both
+  // resolved; { agencyName, clientContextId, clientContextName, clients }
+  // once known. Left null (not even an empty-clients shape) for a
+  // non-agency user so renderAgencyContextSwitcher's very first check hides
+  // both slots without needing to special-case "not an agency user" at
+  // every call site.
+  let agencyContextInfo = null;
+
+  async function enterClientContext(clientCompanyId) {
+    try {
+      await apiJson("/api/agency/context/enter", { method: "POST", body: { clientCompanyId } });
+      window.location.href = "/dashboard.html";
+    } catch (err) {
+      alert(err.message || "Could not switch to that client. It may no longer be assigned to you.");
+      renderAgencyContextSwitcher(); // reset the select back to the last-known-good state
+    }
+  }
+
+  async function exitClientContext() {
+    try {
+      await apiJson("/api/agency/context/exit", { method: "POST" });
+    } catch {
+      // Best-effort - even if this particular request fails, navigating to
+      // the agency dashboard is harmless: that page's own auth guard talks
+      // to a real agency company either way, and the next protected page's
+      // own live re-validation (resolveActiveClientContext) is what
+      // actually decides whether any lingering cookie still counts, not
+      // this client-side call succeeding.
+    }
+    window.location.href = "/agency-dashboard.html";
+  }
+
+  function clientOptionsHtml(clients, selectedId) {
+    if (!clients.length) return `<option value="">No clients assigned</option>`;
+    const placeholder = `<option value="">Select a client…</option>`;
+    const opts = clients
+      .map((c) => `<option value="${c.id}"${c.id === selectedId ? " selected" : ""}>${escapeHtml(c.name)}</option>`)
+      .join("");
+    return placeholder + opts;
+  }
+
+  function wireAgencyContextSelect(sel) {
+    if (!sel) return;
+    sel.addEventListener("change", () => {
+      if (!sel.value) return;
+      enterClientContext(sel.value);
+    });
+  }
+
+  function renderAgencyContextSwitcher() {
+    const info = agencyContextInfo;
+    const desktopSlot = document.getElementById("agencyContextSlot");
+    const mobileSlot = document.getElementById("agencyContextSlotMobile");
+
+    if (!info) {
+      if (desktopSlot) desktopSlot.style.display = "none";
+      if (mobileSlot) mobileSlot.style.display = "none";
+      return;
+    }
+
+    const inContext = Boolean(info.clientContextId);
+    const optionsHtml = clientOptionsHtml(info.clients, info.clientContextId);
+
+    if (desktopSlot) {
+      desktopSlot.style.display = "";
+      desktopSlot.classList.toggle("in-context", inContext);
+      desktopSlot.innerHTML = `
+        <span class="agency-context-badge">${inContext ? "Managing" : escapeHtml(info.agencyName)}</span>
+        <select class="agency-context-select" aria-label="Client">${optionsHtml}</select>
+        <button type="button" class="agency-context-exit"${inContext ? "" : ' style="display:none"'}>Exit</button>
+      `;
+      wireAgencyContextSelect(desktopSlot.querySelector(".agency-context-select"));
+      if (inContext) desktopSlot.querySelector(".agency-context-exit")?.addEventListener("click", exitClientContext);
+    }
+
+    if (mobileSlot) {
+      mobileSlot.style.display = "";
+      mobileSlot.classList.toggle("in-context", inContext);
+      mobileSlot.innerHTML = `
+        <div class="agency-context-mobile-agency">${escapeHtml(info.agencyName)}</div>
+        <div class="agency-context-mobile-status">${
+          inContext ? `Managing:<strong>${escapeHtml(info.clientContextName || "")}</strong>` : "Current Client"
+        }</div>
+        <select class="agency-context-select" aria-label="Client">${optionsHtml}</select>
+        ${inContext ? `<button type="button" class="agency-context-exit">Exit to Agency</button>` : ""}
+      `;
+      wireAgencyContextSelect(mobileSlot.querySelector(".agency-context-select"));
+      if (inContext) mobileSlot.querySelector(".agency-context-exit")?.addEventListener("click", exitClientContext);
+    }
+  }
+
+  /** Called from renderNav with the same `me` (GET /api/auth/me result)
+   * every page already fetches - reads `me.agency`/`me.clientContext`
+   * (see api/auth/handler.ts's handleMe) rather than making its own probe
+   * request, then fetches the actual client list separately since /api/me
+   * intentionally stays a cheap, no-extra-DB-fanout endpoint. Renders
+   * immediately with just the agency name/current state so the switcher
+   * shell never waits on the clients fetch to appear, then re-renders once
+   * the list resolves (or hides gracefully on failure - never blocks the
+   * rest of the shell, same convention as loadBranchSwitcher below). */
+  async function loadAgencyContextSwitcher(me) {
+    if (!me?.agency) {
+      agencyContextInfo = null;
+      renderAgencyContextSwitcher();
+      return;
+    }
+    agencyContextInfo = {
+      agencyName: me.agency.name,
+      clientContextId: me.clientContext?.id || null,
+      clientContextName: me.clientContext?.name || null,
+      clients: [],
+    };
+    renderAgencyContextSwitcher();
+    try {
+      const data = await apiJson("/api/agency/dashboard");
+      agencyContextInfo.clients = (data.clients || []).map((c) => ({ id: c.id, name: c.name }));
+    } catch {
+      agencyContextInfo.clients = [];
+    }
+    renderAgencyContextSwitcher();
   }
 
   // ---------------------------------------------------------------------

@@ -12,6 +12,7 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
+import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import {
   createCampaign,
   getCampaign,
@@ -64,8 +65,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 async function handleCollection(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
-    const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+    let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
 
     const requestedBranchId = getQueryString(req, "branchId");
     let access;
@@ -99,8 +101,9 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === "POST") {
-    const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+    let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
 
     const { name, platform, branchId } = (req.body ?? {}) as { name?: string; platform?: string; branchId?: string };
     if (!name) {
@@ -130,8 +133,9 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
 
 async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: string) {
   if (req.method === "GET") {
-    const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+    let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
     const campaign = await getCampaign(auth.companyId, campaignId);
     if (!campaign) {
       res.status(404).json({ error: "Campaign not found." });
@@ -150,8 +154,9 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
   }
 
   if (req.method === "PATCH") {
-    const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+    let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
 
     const existingCampaign = await getCampaign(auth.companyId, campaignId);
     if (!existingCampaign) {
@@ -211,8 +216,9 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
 // flips status from "pending" to "verified".
 async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId: string) {
   if (req.method === "GET") {
-    const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+    let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
     const campaign = await getCampaign(auth.companyId, campaignId);
     if (!campaign) {
       res.status(404).json({ error: "Campaign not found." });
@@ -234,8 +240,9 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
   }
 
   if (req.method === "POST") {
-    const auth = await requirePermission(req, res, PERMISSIONS.WEBHOOKS_MANAGE);
+    let auth = await requirePermission(req, res, PERMISSIONS.WEBHOOKS_MANAGE);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
 
     const campaign = await getCampaign(auth.companyId, campaignId);
     if (!campaign) {
@@ -316,8 +323,9 @@ async function handleGetOneMetaCampaign(req: VercelRequest, res: VercelResponse,
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const metaCampaign = await getMetaCampaignWithMappingByRowId(auth.companyId, metaCampaignId);
   if (!metaCampaign) {
@@ -350,8 +358,9 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   // Scoped to the tenant's CURRENTLY SELECTED ad account only - a tenant
   // that disconnects Meta and reconnects with a different ad account must
@@ -397,8 +406,9 @@ async function handleMapMetaCampaign(req: VercelRequest, res: VercelResponse, me
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const { crmCampaignId } = (req.body ?? {}) as { crmCampaignId?: string };
   if (!crmCampaignId) {
@@ -434,8 +444,9 @@ async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, 
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const updated = await unmapMetaCampaign(auth.companyId, metaCampaignId);
   if (!updated) {
@@ -522,8 +533,9 @@ async function handleMetaCampaignInsights(req: VercelRequest, res: VercelRespons
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.CAMPAIGNS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const metaCampaign = await getMetaCampaignWithMappingByRowId(auth.companyId, metaCampaignId);
   if (!metaCampaign) {

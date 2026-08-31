@@ -162,6 +162,42 @@ h2.section-title:first-of-type{ margin-top:0; }
 .nav-sep{ width:1px; height:18px; background:var(--border); margin:0 6px; flex-shrink:0; }
 
 .shell-right{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.agency-context-switch{
+  display:flex; align-items:center; gap:6px; flex-shrink:0;
+  padding:4px 8px; border-radius:var(--radius-sm);
+  border:1px solid transparent;
+}
+.agency-context-switch.in-context{
+  border-color:var(--brand-primary-hover, #6d5ef7);
+  background:var(--brand-primary-soft, rgba(109,94,247,.08));
+}
+.agency-context-badge{
+  font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
+  color:var(--text-secondary); white-space:nowrap;
+}
+.agency-context-switch.in-context .agency-context-badge{ color:var(--brand-primary-hover, #6d5ef7); }
+.agency-context-select{
+  width:auto; max-width:160px; padding:6px 26px 6px 10px; margin:0;
+  font-size:12.5px; font-weight:600; border-radius:var(--radius-sm);
+  border:1px solid var(--border-strong); background:var(--surface-sunken); color:var(--text-primary);
+}
+.agency-context-select:focus{ background:#fff; }
+.agency-context-exit{
+  font-size:12px; font-weight:600; color:var(--text-secondary);
+  background:none; border:1px solid var(--border-strong); border-radius:var(--radius-sm);
+  padding:5px 9px; cursor:pointer; white-space:nowrap;
+}
+.agency-context-exit:hover{ color:var(--text-primary); background:var(--surface-sunken); }
+.agency-context-switch-mobile{
+  display:block; margin:0 0 14px; padding:10px 12px;
+  border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-sunken);
+}
+.agency-context-switch-mobile.in-context{ border-color:var(--brand-primary-hover, #6d5ef7); }
+.agency-context-mobile-agency{ font-size:13px; font-weight:700; color:var(--text-primary); }
+.agency-context-mobile-status{ font-size:12px; color:var(--text-secondary); margin:2px 0 8px; display:flex; gap:5px; }
+.agency-context-mobile-status strong{ color:var(--text-primary); }
+.agency-context-switch-mobile .agency-context-select{ max-width:none; width:100%; background:#fff; margin-bottom:8px; }
+.agency-context-switch-mobile .agency-context-exit{ width:100%; }
 .branch-switch{ flex-shrink:0; }
 .branch-switch-select{
   width:auto; max-width:180px; padding:7px 28px 7px 11px; margin:0;

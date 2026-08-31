@@ -31,8 +31,9 @@ import {
   setUserPassword,
 } from "../../src/infrastructure/db/repositories/tenancy";
 import { hashPassword, verifyPassword } from "../../src/infrastructure/auth/password";
-import { ALL_PERMISSIONS } from "../../src/domain/permissions";
+import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../../src/domain/fixedRoles";
 import { checkRateLimit } from "../../src/infrastructure/cache/redis";
+import { resolveActiveClientContext } from "../../src/application/agencyClientContext";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -275,16 +276,30 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const [user, company, role] = await Promise.all([
+  // auth always carries the caller's own REAL company/role - the client
+  // switcher (see src/application/agencyClientContext.ts) never rewrites
+  // the JWT, only an additional cookie this handler reads separately below.
+  const [user, realCompany, role, clientContext] = await Promise.all([
     getUserById(auth.userId),
     getCompanyById(auth.companyId),
     getRoleById(auth.companyId, auth.roleId),
+    resolveActiveClientContext(req, auth),
   ]);
 
-  if (!user || !company) {
+  if (!user || !realCompany) {
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
+
+  // While a client context is active, `company` below reflects the CLIENT's
+  // own record (not the agency's) so existing frontend checks like
+  // `me.company.accountType === "agency"` naturally see a non-agency company
+  // and render the ordinary CRM nav rather than the agency nav - see
+  // public/assets/app.js's renderNav. Falls back to the agency's own record
+  // (silently, same as withEffectiveCompanyContext) if the effective
+  // company somehow no longer exists.
+  const effectiveCompany = clientContext ? await getCompanyById(clientContext.clientCompanyId) : realCompany;
+  const company = effectiveCompany ?? realCompany;
 
   res.status(200).json({
     user: { id: user.id, email: user.email, fullName: user.fullName, mustChangePassword: user.mustChangePassword },
@@ -296,10 +311,36 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
       accountType: company.accountType,
       onboardingCompleted: Boolean(company.onboardingCompletedAt),
     },
+    // Present whenever the CALLER's own real company is an agency,
+    // regardless of whether a client context is currently active - this is
+    // "which agency do you belong to," always true for an agency user, not
+    // "are you currently acting as a client."
+    agency: realCompany.accountType === "agency" ? { id: realCompany.id, name: realCompany.name } : null,
+    // Present only while a client context is active. Null in every other
+    // case, including for non-agency users (for whom this concept doesn't
+    // apply at all).
+    clientContext: clientContext ? { id: clientContext.clientCompanyId, name: clientContext.clientName } : null,
     // Owner (isSystem) always reflects the full, current permission catalog
     // rather than whatever snapshot was stored when the role was created -
-    // see effectivePermissions() in src/application/auth.ts for why.
-    role: role ? { id: role.id, name: role.name, permissions: role.isSystem ? ALL_PERMISSIONS : role.permissions } : null,
+    // see effectivePermissions() in src/application/auth.ts for why. Only
+    // the roles that are ACTUALLY full-access (Owner/AGENCY_OWNER/
+    // CLIENT_OWNER - see isFullAccessSystemRoleName) get this treatment; the
+    // other fixed isSystem roles (AGENCY_ADMIN/MANAGER/USER,
+    // CLIENT_ADMIN/MANAGER/USER) are uneditable but NOT full-access, so they
+    // must keep reflecting their own stored, tiered permissions set -
+    // otherwise this endpoint (which is what the frontend's hasPermission()
+    // reads) would show every nav link/button to every fixed-role user
+    // regardless of their actual tier.
+    role: role
+      ? {
+          id: role.id,
+          name: role.name,
+          permissions:
+            role.isSystem && isFullAccessSystemRoleName(role.name)
+              ? fullAccessPermissionsForRoleName(role.name)
+              : role.permissions,
+        }
+      : null,
     // Branch ids this user is a member of, straight from the access token
     // (see AccessTokenClaims.branchIds) - empty means "not assigned to a
     // specific branch," which src/application/branchAccess.ts treats as

@@ -12,6 +12,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
+import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCampaign } from "../../src/infrastructure/db/repositories/campaigns";
 import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositories/tenancy";
@@ -25,8 +26,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.PIPELINE_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.PIPELINE_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const company = await getCompanyById(auth.companyId);
   if (!company) {

@@ -19,6 +19,7 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
+import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
 import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
@@ -394,8 +395,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 // ---- Collection ---------------------------------------------------------
 
 async function handleList(req: VercelRequest, res: VercelResponse) {
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
   const type = getQueryString(req, "type");
   try {
     const rows = await listForms(auth.companyId, type, resolveBranchAccess(auth));
@@ -419,8 +421,9 @@ async function handleDefaultInternal(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const requestedBranchId = getQueryString(req, "branchId");
   const assertion = await assertBranchAccessible(auth, requestedBranchId);
@@ -461,8 +464,9 @@ interface CreateFormBody {
 }
 
 async function handleCreate(req: VercelRequest, res: VercelResponse) {
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const body = (req.body ?? {}) as CreateFormBody;
   const name = body.name?.trim();
@@ -536,8 +540,9 @@ interface UpdateFormBody {
 
 async function handleOne(req: VercelRequest, res: VercelResponse, formId: string) {
   if (req.method === "GET") {
-    const auth = await requirePermission(req, res, PERMISSIONS.FORMS_VIEW);
+    let auth = await requirePermission(req, res, PERMISSIONS.FORMS_VIEW);
     if (!auth) return;
+    auth = await withEffectiveCompanyContext(req, auth);
     const result = await getFormWithFields(auth.companyId, formId);
     if (!result) {
       res.status(404).json({ error: "Form not found." });
@@ -555,8 +560,9 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   if (req.method === "PUT") {
     const body = (req.body ?? {}) as UpdateFormBody;
@@ -695,8 +701,9 @@ async function handlePublish(req: VercelRequest, res: VercelResponse, formId: st
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const existingForm = await getFormById(auth.companyId, formId);
   if (!existingForm) {
@@ -721,8 +728,9 @@ async function handleArchive(req: VercelRequest, res: VercelResponse, formId: st
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const form = await getFormById(auth.companyId, formId);
   if (!form) {
@@ -742,8 +750,9 @@ async function handleSetDefault(req: VercelRequest, res: VercelResponse, formId:
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.FORMS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const existingForm = await getFormById(auth.companyId, formId);
   if (!existingForm) {
@@ -768,8 +777,9 @@ async function handleSubmissions(req: VercelRequest, res: VercelResponse, formId
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.SUBMISSIONS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.SUBMISSIONS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const form = await getFormById(auth.companyId, formId);
   if (!form) {
@@ -798,8 +808,9 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
   // already require, not forms.manage (a salesperson who can add customers
   // should be able to use the configured form without also being able to
   // edit it).
-  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const form = await getFormById(auth.companyId, formId);
   if (!form || form.type !== "internal" || form.status !== "published") {

@@ -11,6 +11,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
+import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import {
   insertLeadFollowUp,
   insertManualLead,
@@ -81,8 +82,9 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_VIEW);
+  let auth = await requirePermission(req, res, PERMISSIONS.LEADS_VIEW);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
@@ -138,8 +140,9 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.PIPELINE_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.PIPELINE_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const { stage } = (req.body ?? {}) as { stage?: string };
 
@@ -203,8 +206,9 @@ async function handleFollowUps(req: VercelRequest, res: VercelResponse, leadId: 
   }
 
   const permission = req.method === "GET" ? PERMISSIONS.LEADS_VIEW : PERMISSIONS.LEADS_MANAGE;
-  const auth = await requirePermission(req, res, permission);
+  let auth = await requirePermission(req, res, permission);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
   const accessible = await isLeadAccessible(auth.companyId, leadId, branchCondition);
@@ -274,8 +278,9 @@ interface ManualCreateBody {
 // originating Meta lead. See insertManualLead() for why this never touches
 // the ingestion path.
 async function handleCreate(req: VercelRequest, res: VercelResponse) {
-  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const company = await getCompanyById(auth.companyId);
   if (!company) {
@@ -346,8 +351,9 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: str
     return;
   }
 
-  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const company = await getCompanyById(auth.companyId);
   if (!company) {

@@ -41,7 +41,8 @@ import {
   updateBranch,
 } from "../../../src/infrastructure/db/repositories/branches";
 import { AuthError, login } from "../../../src/application/auth";
-import { setAuthCookies } from "../../../src/infrastructure/auth/tokens";
+import { setAuthCookies, CLIENT_CONTEXT_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../../../src/infrastructure/auth/tokens";
+import { checkAgencyCanManageClient } from "../../../src/application/agencyClientContext";
 import {
   addClientOrganization,
   getAgencyDashboardSummary,
@@ -722,8 +723,45 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   if (action === "generate-onboarding-link") return handleAgencyGenerateOnboardingLink(req, res, auth.companyId, auth.userId);
   if (action === "list-onboarding-links") return handleAgencyListOnboardingLinks(req, res, auth.companyId);
   if (action === "revoke-onboarding-link") return handleAgencyRevokeOnboardingLink(req, res, auth.companyId);
+  if (action === "enter-client-context") return handleAgencyEnterClientContext(req, res, auth);
+  if (action === "exit-client-context") return handleAgencyExitClientContext(req, res);
 
   res.status(404).json({ error: "Not found" });
+}
+
+// The "client switcher" - see src/application/agencyClientContext.ts's own
+// header comment for the full design. These two actions are the ONLY place
+// CLIENT_CONTEXT_COOKIE_NAME is ever set or cleared; every other consumer
+// (withEffectiveCompanyContext, handleMe) only ever reads it back.
+async function handleAgencyEnterClientContext(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { clientCompanyId } = (req.body ?? {}) as { clientCompanyId?: string };
+  if (!clientCompanyId) {
+    res.status(400).json({ error: "clientCompanyId is required." });
+    return;
+  }
+  const result = await checkAgencyCanManageClient(auth, clientCompanyId);
+  if (!result.ok) {
+    res.status(403).json({ error: "You don't have access to that client." });
+    return;
+  }
+  // Session-lifetime cookie (no Max-Age) - see CLIENT_CONTEXT_COOKIE_NAME's
+  // own comment in tokens.ts for why this deliberately doesn't persist
+  // across a browser restart the way "remember me" sessions can.
+  res.setHeader("Set-Cookie", [`${CLIENT_CONTEXT_COOKIE_NAME}=${clientCompanyId}; ${cookieOptions(null)}`]);
+  res.status(200).json({ ok: true, clientName: result.clientName, agencyName: result.agencyName });
+}
+
+async function handleAgencyExitClientContext(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  res.setHeader("Set-Cookie", [`${CLIENT_CONTEXT_COOKIE_NAME}=; ${clearCookieOptions()}`]);
+  res.status(200).json({ ok: true });
 }
 
 async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, auth: AuthContext) {

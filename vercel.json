@@ -70,6 +70,9 @@
     { "source": "/api/agency/invites/pending", "destination": "/api/admin/users/handler?resource=agencyInvite&action=pending" },
     { "source": "/api/agency/invites/respond", "destination": "/api/admin/users/handler?resource=agencyInvite&action=respond" },
 
+    { "source": "/api/agency/context/enter", "destination": "/api/admin/users/handler?resource=agency&action=enter-client-context" },
+    { "source": "/api/agency/context/exit", "destination": "/api/admin/users/handler?resource=agency&action=exit-client-context" },
+
     { "source": "/api/agency/onboarding-links", "destination": "/api/admin/users/handler?resource=agency&action=list-onboarding-links" },
     { "source": "/api/agency/onboarding-links/generate", "destination": "/api/admin/users/handler?resource=agency&action=generate-onboarding-link" },
     { "source": "/api/agency/onboarding-links/:tokenId/revoke", "destination": "/api/admin/users/handler?resource=agency&action=revoke-onboarding-link&tokenId=:tokenId" },

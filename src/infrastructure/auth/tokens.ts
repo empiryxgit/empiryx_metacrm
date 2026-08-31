@@ -136,6 +136,16 @@ export function hashOnboardingToken(token: string): string {
 
 export const ACCESS_COOKIE_NAME = "mla_access";
 export const REFRESH_COOKIE_NAME = "mla_refresh";
+// Which client company an AGENCY user is currently "managing" (the client
+// switcher - see src/application/agencyClientContext.ts). Deliberately a
+// SEPARATE plain cookie, not a JWT claim: it is pure UI-session state (which
+// hat is this agency user wearing right now), re-validated in full against
+// live DB state on every request that honors it (never trusted on its own
+// for authorization) - see resolveActiveClientContext's own comment for why
+// that split is what keeps this safe. Session-lifetime only (no Max-Age),
+// same as browser-restart-clears-it "remember me" unchecked semantics - a
+// working context like this shouldn't quietly outlive the browser session.
+export const CLIENT_CONTEXT_COOKIE_NAME = "mla_client_ctx";
 
 // maxAgeSeconds: null means "browser SESSION cookie" - no Max-Age/Expires
 // directive at all, so the browser itself drops it on close (the "Remember
