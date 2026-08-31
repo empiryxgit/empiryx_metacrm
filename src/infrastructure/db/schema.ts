@@ -85,7 +85,7 @@ export const companies = crm.table("companies", {
   // blocking" posture as provisionDefaultForms in that same function.
   // Populated going forward for the one path where a creator genuinely
   // predates the company: an agency company creating a CLIENT company on
-  // a client's behalf (see agencyOrganizations below) - createdBy there is
+  // a client's behalf (see agencyClients below) - createdBy there is
   // the agency user who created the link. ON DELETE SET NULL: the creating
   // user being removed later must never delete the organization they created.
   // Explicit AnyPgColumn return type (rather than plain inference) on
@@ -208,6 +208,15 @@ export const users = crm.table("users", {
   email: text("email").notNull(),
   passwordHash: text("password_hash").notNull(),
   fullName: text("full_name").notNull(),
+  // Contact mobile number - nullable, no format validation at this layer
+  // (kept deliberately simple, unlike the E.164-validated phone field a
+  // prior, now-removed feature once added here - see git history). Only
+  // ever populated today for an agency account's registering "Contact
+  // Person" (public/register.html's Agency form; see RegisterInput.phoneNumber
+  // in src/application/auth.ts) - null for every Individual account and for
+  // any user created afterward via the admin "Add user" flow, which
+  // doesn't collect one.
+  phoneNumber: text("phone_number"),
   status: text("status").notNull().default("active"), // active | disabled
   mustChangePassword: boolean("must_change_password").notNull().default(false),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),

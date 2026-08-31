@@ -1,11 +1,11 @@
 {
-  "id": "5799ae38-a268-4c14-9aa7-6289594fc2d6",
-  "prevId": "d05a72a1-6577-4be6-847d-e5207c99c4c0",
+  "id": "f10287b3-09b5-4292-9d69-1527ee0252d1",
+  "prevId": "ca288731-edbb-438c-ba9b-0dd53aa886ae",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "crm.agency_organizations": {
-      "name": "agency_organizations",
+    "crm.agency_clients": {
+      "name": "agency_clients",
       "schema": "crm",
       "columns": {
         "id": {
@@ -32,7 +32,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'active'"
+          "default": "'invited'"
         },
         "created_by": {
           "name": "created_by",
@@ -55,8 +55,8 @@
         }
       },
       "indexes": {
-        "ix_agency_organizations_agency_company_id": {
-          "name": "ix_agency_organizations_agency_company_id",
+        "ix_agency_clients_agency_company_id": {
+          "name": "ix_agency_clients_agency_company_id",
           "columns": [
             {
               "expression": "agency_company_id",
@@ -70,8 +70,8 @@
           "method": "btree",
           "with": {}
         },
-        "ix_agency_organizations_client_company_id": {
-          "name": "ix_agency_organizations_client_company_id",
+        "ix_agency_clients_client_company_id": {
+          "name": "ix_agency_clients_client_company_id",
           "columns": [
             {
               "expression": "client_company_id",
@@ -85,8 +85,29 @@
           "method": "btree",
           "with": {}
         },
-        "ux_agency_organizations_one_active_per_client": {
-          "name": "ux_agency_organizations_one_active_per_client",
+        "ux_agency_clients_agency_client": {
+          "name": "ux_agency_clients_agency_client",
+          "columns": [
+            {
+              "expression": "agency_company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "client_company_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ux_agency_clients_one_claimed_agency_per_client": {
+          "name": "ux_agency_clients_one_claimed_agency_per_client",
           "columns": [
             {
               "expression": "client_company_id",
@@ -96,16 +117,16 @@
             }
           ],
           "isUnique": true,
-          "where": "status = 'active'",
+          "where": "status IN ('invited', 'pending', 'active', 'suspended')",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "agency_organizations_agency_company_id_companies_id_fk": {
-          "name": "agency_organizations_agency_company_id_companies_id_fk",
-          "tableFrom": "agency_organizations",
+        "agency_clients_agency_company_id_companies_id_fk": {
+          "name": "agency_clients_agency_company_id_companies_id_fk",
+          "tableFrom": "agency_clients",
           "tableTo": "companies",
           "schemaTo": "crm",
           "columnsFrom": [
@@ -117,9 +138,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agency_organizations_client_company_id_companies_id_fk": {
-          "name": "agency_organizations_client_company_id_companies_id_fk",
-          "tableFrom": "agency_organizations",
+        "agency_clients_client_company_id_companies_id_fk": {
+          "name": "agency_clients_client_company_id_companies_id_fk",
+          "tableFrom": "agency_clients",
           "tableTo": "companies",
           "schemaTo": "crm",
           "columnsFrom": [
@@ -131,9 +152,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "agency_organizations_created_by_users_id_fk": {
-          "name": "agency_organizations_created_by_users_id_fk",
-          "tableFrom": "agency_organizations",
+        "agency_clients_created_by_users_id_fk": {
+          "name": "agency_clients_created_by_users_id_fk",
+          "tableFrom": "agency_clients",
           "tableTo": "users",
           "schemaTo": "crm",
           "columnsFrom": [
@@ -150,9 +171,9 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "ck_agency_organizations_not_self": {
-          "name": "ck_agency_organizations_not_self",
-          "value": "\"crm\".\"agency_organizations\".\"agency_company_id\" <> \"crm\".\"agency_organizations\".\"client_company_id\""
+        "ck_agency_clients_not_self": {
+          "name": "ck_agency_clients_not_self",
+          "value": "\"crm\".\"agency_clients\".\"agency_company_id\" <> \"crm\".\"agency_clients\".\"client_company_id\""
         }
       },
       "isRLSEnabled": false
@@ -4488,6 +4509,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "status": {
           "name": "status",
