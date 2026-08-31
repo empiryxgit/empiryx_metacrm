@@ -119,7 +119,13 @@ interface RegisterBody {
   fullName: string;
   email: string;
   password: string;
+  // Optional, never sent by public/register.html - kept only for backward
+  // compatibility with any existing direct API caller. See RegisterInput's
+  // own comment in src/application/auth.ts.
   industry?: string;
+  // "individual" | "agency" - collected by public/register.html's second
+  // step. See RegisterInput's own comment in src/application/auth.ts.
+  accountType?: string;
 }
 
 async function handleRegister(req: VercelRequest, res: VercelResponse) {
@@ -308,6 +314,7 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
       name: company.name,
       slug: company.slug,
       industry: company.industryTemplate,
+      accountType: company.accountType,
       onboardingCompleted: Boolean(company.onboardingCompletedAt),
     },
     // Owner (isSystem) always reflects the full, current permission catalog

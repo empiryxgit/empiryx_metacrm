@@ -38,15 +38,33 @@ export const companies = crm.table("companies", {
   // structured CRM template below. Left untouched by the dynamic-pipeline
   // work.
   industry: text("industry"),
-  // The CRM template key selected at registration (see
-  // src/domain/industryTemplates.ts for the fixed catalog - "real_estate" |
-  // "solar" today). Drives which pipeline stages, lead/customer fields and
-  // list columns the CRM renders for this tenant. Deliberately a separate
-  // column from `industry` above - that one is a free-text description,
-  // this one is a controlled key the template system indexes by. Never
-  // branch on this value directly outside the template lookup - always go
-  // through getIndustryTemplate().
+  // The CRM template key (see src/domain/industryTemplates.ts for the
+  // fixed catalog - "real_estate" | "solar" today). Drives which pipeline
+  // stages, lead/customer fields and list columns the CRM renders for this
+  // tenant. Registration no longer asks a new user to pick one (see
+  // RegisterInput in src/application/auth.ts) - the NOT NULL default below
+  // is what every new company actually gets; the column stays a
+  // user-settable input only for any pre-existing account whose
+  // industryTemplate was chosen back when registration still asked (never
+  // touched or reset by that removal - see the migration notes). Deliberately
+  // a separate column from `industry` above - that one is a free-text
+  // description, this one is a controlled key the template system indexes
+  // by. Never branch on this value directly outside the template lookup -
+  // always go through getIndustryTemplate().
   industryTemplate: text("industry_template").notNull().default("real_estate"),
+  // Is this tenant a single individual, or an agency/team acting on behalf
+  // of clients - see src/domain/accountType.ts for the fixed catalog
+  // (AccountType/ACCOUNT_TYPE_KEYS), the same union-type-plus-array
+  // convention industryTemplate's own catalog uses. An organization-level
+  // attribute like industryTemplate/companySize/timezone, deliberately NOT
+  // placed on `users` - two teammates in the same company can never
+  // disagree about which kind of company they're both in. NOT NULL with a
+  // default (not nullable) for the same reason industryTemplate is: every
+  // company, including ones created before this column existed, must
+  // always resolve to a concrete value without a backfill migration -
+  // never branch on this column's raw string outside resolveAccountType()/
+  // ACCOUNT_TYPE_CATALOG.
+  accountType: text("account_type").notNull().default("individual"),
   companySize: text("company_size"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),

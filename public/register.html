@@ -17,6 +17,11 @@
       </div>
       <div id="banner"></div>
 
+      <!-- Step 1: Basic Information. Industry selection has been removed
+           from registration entirely - see src/application/auth.ts's
+           RegisterInput.industry comment; every new company defaults to
+           the "real_estate" CRM template and this form never sends a
+           value for it. -->
       <form id="step1">
         <label for="companyName">Company name</label>
         <input id="companyName" required autocomplete="organization" />
@@ -34,21 +39,25 @@
         <button class="btn full" type="submit">Continue</button>
       </form>
 
+      <!-- Step 2: Account Type - "individual" | "agency", see
+           src/domain/accountType.ts for the fixed catalog this mirrors.
+           An organization-level classification (stored on companies, not
+           users - see that file's own comment), same pattern the old
+           industry-selection step used to follow. -->
       <form id="step2" style="display:none">
-        <label>What industry does your business operate in?</label>
-        <div class="choice-group" role="radiogroup" aria-label="Industry">
+        <label>What type of account is this?</label>
+        <div class="choice-group" role="radiogroup" aria-label="Account type">
           <label class="choice-card">
-            <input type="radio" name="industry" value="real_estate" checked />
-            <span class="choice-card-title">Real Estate</span>
-            <span class="choice-card-desc">Manage property inquiries, site visits, follow-ups and sales.</span>
+            <input type="radio" name="accountType" value="individual" checked />
+            <span class="choice-card-title">Individual</span>
+            <span class="choice-card-desc">Just me - I work my own leads.</span>
           </label>
           <label class="choice-card">
-            <input type="radio" name="industry" value="solar" />
-            <span class="choice-card-title">Solar</span>
-            <span class="choice-card-desc">Manage solar inquiries, site surveys, proposals and installations.</span>
+            <input type="radio" name="accountType" value="agency" />
+            <span class="choice-card-title">Agency</span>
+            <span class="choice-card-desc">My team manages leads on behalf of clients.</span>
           </label>
         </div>
-        <div class="hint">This sets up your CRM's pipeline and fields — you can't change it later without contacting support.</div>
 
         <div style="display:flex; gap:10px; margin-top:14px">
           <button class="btn secondary" type="button" id="backBtn">Back</button>
@@ -67,15 +76,15 @@
   const banner = document.getElementById("banner");
   const submitBtn = document.getElementById("submitBtn");
 
-  // Step 1 - account basics. Purely a client-side transition: nothing is
-  // sent to the server until step 2 submits, so a user who abandons
-  // partway through never leaves a half-created account behind.
+  // Step 1 -> Step 2 is purely a client-side transition: nothing is sent to
+  // the server until step 2 submits, so a user who abandons partway through
+  // never leaves a half-created account behind.
   step1.addEventListener("submit", (e) => {
     e.preventDefault();
     document.getElementById("s1").classList.add("done");
     document.getElementById("s2").classList.add("active");
-    document.getElementById("stepTitle").textContent = "Choose your industry";
-    document.getElementById("stepSub").textContent = "This shapes your CRM's pipeline stages and fields — pick the closest match.";
+    document.getElementById("stepTitle").textContent = "Account type";
+    document.getElementById("stepSub").textContent = "Are you working alone, or as part of an agency/team?";
     step1.style.display = "none";
     step2.style.display = "block";
   });
@@ -89,16 +98,16 @@
     step1.style.display = "block";
   });
 
-  // Step 2 - industry selection, then the actual registration call. All
-  // step 1 fields are still in the DOM (just hidden), so their values are
-  // read here rather than being carried in JS state.
+  // Step 2 - account type, then the actual registration call. All step 1
+  // fields are still in the DOM (just hidden), so their values are read
+  // here rather than being carried in JS state.
   step2.addEventListener("submit", async (e) => {
     e.preventDefault();
     banner.innerHTML = "";
     submitBtn.disabled = true;
     submitBtn.textContent = "Creating…";
     try {
-      const industry = document.querySelector('input[name="industry"]:checked')?.value || "real_estate";
+      const accountType = document.querySelector('input[name="accountType"]:checked')?.value || "individual";
       await App.apiJson("/api/auth/register", {
         method: "POST",
         body: {
@@ -106,7 +115,7 @@
           fullName: document.getElementById("fullName").value.trim(),
           email: document.getElementById("email").value.trim(),
           password: document.getElementById("password").value,
-          industry,
+          accountType,
         },
       });
       window.location.href = "/onboarding.html";

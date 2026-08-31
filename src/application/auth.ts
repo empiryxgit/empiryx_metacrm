@@ -24,6 +24,7 @@ import {
   signAccessToken,
 } from "../infrastructure/auth/tokens";
 import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
+import { resolveAccountType } from "../domain/accountType";
 import { ALL_PERMISSIONS } from "../domain/permissions";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 
@@ -67,11 +68,22 @@ export interface RegisterInput {
   fullName: string;
   email: string;
   password: string;
-  // Which CRM template to provision the company with. Defaults to
-  // "real_estate" for any missing/unrecognized value rather than rejecting
-  // registration outright - this is a product default, not a hard
-  // requirement the user must get exactly right.
+  // Which CRM template to provision the company with (real_estate | solar).
+  // Registration no longer collects this from the user - public/register.html
+  // never sends it, so every new signup gets the default below. Kept
+  // optional (rather than removed) only for backward compatibility with any
+  // existing direct API caller that still sends it; a value here is still
+  // honored if present. Defaults to "real_estate" for any missing/
+  // unrecognized value rather than rejecting registration outright - see
+  // resolveIndustryKey().
   industry?: string;
+  // Whether this tenant is a single individual or an agency/team - see
+  // src/domain/accountType.ts. Collected by public/register.html's second
+  // step (Basic Information -> Account Type -> Create Account). Optional
+  // here for the same "never hard-fail registration over a classification
+  // choice" reason industry is - resolveAccountType() defaults an absent/
+  // unrecognized value to "individual" rather than rejecting the request.
+  accountType?: string;
 }
 
 function resolveIndustryKey(industry: string | undefined): IndustryKey {
@@ -97,13 +109,14 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   const slug = await uniqueSlug(input.companyName);
   const passwordHash = await hashPassword(input.password);
   const industryTemplate = resolveIndustryKey(input.industry);
+  const accountType = resolveAccountType(input.accountType);
 
   // Not wrapped in a single SQL transaction because the Neon HTTP driver
   // does not support multi-statement transactions over `neon-http` - each
   // step is individually idempotent-safe to retry, and a partial failure
   // here (company created, user creation fails) is recoverable manually
   // since it's a rare, low-volume, admin-visible path (see README).
-  const company = await createCompany({ name: input.companyName, slug, industryTemplate });
+  const company = await createCompany({ name: input.companyName, slug, industryTemplate, accountType });
   const ownerRole = await createOwnerRole(company.id);
   const user = await createUser({
     companyId: company.id,
