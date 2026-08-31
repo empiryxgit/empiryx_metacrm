@@ -1,10 +1,12 @@
 // Agency <-> client organization relationships (see schema.ts's own doc
 // comment on agencyClients for why this is a relationship table, not a
-// third `account_type`). Deliberately just the data-access layer for now -
-// no application-layer service or API handler wires these up yet, same
-// "schema + repository now, pipeline wiring later" split
-// src/infrastructure/db/repositories/metaIntegration.ts's own history
-// followed when tenant-level Meta auth was first added.
+// third `account_type`). This IS wired up now - see src/application/
+// agency.ts (getAgencyDashboardSummary, addClientOrganization) and
+// api/admin/users/handler.ts's ?resource=agency branch - but every function
+// here stays a plain data-access function with no auth/permission checks of
+// its own, same as every other repository in this codebase; the calling
+// application-layer code is responsible for verifying the caller is
+// actually the agency in question before calling any of these.
 //
 // Every function below is scoped by the AGENCY's own companyId wherever it
 // mutates or lists relationships that company owns - never trusts a
@@ -14,7 +16,7 @@
 
 import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../client";
-import { agencyClients, companies } from "../schema";
+import { agencyClients, campaigns, companies, leads } from "../schema";
 import { firstOrThrow } from "../util";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../../../domain/agencyClientStatus";
 
@@ -131,4 +133,51 @@ export async function getClaimingAgencyForClient(clientCompanyId: string) {
     )
     .limit(1);
   return row ?? null;
+}
+
+/** Per-client-company counts backing the Agency Dashboard's KPI row and
+ * Clients table (see getAgencyDashboardSummary in src/application/
+ * agency.ts, the only caller). Fetches just the columns needed and
+ * aggregates in JS - same style api/dashboard/index.ts already uses for
+ * the regular CRM dashboard, rather than introducing a new grouped-SQL-
+ * aggregate pattern this codebase doesn't otherwise use. Fine at the scale
+ * one agency's client list actually reaches; a future agency with an
+ * unusually large roster could revisit this as a GROUP BY query without
+ * changing the return shape callers see.
+ *
+ * Returns a Map keyed by companyId, always containing an entry (zeroed)
+ * for every id passed in - callers never need an `?? default` fallback. */
+export async function getClientMetrics(
+  clientCompanyIds: string[],
+): Promise<Map<string, { totalLeads: number; leadsToday: number; activeCampaigns: number }>> {
+  const metrics = new Map(clientCompanyIds.map((id) => [id, { totalLeads: 0, leadsToday: 0, activeCampaigns: 0 }]));
+  if (clientCompanyIds.length === 0) return metrics;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const db = await getDb();
+  const [leadRows, activeCampaignRows] = await Promise.all([
+    db.select({ companyId: leads.companyId, createdAt: leads.createdAt }).from(leads).where(inArray(leads.companyId, clientCompanyIds)),
+    db
+      .select({ companyId: campaigns.companyId })
+      .from(campaigns)
+      .where(and(inArray(campaigns.companyId, clientCompanyIds), eq(campaigns.status, "active"))),
+  ]);
+
+  for (const row of leadRows) {
+    // leads.companyId is nullable in the schema (a lead can theoretically
+    // exist company-less mid-ingestion) - filtered out here since it can
+    // never match one of the specific ids we queried for anyway.
+    if (!row.companyId) continue;
+    const m = metrics.get(row.companyId);
+    if (!m) continue;
+    m.totalLeads++;
+    if (row.createdAt >= todayStart) m.leadsToday++;
+  }
+  for (const row of activeCampaignRows) {
+    const m = metrics.get(row.companyId);
+    if (m) m.activeCampaigns++;
+  }
+  return metrics;
 }

@@ -37,6 +37,8 @@ import {
   setPrimaryBranch,
   updateBranch,
 } from "../../../src/infrastructure/db/repositories/branches";
+import { AuthError } from "../../../src/application/auth";
+import { addClientOrganization, getAgencyDashboardSummary } from "../../../src/application/agency";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -60,6 +62,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const resource = getQueryString(req, "resource");
   if (resource === "branches") {
     return handleBranchesResource(req, res);
+  }
+  if (resource === "agency") {
+    return handleAgencyResource(req, res);
   }
 
   const userId = getUserId(req);
@@ -583,4 +588,76 @@ async function handleSetPrimaryBranch(req: VercelRequest, res: VercelResponse, b
 
   await setPrimaryBranch(targetUserId, branchId);
   res.status(200).json({ updated: true });
+}
+
+// Agency Dashboard (public/agency-dashboard.html) is folded into this same
+// Vercel Function for the same reason ?resource=branches is - Vercel
+// Hobby's 12-Function cap, already fully used (see this file's own header
+// comment) - so vercel.json routes /api/agency/* here with ?resource=agency
+// (plus ?action=). Falls through to the pre-existing behavior above
+// whenever ?resource= is absent or is "branches", so neither is affected.
+//
+// Unlike every other resource in this file, these two actions are gated on
+// accountType === "agency" rather than a PERMISSIONS.* code - there is no
+// granular permission for "runs an agency" the way there is for e.g.
+// branches.manage, since every agency account today is its own Owner (see
+// src/application/accountType.ts's own doc comment on why this is an
+// organization-level attribute). requireAuth (not requirePermission) is
+// used for exactly that reason.
+async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(401).json({ error: "Account no longer exists." });
+    return;
+  }
+  if (company.accountType !== "agency") {
+    res.status(403).json({ error: "This is only available to agency accounts." });
+    return;
+  }
+
+  const action = getQueryString(req, "action");
+  if (action === "dashboard") return handleAgencyDashboard(req, res, auth.companyId);
+  if (action === "add-client") return handleAgencyAddClient(req, res, auth.companyId, auth.userId);
+
+  res.status(404).json({ error: "Not found" });
+}
+
+async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const summary = await getAgencyDashboardSummary(agencyCompanyId);
+  res.status(200).json(summary);
+}
+
+async function handleAgencyAddClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { companyName, ownerName, ownerEmail } = (req.body ?? {}) as {
+    companyName?: string;
+    ownerName?: string;
+    ownerEmail?: string;
+  };
+  if (!companyName || !ownerName || !ownerEmail) {
+    res.status(400).json({ error: "companyName, ownerName and ownerEmail are all required." });
+    return;
+  }
+
+  try {
+    const result = await addClientOrganization({ agencyCompanyId, actingUserId, companyName, ownerName, ownerEmail });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/add-client] Failed:", err);
+    res.status(500).json({ error: "Failed to add client." });
+  }
 }

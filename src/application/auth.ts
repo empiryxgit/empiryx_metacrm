@@ -55,7 +55,11 @@ function slugify(name: string): string {
     .slice(0, 60);
 }
 
-async function uniqueSlug(base: string): Promise<string> {
+// Exported for src/application/agency.ts's addClientOrganization(), which
+// needs the exact same "make a unique slug from a display name" logic when
+// an agency creates a brand-new client company - kept here as the one
+// place this logic lives rather than duplicated.
+export async function uniqueSlug(base: string): Promise<string> {
   let candidate = slugify(base) || "company";
   let suffix = 0;
   while (await slugExists(candidate)) {

@@ -8,55 +8,252 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* This page always shows exactly 5 KPI tiles (Clients, Active Clients,
+     Total Leads, Leads Today, Active Campaigns) - overriding just the
+     widest breakpoint's column count so they sit evenly in one row instead
+     of leaving a gap in app.css's default 6-column grid (sized for the
+     regular CRM dashboard's 6 KPIs). The narrower responsive breakpoints
+     (3-col, 2-col) are inherited unchanged from app.css. */
+  .kpi-grid{ grid-template-columns:repeat(5, 1fr); }
+</style>
 </head>
 <body>
-  <nav class="topnav" id="topnav"></nav>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
   <div class="wrap">
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">Agency Dashboard</h1>
         <p class="page-sub" id="pageSub">Welcome.</p>
       </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="addClientBtn">+ Add Client</button>
+      </div>
     </div>
+
     <div id="banner"></div>
 
-    <!-- Minimal landing page for a freshly-registered Agency account -
-         see public/register.html's post-registration redirect and
-         src/application/auth.ts's registerCompanyAndOwner (which marks
-         onboarding complete immediately for an agency, since the
-         individual/campaign onboarding wizard doesn't apply here).
+    <!-- A real agency-level view, not the per-tenant CRM dashboard - see
+         src/application/agency.ts's own header comment for the exact scope:
+         aggregate counts across every claimed client (leads/campaigns
+         totals here, per-client lead counts + relationship status in the
+         table below), never a client's row-level data. Clicking into a
+         client's own leads/pipeline/campaigns is still the deferred
+         "next phase" that comment documents - this page only ever shows
+         numbers. "+ Add Client" only ever creates a brand-new client this
+         agency owns outright (see the modal below), never links to an
+         existing, unrelated tenant - see the AskUserQuestion decision this
+         was built from. -->
+    <div class="kpi-grid" id="kpiGrid"></div>
 
-         Client invite/management UI is deliberately NOT built yet - the
-         underlying data model and repository layer already exist
-         (agency_clients table, src/infrastructure/db/repositories/
-         organizations.ts - linkOrReactivateClientOrganization,
-         setAgencyClientStatus, listClaimedClientOrganizations,
-         getClaimingAgencyForClient), but no API endpoint exposes them to
-         the frontend yet and cross-tenant access control for an agency
-         user acting inside a client's tenant hasn't been designed. This
-         page is an honest placeholder for that next phase, not a stand-in
-         implementation of it. -->
-    <div class="card">
-      <h2 class="section-title" style="margin-top:0">Your account is ready</h2>
-      <p class="state-desc" style="margin:0 0 4px; max-width:none; text-align:left">
-        <span id="agencyName"></span> is set up as an agency account.
-      </p>
-      <p class="state-desc" style="margin:0; max-width:none; text-align:left">
-        Client management - inviting a client organization, tracking invite/active/suspended status,
-        and working inside a client's own workspace - is coming soon. Nothing needs to be configured here yet.
-      </p>
+    <div class="dash-section">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Clients</p>
+            <p class="dash-card-sub" id="clientsSub"></p>
+          </div>
+        </div>
+        <div class="table-wrap" id="clientsTableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>Leads</th>
+                <th>Active Campaigns</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="clientsBody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Client modal - see addClientOrganization() in src/application/
+       agency.ts for exactly what submitting this does: creates a brand-new
+       client company + Owner user (system-generated temporary password,
+       shown once below), links it as an active client immediately. No
+       invite/accept step - the agency originates the whole thing. -->
+  <div class="modal-overlay" id="addClientModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Add Client</h2>
+          <p>Creates a brand-new client company this agency manages.</p>
+        </div>
+        <button class="modal-close" type="button" id="addClientModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="addClientError"></div>
+        <form id="addClientForm">
+          <label for="ac_companyName">Client Company Name</label>
+          <input id="ac_companyName" required autocomplete="off" />
+          <label for="ac_ownerName">Owner Name</label>
+          <input id="ac_ownerName" required autocomplete="off" />
+          <label for="ac_ownerEmail">Owner Email</label>
+          <input id="ac_ownerEmail" type="email" required autocomplete="off" />
+          <p class="hint">A temporary password is generated automatically - you'll see it once, right after this client is created, to pass along to them.</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="addClientCancel">Cancel</button>
+        <button class="btn" type="button" id="addClientSave">Add Client</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- One-time credential reveal - see temporaryPassword's own comment on
+       AddClientOrganizationResult in src/application/agency.ts: shown
+       exactly once, never retrievable again, never emailed. -->
+  <div class="modal-overlay" id="credentialModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Client Created</h2>
+          <p id="credentialSub"></p>
+        </div>
+        <button class="modal-close" type="button" id="credentialModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" style="margin:0 0 10px">Share these sign-in details with the client - this password won't be shown again.</p>
+        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value" id="credentialEmail"></span></div>
+        <div class="detail-row"><span class="detail-label">Temporary password</span><span class="detail-value" id="credentialPassword"></span></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" id="credentialDone">Done</button>
+      </div>
     </div>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
-  (async () => {
-    const me = await App.requireAuth();
+  let me = null;
+
+  function fmt(n) { return (n ?? 0).toLocaleString(); }
+
+  function statusPillClass(status) {
+    if (status === "active") return "active";
+    if (status === "suspended") return "paused";
+    return "pending"; // invited | pending
+  }
+  function statusLabel(status) {
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
+  function renderKpis(kpis) {
+    const cards = [
+      { label: "Clients", value: kpis.clients },
+      { label: "Active Clients", value: kpis.activeClients },
+      { label: "Total Leads", value: kpis.totalLeads },
+      { label: "Leads Today", value: kpis.leadsToday },
+      { label: "Active Campaigns", value: kpis.activeCampaigns },
+    ];
+    document.getElementById("kpiGrid").innerHTML = cards.map(c => `
+      <div class="kpi-card">
+        <div class="kpi-label">${App.escapeHtml(c.label)}</div>
+        <div class="kpi-value">${fmt(c.value)}</div>
+      </div>`).join("");
+  }
+
+  function renderClients(clients) {
+    document.getElementById("clientsSub").textContent =
+      clients.length === 0 ? "No clients yet" : `${clients.length} client${clients.length === 1 ? "" : "s"}`;
+    const body = document.getElementById("clientsBody");
+    if (clients.length === 0) {
+      body.innerHTML = `<tr><td colspan="4" class="empty">No clients yet. Click “+ Add Client” to create one.</td></tr>`;
+      return;
+    }
+    body.innerHTML = clients.map(c => `
+      <tr>
+        <td>${App.escapeHtml(c.name)}</td>
+        <td>${fmt(c.leads)}</td>
+        <td>${fmt(c.activeCampaigns)}</td>
+        <td><span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></td>
+      </tr>`).join("");
+  }
+
+  async function load() {
+    document.getElementById("banner").innerHTML = "";
+    me = await App.requireAuth();
     if (!me) return;
+
+    document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/agency-dashboard.html");
-    document.getElementById("agencyName").textContent = me.company.name;
-    document.getElementById("pageSub").textContent = `Welcome, ${me.user.fullName}.`;
-  })();
+    document.getElementById("pageSub").textContent = `Welcome, ${me.company.name}`;
+    document.getElementById("headActions").style.display = "flex";
+
+    try {
+      const summary = await App.apiJson("/api/agency/dashboard");
+      renderKpis(summary.kpis);
+      renderClients(summary.clients);
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // ---- Add Client modal ---------------------------------------------------
+  const addModal = document.getElementById("addClientModalOverlay");
+  const addForm = document.getElementById("addClientForm");
+  const addError = document.getElementById("addClientError");
+  const addSaveBtn = document.getElementById("addClientSave");
+
+  function openAddClientModal() {
+    addForm.reset();
+    addError.innerHTML = "";
+    addModal.style.display = "flex";
+    document.getElementById("ac_companyName").focus();
+  }
+  function closeAddClientModal() { addModal.style.display = "none"; }
+
+  document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
+  document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
+  document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
+  addModal.addEventListener("click", (e) => { if (e.target === addModal) closeAddClientModal(); });
+
+  addSaveBtn.addEventListener("click", async () => {
+    addError.innerHTML = "";
+    const companyName = document.getElementById("ac_companyName").value.trim();
+    const ownerName = document.getElementById("ac_ownerName").value.trim();
+    const ownerEmail = document.getElementById("ac_ownerEmail").value.trim();
+    if (!companyName || !ownerName || !ownerEmail) {
+      addError.innerHTML = `<div class="banner error">Client name, owner name, and owner email are all required.</div>`;
+      return;
+    }
+
+    addSaveBtn.disabled = true;
+    addSaveBtn.textContent = "Adding…";
+    try {
+      const result = await App.apiJson("/api/agency/clients", {
+        method: "POST",
+        body: { companyName, ownerName, ownerEmail },
+      });
+      closeAddClientModal();
+      showCredentialModal(result);
+      await load();
+    } catch (err) {
+      addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      addSaveBtn.disabled = false;
+      addSaveBtn.textContent = "Add Client";
+    }
+  });
+
+  // ---- One-time credential modal ------------------------------------------
+  const credentialModal = document.getElementById("credentialModalOverlay");
+  function showCredentialModal(result) {
+    document.getElementById("credentialSub").textContent = `${result.company.name} is ready.`;
+    document.getElementById("credentialEmail").textContent = result.owner.email;
+    document.getElementById("credentialPassword").textContent = result.temporaryPassword;
+    credentialModal.style.display = "flex";
+  }
+  function closeCredentialModal() { credentialModal.style.display = "none"; }
+  document.getElementById("credentialModalClose").addEventListener("click", closeCredentialModal);
+  document.getElementById("credentialDone").addEventListener("click", closeCredentialModal);
+  credentialModal.addEventListener("click", (e) => { if (e.target === credentialModal) closeCredentialModal(); });
+
+  load();
 </script>
 </body>
 </html>
