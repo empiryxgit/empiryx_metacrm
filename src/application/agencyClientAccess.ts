@@ -10,12 +10,16 @@
 // "all vs restricted" shape, but with one intentional difference: branches
 // treats zero assignments as "all" (backward compatible with every company
 // that predates branches existing at all). This does NOT - a fresh
-// AGENCY_MANAGER/AGENCY_USER with zero rows in agency_client_assignments
-// sees NOTHING, per the explicit requirement this feature was built from
-// ("Do not automatically give every agency user access to every client...
-// The user cannot see Client B"). There is no comparable "this feature
-// didn't used to exist" backward-compatibility concern to preserve here -
-// client visibility scoping and this permission model launch together.
+// AGENCY_ADMIN/AGENCY_MANAGER/AGENCY_USER with zero rows in
+// agency_client_assignments sees NOTHING, per the explicit requirement this
+// feature was built from ("Do not automatically give every agency user
+// access to every client... The user cannot see Client B") and the
+// explicit access rules AGENCY_OWNER -> All clients / AGENCY_ADMIN -> All
+// ASSIGNED clients / AGENCY_MANAGER -> Assigned clients / AGENCY_USER ->
+// Assigned client(s) - see src/domain/fixedRoles.ts's own comment. There is
+// no comparable "this feature didn't used to exist" backward-compatibility
+// concern to preserve here - client visibility scoping and this permission
+// model launch together.
 
 import type { AuthContext } from "../infrastructure/auth/context";
 import { hasPermission } from "../infrastructure/auth/context";
@@ -24,12 +28,16 @@ import { PERMISSIONS } from "../domain/permissions";
 export type AgencyClientAccess = { scope: "all" } | { scope: "restricted"; clientCompanyIds: string[] };
 
 /**
- * "all" when the user holds agency_clients.view_all (AGENCY_OWNER/
- * AGENCY_ADMIN by default, or any custom role an admin explicitly grants it
- * to). Otherwise "restricted" to exactly whichever client company ids
- * agency_client_assignments names for this user (auth.assignedClientIds,
- * carried in the JWT the same way branchIds already is) - an empty array
- * here means "sees zero clients", not "sees every client".
+ * "all" when the user holds agency_clients.view_all - by default this is
+ * ONLY the AGENCY_OWNER fixed role (the sole "All clients" role in the
+ * explicit access rules), though any custom role an admin explicitly
+ * grants the permission to also qualifies. AGENCY_ADMIN does NOT hold it
+ * by default - "All assigned clients" still means assignment-scoped, not a
+ * second route to unconditional access. Otherwise "restricted" to exactly
+ * whichever client company ids agency_client_assignments names for this
+ * user (auth.assignedClientIds, carried in the JWT the same way branchIds
+ * already is) - an empty array here means "sees zero clients", not "sees
+ * every client".
  */
 export function resolveAgencyClientAccess(auth: AuthContext): AgencyClientAccess {
   if (hasPermission(auth, PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL)) return { scope: "all" };

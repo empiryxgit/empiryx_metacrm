@@ -29,8 +29,7 @@ import {
 } from "../infrastructure/auth/tokens";
 import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
 import { resolveAccountType } from "../domain/accountType";
-import { ALL_PERMISSIONS } from "../domain/permissions";
-import { isFullAccessSystemRoleName } from "../domain/fixedRoles";
+import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../domain/fixedRoles";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 
 /** The built-in "full access" system roles (the legacy single "Owner" role,
@@ -40,7 +39,10 @@ import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
  * point-in-time snapshot taken when the role was created, so it silently
  * falls behind whenever a new PERMISSIONS.* constant is added later. Rather
  * than requiring a data migration every time that happens, those specific
- * roles are always granted the current full permission set at the point
+ * roles are always granted the current live full permission set (see
+ * fullAccessPermissionsForRoleName - AGENCY_OWNER alone additionally gets
+ * AGENCY_CLIENTS_VIEW_ALL, the "All clients" access rule; "Owner" and
+ * CLIENT_OWNER never do, since it's meaningless for them) at the point
  * they're turned into a token/response. Every OTHER isSystem role (the
  * tiered AGENCY_ADMIN/MANAGER/USER and CLIENT_ADMIN/MANAGER/USER roles -
  * isSystem only means "cannot be edited/deleted via the admin UI", not
@@ -48,7 +50,9 @@ import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
  * same as any fully custom role - see api/admin/roles/handler.ts's isSystem
  * check for where "cannot be edited" is actually enforced. */
 function effectivePermissions(role: { isSystem: boolean; name: string; permissions: unknown }): string[] {
-  return role.isSystem && isFullAccessSystemRoleName(role.name) ? ALL_PERMISSIONS : (role.permissions as string[]);
+  return role.isSystem && isFullAccessSystemRoleName(role.name)
+    ? fullAccessPermissionsForRoleName(role.name)
+    : (role.permissions as string[]);
 }
 
 export class AuthError extends Error {

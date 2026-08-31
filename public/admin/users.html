@@ -97,7 +97,7 @@
     return `
       <label>Assigned Clients</label>
       <p class="hint" style="margin-top:0">
-        Owner/Admin roles always see every client regardless of this list. Manager/User roles see ONLY the clients checked here.
+        The Agency Owner role always sees every client regardless of this list. Every other role (Admin, Manager, User) sees ONLY the clients checked here.
       </p>
       <div class="checkbox-row" style="flex-direction:column; align-items:flex-start; gap:6px">
         ${agencyClients.map(c => `

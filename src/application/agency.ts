@@ -206,11 +206,13 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
 
   // Auto-assign the acting agency user to the client they just created -
   // see agencyClientAssignments' own doc comment on assignClientToUser for
-  // why: an assignment-scoped (Manager/User tier) agency teammate must
-  // never be immediately locked out of a client they themselves just
-  // brought onto the roster. Best-effort, same posture as the steps below -
-  // a failure here never blocks the client itself from being created, and
-  // is harmless for a full-access (Owner/Admin) acting user too, since
+  // why: an assignment-scoped agency teammate (Admin/Manager/User tier -
+  // only AGENCY_OWNER has unconditional "All clients" access, see
+  // src/domain/fixedRoles.ts's explicit access rules) must never be
+  // immediately locked out of a client they themselves just brought onto
+  // the roster. Best-effort, same posture as the steps below - a failure
+  // here never blocks the client itself from being created, and is
+  // harmless for an AGENCY_OWNER acting user too, since
   // AGENCY_CLIENTS_VIEW_ALL bypasses this table regardless of what's in it.
   try {
     await assignClientToUser({
