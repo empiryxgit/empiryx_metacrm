@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clients — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* Client cards - not a table, matching the mockup this page was built
+     from ("Clients / [ Search Client ] / ABC Realty · Status: Active ·
+     Leads: 1,248 / [Open]"), unlike agency-dashboard.html's Clients TABLE
+     which stays as-is (a denser at-a-glance summary for the dashboard). */
+  .client-search{ max-width:420px; margin:0 0 18px; }
+  .client-cards{ display:flex; flex-direction:column; gap:10px; }
+  .client-card{
+    display:flex; align-items:center; justify-content:space-between; gap:16px;
+    padding:16px 18px; border:1px solid var(--border); border-radius:12px;
+    background:var(--surface);
+  }
+  .client-card-main{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .client-card-name{ font-weight:600; font-size:15px; }
+  .client-card-meta{ display:flex; gap:14px; font-size:13px; color:var(--text-muted); flex-wrap:wrap; }
+  .client-card-actions{ flex-shrink:0; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Clients</h1>
+        <p class="page-sub" id="pageSub">Every client organization you manage.</p>
+      </div>
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn secondary" type="button" id="inviteClientBtn">Invite Client</button>
+        <button class="btn" type="button" id="addClientBtn">+ Add Client</button>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <input class="client-search" id="searchInput" type="search" placeholder="Search client…" />
+
+    <div class="client-cards" id="clientCards"><p class="empty">Loading…</p></div>
+  </div>
+
+  <!-- Add Client modal - identical contract to the one on agency-dashboard.html;
+       see addClientOrganization() in src/application/agency.ts. -->
+  <div class="modal-overlay" id="addClientModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Add Client</h2>
+          <p>Creates a brand-new client company this agency manages.</p>
+        </div>
+        <button class="modal-close" type="button" id="addClientModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="addClientError"></div>
+        <form id="addClientForm">
+          <label for="ac_companyName">Client Company Name</label>
+          <input id="ac_companyName" required autocomplete="off" />
+          <label for="ac_ownerName">Owner Name</label>
+          <input id="ac_ownerName" required autocomplete="off" />
+          <label for="ac_ownerEmail">Owner Email</label>
+          <input id="ac_ownerEmail" type="email" required autocomplete="off" />
+          <p class="hint">A temporary password is generated automatically - you'll see it once, right after this client is created, to pass along to them.</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="addClientCancel">Cancel</button>
+        <button class="btn" type="button" id="addClientSave">Add Client</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- One-time credential reveal - see AddClientOrganizationResult's own
+       comment in src/application/agency.ts. -->
+  <div class="modal-overlay" id="credentialModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Client Created</h2>
+          <p id="credentialSub"></p>
+        </div>
+        <button class="modal-close" type="button" id="credentialModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" style="margin:0 0 10px">Share these sign-in details with the client - this password won't be shown again.</p>
+        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value" id="credentialEmail"></span></div>
+        <div class="detail-row"><span class="detail-label">Temporary password</span><span class="detail-value" id="credentialPassword"></span></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" type="button" id="credentialDone">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Invite Client modal - see inviteExistingClient() in src/application/
+       agency.ts: this links to an EXISTING registered company by its owner's
+       email. Unlike Add Client, nothing happens immediately - the
+       relationship starts "invited" and only becomes real once that
+       company accepts from its own dashboard. -->
+  <div class="modal-overlay" id="inviteClientModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Invite Client</h2>
+          <p>Invite an existing, already-registered company to become your client.</p>
+        </div>
+        <button class="modal-close" type="button" id="inviteClientModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="inviteClientError"></div>
+        <div id="inviteClientSuccess"></div>
+        <form id="inviteClientForm">
+          <label for="ic_ownerEmail">Owner Email</label>
+          <input id="ic_ownerEmail" type="email" required autocomplete="off" placeholder="owner@theircompany.com" />
+          <p class="hint">They must already have a RUTA account. They'll see your invitation on their own dashboard and can accept or decline it.</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="inviteClientCancel">Cancel</button>
+        <button class="btn" type="button" id="inviteClientSend">Send Invitation</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let allClients = [];
+
+  function fmt(n) { return (n ?? 0).toLocaleString(); }
+
+  function statusPillClass(status) {
+    if (status === "active") return "active";
+    if (status === "suspended") return "paused";
+    return "pending"; // invited | pending
+  }
+  function statusLabel(status) {
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+
+  function renderClients() {
+    const q = document.getElementById("searchInput").value.trim().toLowerCase();
+    const filtered = q ? allClients.filter((c) => c.name.toLowerCase().includes(q)) : allClients;
+    const wrap = document.getElementById("clientCards");
+
+    if (allClients.length === 0) {
+      wrap.innerHTML = `<p class="empty">No clients yet. Use “+ Add Client” or “Invite Client” to get started.</p>`;
+      return;
+    }
+    if (filtered.length === 0) {
+      wrap.innerHTML = `<p class="empty">No clients match “${App.escapeHtml(q)}”.</p>`;
+      return;
+    }
+    wrap.innerHTML = filtered.map((c) => `
+      <div class="client-card">
+        <div class="client-card-main">
+          <span class="client-card-name">${App.escapeHtml(c.name)}</span>
+          <span class="client-card-meta">
+            <span>Status: <span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></span>
+            <span>Leads: ${fmt(c.leads)}</span>
+          </span>
+        </div>
+        <div class="client-card-actions">
+          <button class="btn secondary" type="button" data-open="${c.id}"${c.status === "active" || c.status === "suspended" ? "" : " disabled title=\"Available once the client accepts\""}>Open</button>
+        </div>
+      </div>`).join("");
+
+    wrap.querySelectorAll("[data-open]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        window.location.href = `/client-detail.html?id=${encodeURIComponent(btn.dataset.open)}`;
+      });
+    });
+  }
+
+  async function load() {
+    document.getElementById("banner").innerHTML = "";
+    const me = await App.requireAuth();
+    if (!me) return;
+
+    document.getElementById("topnav").style.display = "flex";
+    App.renderNav(me, "/clients.html");
+    document.getElementById("headActions").style.display = "flex";
+
+    try {
+      const summary = await App.apiJson("/api/agency/dashboard");
+      allClients = [...summary.clients].sort((a, b) => a.name.localeCompare(b.name));
+      renderClients();
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      document.getElementById("clientCards").innerHTML = "";
+    }
+  }
+
+  document.getElementById("searchInput").addEventListener("input", renderClients);
+
+  // ---- Add Client modal ---------------------------------------------------
+  const addModal = document.getElementById("addClientModalOverlay");
+  const addForm = document.getElementById("addClientForm");
+  const addError = document.getElementById("addClientError");
+  const addSaveBtn = document.getElementById("addClientSave");
+
+  function openAddClientModal() {
+    addForm.reset();
+    addError.innerHTML = "";
+    addModal.style.display = "flex";
+    document.getElementById("ac_companyName").focus();
+  }
+  function closeAddClientModal() { addModal.style.display = "none"; }
+
+  document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
+  document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
+  document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
+  addModal.addEventListener("click", (e) => { if (e.target === addModal) closeAddClientModal(); });
+
+  addSaveBtn.addEventListener("click", async () => {
+    addError.innerHTML = "";
+    const companyName = document.getElementById("ac_companyName").value.trim();
+    const ownerName = document.getElementById("ac_ownerName").value.trim();
+    const ownerEmail = document.getElementById("ac_ownerEmail").value.trim();
+    if (!companyName || !ownerName || !ownerEmail) {
+      addError.innerHTML = `<div class="banner error">Client name, owner name, and owner email are all required.</div>`;
+      return;
+    }
+
+    addSaveBtn.disabled = true;
+    addSaveBtn.textContent = "Adding…";
+    try {
+      const result = await App.apiJson("/api/agency/clients", {
+        method: "POST",
+        body: { companyName, ownerName, ownerEmail },
+      });
+      closeAddClientModal();
+      showCredentialModal(result);
+      await load();
+    } catch (err) {
+      addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      addSaveBtn.disabled = false;
+      addSaveBtn.textContent = "Add Client";
+    }
+  });
+
+  const credentialModal = document.getElementById("credentialModalOverlay");
+  function showCredentialModal(result) {
+    document.getElementById("credentialSub").textContent = `${result.company.name} is ready.`;
+    document.getElementById("credentialEmail").textContent = result.owner.email;
+    document.getElementById("credentialPassword").textContent = result.temporaryPassword;
+    credentialModal.style.display = "flex";
+  }
+  function closeCredentialModal() { credentialModal.style.display = "none"; }
+  document.getElementById("credentialModalClose").addEventListener("click", closeCredentialModal);
+  document.getElementById("credentialDone").addEventListener("click", closeCredentialModal);
+  credentialModal.addEventListener("click", (e) => { if (e.target === credentialModal) closeCredentialModal(); });
+
+  // ---- Invite Client modal -------------------------------------------------
+  const inviteModal = document.getElementById("inviteClientModalOverlay");
+  const inviteForm = document.getElementById("inviteClientForm");
+  const inviteError = document.getElementById("inviteClientError");
+  const inviteSuccess = document.getElementById("inviteClientSuccess");
+  const inviteSendBtn = document.getElementById("inviteClientSend");
+
+  function openInviteClientModal() {
+    inviteForm.reset();
+    inviteError.innerHTML = "";
+    inviteSuccess.innerHTML = "";
+    inviteForm.style.display = "";
+    inviteSendBtn.style.display = "";
+    inviteModal.style.display = "flex";
+    document.getElementById("ic_ownerEmail").focus();
+  }
+  function closeInviteClientModal() { inviteModal.style.display = "none"; }
+
+  document.getElementById("inviteClientBtn").addEventListener("click", openInviteClientModal);
+  document.getElementById("inviteClientModalClose").addEventListener("click", closeInviteClientModal);
+  document.getElementById("inviteClientCancel").addEventListener("click", closeInviteClientModal);
+  inviteModal.addEventListener("click", (e) => { if (e.target === inviteModal) closeInviteClientModal(); });
+
+  inviteSendBtn.addEventListener("click", async () => {
+    inviteError.innerHTML = "";
+    const ownerEmail = document.getElementById("ic_ownerEmail").value.trim();
+    if (!ownerEmail) {
+      inviteError.innerHTML = `<div class="banner error">An email address is required.</div>`;
+      return;
+    }
+    inviteSendBtn.disabled = true;
+    inviteSendBtn.textContent = "Sending…";
+    try {
+      const result = await App.apiJson("/api/agency/clients/invite", {
+        method: "POST",
+        body: { ownerEmail },
+      });
+      inviteForm.style.display = "none";
+      inviteSendBtn.style.display = "none";
+      inviteSuccess.innerHTML = `<div class="banner success">Invitation sent to ${App.escapeHtml(result.ownerEmail)}. ${App.escapeHtml(result.company.name)} will show up here once they accept.</div>`;
+      await load();
+    } catch (err) {
+      inviteError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      inviteSendBtn.disabled = false;
+      inviteSendBtn.textContent = "Send Invitation";
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

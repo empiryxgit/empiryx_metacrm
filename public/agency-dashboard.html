@@ -27,6 +27,7 @@
         <p class="page-sub" id="pageSub">Welcome.</p>
       </div>
       <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn secondary" type="button" id="viewClientsBtn">View Clients</button>
         <button class="btn" type="button" id="addClientBtn">+ Add Client</button>
       </div>
     </div>
@@ -207,6 +208,7 @@
   }
   function closeAddClientModal() { addModal.style.display = "none"; }
 
+  document.getElementById("viewClientsBtn").addEventListener("click", () => { window.location.href = "/clients.html"; });
   document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
   document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
   document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);

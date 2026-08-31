@@ -38,7 +38,15 @@ import {
   updateBranch,
 } from "../../../src/infrastructure/db/repositories/branches";
 import { AuthError } from "../../../src/application/auth";
-import { addClientOrganization, getAgencyDashboardSummary } from "../../../src/application/agency";
+import {
+  addClientOrganization,
+  getAgencyDashboardSummary,
+  getClientDetail,
+  getPendingInviteForCompany,
+  inviteExistingClient,
+  respondToAgencyInvite,
+  setClientRelationshipStatus,
+} from "../../../src/application/agency";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -65,6 +73,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (resource === "agency") {
     return handleAgencyResource(req, res);
+  }
+  if (resource === "agencyInvite") {
+    return handleAgencyInviteResource(req, res);
   }
 
   const userId = getUserId(req);
@@ -621,6 +632,9 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   const action = getQueryString(req, "action");
   if (action === "dashboard") return handleAgencyDashboard(req, res, auth.companyId);
   if (action === "add-client") return handleAgencyAddClient(req, res, auth.companyId, auth.userId);
+  if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
+  if (action === "client-detail") return handleAgencyClientDetail(req, res, auth.companyId);
+  if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId);
 
   res.status(404).json({ error: "Not found" });
 }
@@ -659,5 +673,124 @@ async function handleAgencyAddClient(req: VercelRequest, res: VercelResponse, ag
     }
     console.error("[agency/add-client] Failed:", err);
     res.status(500).json({ error: "Failed to add client." });
+  }
+}
+
+async function handleAgencyInviteClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { ownerEmail } = (req.body ?? {}) as { ownerEmail?: string };
+  if (!ownerEmail) {
+    res.status(400).json({ error: "ownerEmail is required." });
+    return;
+  }
+  try {
+    const result = await inviteExistingClient({ agencyCompanyId, actingUserId, ownerEmail });
+    res.status(201).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/invite-client] Failed:", err);
+    res.status(500).json({ error: "Failed to send invitation." });
+  }
+}
+
+async function handleAgencyClientDetail(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const clientId = getQueryString(req, "clientId");
+  if (!clientId) {
+    res.status(400).json({ error: "clientId is required." });
+    return;
+  }
+  try {
+    const detail = await getClientDetail(agencyCompanyId, clientId);
+    res.status(200).json(detail);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/client-detail] Failed:", err);
+    res.status(500).json({ error: "Failed to load client." });
+  }
+}
+
+async function handleAgencySetClientStatus(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const clientId = getQueryString(req, "clientId");
+  const { status } = (req.body ?? {}) as { status?: string };
+  if (!clientId || !status || !["active", "suspended", "removed"].includes(status)) {
+    res.status(400).json({ error: "clientId and a valid status (active, suspended, or removed) are required." });
+    return;
+  }
+  try {
+    await setClientRelationshipStatus(agencyCompanyId, clientId, status as "active" | "suspended" | "removed");
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/set-client-status] Failed:", err);
+    res.status(500).json({ error: "Failed to update client." });
+  }
+}
+
+// ---- Agency invite: the CLIENT side (any accountType) ---------------------
+// Unlike handleAgencyResource above, this is NOT gated on accountType ===
+// "agency" - any company can be the target of an invite, so this only ever
+// requires a valid session and scopes every lookup to that session's OWN
+// companyId. See getPendingInviteForCompany/respondToAgencyInvite in
+// src/application/agency.ts for the actual logic.
+async function handleAgencyInviteResource(req: VercelRequest, res: VercelResponse) {
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  const action = getQueryString(req, "action");
+  if (action === "pending") return handleAgencyInvitePending(req, res, auth.companyId);
+  if (action === "respond") return handleAgencyInviteRespond(req, res, auth.companyId);
+
+  res.status(404).json({ error: "Not found" });
+}
+
+async function handleAgencyInvitePending(req: VercelRequest, res: VercelResponse, companyId: string) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const invite = await getPendingInviteForCompany(companyId);
+  res.status(200).json({ invite });
+}
+
+async function handleAgencyInviteRespond(req: VercelRequest, res: VercelResponse, companyId: string) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const { agencyCompanyId, accept } = (req.body ?? {}) as { agencyCompanyId?: string; accept?: boolean };
+  if (!agencyCompanyId || typeof accept !== "boolean") {
+    res.status(400).json({ error: "agencyCompanyId and accept are required." });
+    return;
+  }
+  try {
+    await respondToAgencyInvite({ companyId, agencyCompanyId, accept });
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency-invite/respond] Failed:", err);
+    res.status(500).json({ error: "Failed to respond to invitation." });
   }
 }

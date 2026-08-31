@@ -133,6 +133,15 @@ const App = (() => {
     { href: "/pipeline.html", label: "Pipeline", icon: NAV_ICONS.pipeline },
   ];
 
+  // An agency account's own company has no leads/pipeline/campaigns of its
+  // own to run (see src/application/agency.ts's header comment) - its top
+  // nav points at the Agency section instead of the regular per-tenant CRM
+  // pages above. Same icon set, just a different destination.
+  const AGENCY_PRIMARY_LINKS = [
+    { href: "/agency-dashboard.html", label: "Agency Dashboard", icon: NAV_ICONS.dashboard },
+    { href: "/clients.html", label: "Clients", icon: NAV_ICONS.branches },
+  ];
+
   // Flat, top-level admin nav items - kept separate from the "Settings"
   // master menu below (see SETTINGS_LINKS) to keep the top-level nav short
   // enough to never wrap/overflow the header (no horizontal scrollbar).
@@ -190,9 +199,11 @@ const App = (() => {
     if (!nav) return;
     nav.classList.add("topnav");
 
-    const admin = ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
+    const isAgency = me?.company?.accountType === "agency";
+    const primaryLinks = isAgency ? AGENCY_PRIMARY_LINKS : PRIMARY_LINKS;
+    const admin = isAgency ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
     const settingsLinks = SETTINGS_LINKS.filter((l) => hasPermission(me, l.perm));
-    const primaryHtml = PRIMARY_LINKS.map((l) => navLinkHtml(l, activeHref)).join("");
+    const primaryHtml = primaryLinks.map((l) => navLinkHtml(l, activeHref)).join("");
     const adminHtml = admin.length
       ? `<span class="nav-sep" aria-hidden="true"></span>` + admin.map((l) => navLinkHtml(l, activeHref)).join("")
       : "";
@@ -261,12 +272,12 @@ const App = (() => {
       </div>
     `;
 
-    renderMobileDrawer(me, activeHref, admin, settingsLinks);
+    renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks);
     wireShellInteractions();
     loadBranchSwitcher(me);
   }
 
-  function renderMobileDrawer(me, activeHref, admin, settingsLinks) {
+  function renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks) {
     let drawer = document.getElementById("mobileDrawer");
     if (!drawer) {
       drawer = document.createElement("div");
@@ -288,7 +299,7 @@ const App = (() => {
           <div><div class="user-name">${escapeHtml(displayName)}</div>${roleName ? `<div class="user-role">${escapeHtml(roleName)}</div>` : ""}</div>
         </div>
         <div class="branch-switch branch-switch-mobile" id="branchSwitchSlotMobile" style="display:none"></div>
-        <div class="mobile-nav-group">${groupHtml(PRIMARY_LINKS)}</div>
+        <div class="mobile-nav-group">${groupHtml(primaryLinks || PRIMARY_LINKS)}</div>
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
         ${settingsLinks.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-section-label">Settings</div><div class="mobile-nav-group">${groupHtml(settingsLinks)}</div>` : ""}
         <div class="mobile-nav-divider"></div>
