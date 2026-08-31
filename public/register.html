@@ -9,43 +9,20 @@
 <body>
   <div class="auth-shell">
     <div class="auth-card" style="width:440px">
-      <h1 id="stepTitle">Create your account</h1>
-      <p class="sub" id="stepSub">Sets up your company workspace — you'll be the Owner.</p>
+      <h1 id="stepTitle">Account type</h1>
+      <p class="sub" id="stepSub">Are you working alone, or as part of an agency/team?</p>
       <div class="steps">
         <div class="step active" id="s1"></div>
         <div class="step" id="s2"></div>
       </div>
       <div id="banner"></div>
 
-      <!-- Step 1: Basic Information. Industry selection has been removed
-           from registration entirely - see src/application/auth.ts's
-           RegisterInput.industry comment; every new company defaults to
-           the "real_estate" CRM template and this form never sends a
-           value for it. -->
-      <form id="step1">
-        <label for="companyName">Company name</label>
-        <input id="companyName" required autocomplete="organization" />
-
-        <label for="fullName">Your full name</label>
-        <input id="fullName" required autocomplete="name" />
-
-        <label for="email">Work email</label>
-        <input id="email" type="email" required autocomplete="email" />
-
-        <label for="password">Password</label>
-        <input id="password" type="password" required minlength="10" autocomplete="new-password" />
-        <div class="hint">At least 10 characters.</div>
-
-        <button class="btn full" type="submit">Continue</button>
-      </form>
-
-      <!-- Step 2: Account Type - "individual" | "agency", see
+      <!-- Step 1: Account Type - "individual" | "agency", see
            src/domain/accountType.ts for the fixed catalog this mirrors.
-           An organization-level classification (stored on companies, not
-           users - see that file's own comment), same pattern the old
-           industry-selection step used to follow. -->
-      <form id="step2" style="display:none">
-        <label>What type of account is this?</label>
+           Chosen FIRST (not last) because it determines which fields/
+           labels step 2 shows - "Agency Name"/"Contact Person"/"Mobile"
+           only make sense once we already know this is an agency. -->
+      <form id="step1">
         <div class="choice-group" role="radiogroup" aria-label="Account type">
           <label class="choice-card">
             <input type="radio" name="accountType" value="individual" checked />
@@ -58,6 +35,33 @@
             <span class="choice-card-desc">My team manages leads on behalf of clients.</span>
           </label>
         </div>
+        <button class="btn full" type="submit">Continue</button>
+      </form>
+
+      <!-- Step 2: Basic Information - fields and labels below are swapped
+           by JS based on the step 1 choice (see applyAccountType()).
+           Industry selection has been removed from registration entirely
+           - see src/application/auth.ts's RegisterInput.industry comment;
+           every new company defaults to the "real_estate" CRM template and
+           this form never sends a value for it, for either account type. -->
+      <form id="step2" style="display:none">
+        <label for="orgName" id="orgNameLabel">Company name</label>
+        <input id="orgName" required autocomplete="organization" />
+
+        <label for="fullName" id="fullNameLabel">Your full name</label>
+        <input id="fullName" required autocomplete="name" />
+
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="email" />
+
+        <div id="mobileField" style="display:none">
+          <label for="mobile">Mobile</label>
+          <input id="mobile" type="tel" autocomplete="tel" />
+        </div>
+
+        <label for="password">Password</label>
+        <input id="password" type="password" required minlength="10" autocomplete="new-password" />
+        <div class="hint">At least 10 characters.</div>
 
         <div style="display:flex; gap:10px; margin-top:14px">
           <button class="btn secondary" type="button" id="backBtn">Back</button>
@@ -75,16 +79,44 @@
   const step2 = document.getElementById("step2");
   const banner = document.getElementById("banner");
   const submitBtn = document.getElementById("submitBtn");
+  const mobileField = document.getElementById("mobileField");
+  const mobileInput = document.getElementById("mobile");
+  let chosenAccountType = "individual";
+
+  /** Swaps step 2's labels/fields/submit text for the account type chosen
+   * in step 1 - "Agency Name"/"Contact Person"/"Mobile" for agency,
+   * "Company name"/"Your full name" (no Mobile) for individual - matching
+   * each type's own registration form exactly rather than showing one
+   * generic set of labels for both. */
+  function applyAccountType(accountType) {
+    chosenAccountType = accountType;
+    if (accountType === "agency") {
+      document.getElementById("stepTitle").textContent = "Create Agency Account";
+      document.getElementById("orgNameLabel").textContent = "Agency Name";
+      document.getElementById("fullNameLabel").textContent = "Contact Person";
+      mobileField.style.display = "block";
+      mobileInput.required = true;
+      submitBtn.textContent = "Create Agency Account";
+    } else {
+      document.getElementById("stepTitle").textContent = "Create your account";
+      document.getElementById("orgNameLabel").textContent = "Company name";
+      document.getElementById("fullNameLabel").textContent = "Your full name";
+      mobileField.style.display = "none";
+      mobileInput.required = false;
+      submitBtn.textContent = "Create account";
+    }
+  }
 
   // Step 1 -> Step 2 is purely a client-side transition: nothing is sent to
   // the server until step 2 submits, so a user who abandons partway through
   // never leaves a half-created account behind.
   step1.addEventListener("submit", (e) => {
     e.preventDefault();
+    const accountType = document.querySelector('input[name="accountType"]:checked')?.value || "individual";
+    applyAccountType(accountType);
     document.getElementById("s1").classList.add("done");
     document.getElementById("s2").classList.add("active");
-    document.getElementById("stepTitle").textContent = "Account type";
-    document.getElementById("stepSub").textContent = "Are you working alone, or as part of an agency/team?";
+    document.getElementById("stepSub").textContent = "Sets up your workspace — you'll be the Owner.";
     step1.style.display = "none";
     step2.style.display = "block";
   });
@@ -92,37 +124,39 @@
   document.getElementById("backBtn").addEventListener("click", () => {
     document.getElementById("s2").classList.remove("active");
     document.getElementById("s1").classList.remove("done");
-    document.getElementById("stepTitle").textContent = "Create your account";
-    document.getElementById("stepSub").textContent = "Sets up your company workspace — you'll be the Owner.";
+    document.getElementById("stepTitle").textContent = "Account type";
+    document.getElementById("stepSub").textContent = "Are you working alone, or as part of an agency/team?";
     step2.style.display = "none";
     step1.style.display = "block";
   });
 
-  // Step 2 - account type, then the actual registration call. All step 1
-  // fields are still in the DOM (just hidden), so their values are read
-  // here rather than being carried in JS state.
+  // Step 2 - the actual registration call. Redirect target depends on the
+  // account type chosen in step 1: an agency has no onboarding wizard of
+  // its own (see registerCompanyAndOwner's own comment on why) and goes
+  // straight to its dashboard; an individual still goes through the usual
+  // company-profile + first-campaign onboarding flow.
   step2.addEventListener("submit", async (e) => {
     e.preventDefault();
     banner.innerHTML = "";
     submitBtn.disabled = true;
     submitBtn.textContent = "Creating…";
     try {
-      const accountType = document.querySelector('input[name="accountType"]:checked')?.value || "individual";
       await App.apiJson("/api/auth/register", {
         method: "POST",
         body: {
-          companyName: document.getElementById("companyName").value.trim(),
+          companyName: document.getElementById("orgName").value.trim(),
           fullName: document.getElementById("fullName").value.trim(),
           email: document.getElementById("email").value.trim(),
           password: document.getElementById("password").value,
-          accountType,
+          accountType: chosenAccountType,
+          phoneNumber: chosenAccountType === "agency" ? mobileInput.value.trim() : undefined,
         },
       });
-      window.location.href = "/onboarding.html";
+      window.location.href = chosenAccountType === "agency" ? "/agency-dashboard.html" : "/onboarding.html";
     } catch (err) {
       banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       submitBtn.disabled = false;
-      submitBtn.textContent = "Create account";
+      applyAccountType(chosenAccountType);
     }
   });
 </script>

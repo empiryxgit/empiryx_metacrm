@@ -126,6 +126,9 @@ interface RegisterBody {
   // "individual" | "agency" - collected by public/register.html's second
   // step. See RegisterInput's own comment in src/application/auth.ts.
   accountType?: string;
+  // Required when accountType is "agency" (validated in
+  // registerCompanyAndOwner, not here) - the Agency form's "Mobile" field.
+  phoneNumber?: string;
 }
 
 async function handleRegister(req: VercelRequest, res: VercelResponse) {

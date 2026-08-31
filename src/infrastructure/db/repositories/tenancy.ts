@@ -141,6 +141,9 @@ export async function createUser(input: {
   passwordHash: string;
   fullName: string;
   mustChangePassword?: boolean;
+  // See users.phoneNumber's own comment in schema.ts - optional, only ever
+  // sent today by an Agency registration's "Contact Person" step.
+  phoneNumber?: string;
 }) {
   const db = await getDb();
   const rows = await db

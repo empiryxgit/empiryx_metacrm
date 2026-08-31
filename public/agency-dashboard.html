@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agency Dashboard — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Agency Dashboard</h1>
+        <p class="page-sub" id="pageSub">Welcome.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <!-- Minimal landing page for a freshly-registered Agency account -
+         see public/register.html's post-registration redirect and
+         src/application/auth.ts's registerCompanyAndOwner (which marks
+         onboarding complete immediately for an agency, since the
+         individual/campaign onboarding wizard doesn't apply here).
+
+         Client invite/management UI is deliberately NOT built yet - the
+         underlying data model and repository layer already exist
+         (agency_clients table, src/infrastructure/db/repositories/
+         organizations.ts - linkOrReactivateClientOrganization,
+         setAgencyClientStatus, listClaimedClientOrganizations,
+         getClaimingAgencyForClient), but no API endpoint exposes them to
+         the frontend yet and cross-tenant access control for an agency
+         user acting inside a client's tenant hasn't been designed. This
+         page is an honest placeholder for that next phase, not a stand-in
+         implementation of it. -->
+    <div class="card">
+      <h2 class="section-title" style="margin-top:0">Your account is ready</h2>
+      <p class="state-desc" style="margin:0 0 4px; max-width:none; text-align:left">
+        <span id="agencyName"></span> is set up as an agency account.
+      </p>
+      <p class="state-desc" style="margin:0; max-width:none; text-align:left">
+        Client management - inviting a client organization, tracking invite/active/suspended status,
+        and working inside a client's own workspace - is coming soon. Nothing needs to be configured here yet.
+      </p>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  (async () => {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/agency-dashboard.html");
+    document.getElementById("agencyName").textContent = me.company.name;
+    document.getElementById("pageSub").textContent = `Welcome, ${me.user.fullName}.`;
+  })();
+</script>
+</body>
+</html>

@@ -14,6 +14,7 @@ import {
   revokeAllSessionsForUser,
   revokeSession,
   setCompanyCreatedBy,
+  completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
 import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
 import { hashPassword, verifyPassword } from "../infrastructure/auth/password";
@@ -85,6 +86,13 @@ export interface RegisterInput {
   // choice" reason industry is - resolveAccountType() defaults an absent/
   // unrecognized value to "individual" rather than rejecting the request.
   accountType?: string;
+  // The registering ("Contact Person") user's mobile number - collected by
+  // public/register.html's Agency form only (labeled "Mobile" there);
+  // Individual registration never sends this. Unlike industry/accountType,
+  // this is genuinely REQUIRED once accountType resolves to "agency" - see
+  // the check in registerCompanyAndOwner below - an agency account with no
+  // way to reach its contact person defeats the point of asking for one.
+  phoneNumber?: string;
 }
 
 function resolveIndustryKey(industry: string | undefined): IndustryKey {
@@ -107,10 +115,18 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     throw new AuthError("An account with this email already exists.", 409);
   }
 
-  const slug = await uniqueSlug(input.companyName);
-  const passwordHash = await hashPassword(input.password);
   const industryTemplate = resolveIndustryKey(input.industry);
   const accountType = resolveAccountType(input.accountType);
+  // Enforced here, not just as an HTML `required` attribute on
+  // register.html's Mobile field - a request that skips the client
+  // entirely (a direct API call, or a tampered form) must not be able to
+  // create an agency account with no way to reach its contact person.
+  if (accountType === "agency" && !input.phoneNumber?.trim()) {
+    throw new AuthError("Mobile number is required for an agency account.");
+  }
+
+  const slug = await uniqueSlug(input.companyName);
+  const passwordHash = await hashPassword(input.password);
 
   // Not wrapped in a single SQL transaction because the Neon HTTP driver
   // does not support multi-statement transactions over `neon-http` - each
@@ -125,7 +141,27 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     email: input.email,
     passwordHash,
     fullName: input.fullName,
+    phoneNumber: input.phoneNumber?.trim() || undefined,
   });
+
+  // An agency account has no onboarding wizard of its own to complete - the
+  // existing one (POST /api/onboarding/company + /complete) only makes
+  // sense for a company running its own campaigns (company size, timezone,
+  // "create your first campaign"), which isn't what a freshly-registered
+  // agency is here to do. Per the intended flow (Agency Account Created ->
+  // straight to Agency Dashboard, no onboarding step shown in between),
+  // mark onboarding complete immediately so App.requireAuth() on
+  // agency-dashboard.html (and any other page an agency user visits next)
+  // never redirects them into that individual/campaign-oriented wizard.
+  // Best-effort, same posture as every other post-creation step here - a
+  // failure must never block account creation itself.
+  if (accountType === "agency") {
+    try {
+      await completeOnboarding(company.id);
+    } catch (err) {
+      console.error("[auth/register] Failed to mark agency onboarding complete:", err);
+    }
+  }
 
   // Best-effort backfill of companies.createdBy - the owner user didn't
   // exist yet when createCompany() ran above, so this couldn't be set as
