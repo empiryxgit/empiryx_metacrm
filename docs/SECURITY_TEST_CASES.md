@@ -1,22 +1,21 @@
 # Security & session test cases
 
 > Scope: a full security review of the auth/session stack and of every
-> feature added since the last such review (Smart follow-up v1, the Twilio
-> WhatsApp/SMS notification adapters, and the Dashboard date-range/Lead List
-> change), triggered by the request "write down the test cases, check for
-> vulnerabilities and security hardening, resolve them, make sure no session
-> or cookie can be tampered with, resolve any security breaches." Findings
-> and the fixes applied for each are in the README's "Security hardening"
-> section; this document is the test-case checklist that review was run
-> against, kept here so the same checklist can be re-run after any future
-> change to auth, sessions, or a permission-gated endpoint.
+> feature added since the last such review (the Dashboard date-range/Lead
+> List change), triggered by the request "write down the test cases, check
+> for vulnerabilities and security hardening, resolve them, make sure no
+> session or cookie can be tampered with, resolve any security breaches."
+> Findings and the fixes applied for each are in the README's "Security
+> hardening" section; this document is the test-case checklist that review
+> was run against, kept here so the same checklist can be re-run after any
+> future change to auth, sessions, or a permission-gated endpoint.
 >
 > Cases marked **(automated)** have a corresponding Vitest test
-> (`src/security/*.test.ts`, `src/domain/phoneNumber.test.ts`) that runs in
-> CI. Cases marked **(manual)** need a real browser/deployed environment (or
-> `curl`/Postman against a running `vercel dev`) and are not currently
-> automated — do them by hand after any change to the areas above, and
-> before any production deploy that touches auth.
+> (`src/security/*.test.ts`) that runs in CI. Cases marked **(manual)** need
+> a real browser/deployed environment (or `curl`/Postman against a running
+> `vercel dev`) and are not currently automated — do them by hand after any
+> change to the areas above, and before any production deploy that touches
+> auth.
 
 ## 1. Login & session establishment
 
@@ -84,27 +83,22 @@
 | 5.5 | **(manual)** Missing permission | Call any `requirePermission`-gated endpoint (e.g. `/api/admin/users`) as a user whose role lacks that permission | 403 `{"error": "Missing permission: ..."}` |
 | 5.6 | **(manual)** No session at all | Call any protected endpoint with no cookies | 401 `{"error": "Not authenticated"}` |
 | 5.7 | **(manual)** "Last admin" guard rail | As the only user with a `USERS_MANAGE`-capable role in a company, try to disable your own account or re-role yourself to a non-admin role | 409 "Cannot disable or re-role the last admin who can manage users." |
-| 5.8 | **(manual)** Phone number format validation | `PATCH /api/admin/users/{userId}` with `phoneNumber: "not-a-number"` | 400 "phoneNumber must be in E.164 format..." - nothing is written |
-| 5.9 | **(manual)** Phone number clearing still works | `PATCH .../{userId}` with `phoneNumber: null` | 200, phone number cleared - `null` is intentionally exempt from the format check |
 
 ## 6. Internal/cron endpoint authorization
 
 | # | Test case | Steps | Expected result |
 |---|---|---|---|
-| 6.1 | **(manual)** Cron endpoint without the secret | `GET /api/internal/followup-nudges` (or `/reconciliation`) with no `Authorization` header | 401 |
+| 6.1 | **(manual)** Cron endpoint without the secret | `GET /api/internal/reconciliation` with no `Authorization` header | 401 |
 | 6.2 | **(manual)** Cron endpoint with the wrong secret | Same, with `Authorization: Bearer wrong-value` | 401 |
 | 6.3 | **(manual)** Cron endpoint with the correct secret | Same, with the real `CRON_SECRET` | 200, sweep runs |
 | 6.4 | **(automated - by inspection)** Constant-time comparison | Code review of `isAuthorizedVercelCron` | Uses `crypto.timingSafeEqual` on a length-checked buffer pair, not `===` |
 | 6.5 | **(manual)** QStash-signed reconciliation POST without a valid signature | `POST /api/internal/reconciliation` with a garbage `Upstash-Signature` header | 401 "Invalid QStash signature" |
 
-## 7. Notification adapters & secrets hygiene
+## 7. Secrets hygiene
 
 | # | Test case | Steps | Expected result |
 |---|---|---|---|
-| 7.1 | **(manual)** No secrets in logs | Trigger a Twilio send failure (e.g. an invalid `To` number) in the follow-up nudge cron, inspect server logs | The logged error includes the Twilio HTTP status and truncated response body, never `TWILIO_AUTH_TOKEN`/`WHATSAPP_ACCESS_TOKEN` |
-| 7.2 | **(manual)** No secrets in API responses | Call `GET /api/internal/followup-nudges` with a valid `CRON_SECRET`, inspect the JSON body | `summary.errors` contains only owner names/ids and Twilio's own error text - no credentials |
-| 7.3 | **(manual)** `.env`/`.env.local` never reach git | `git status` / `git check-ignore -v .env` in a real clone of this project | `.env`, `.env.local`, and every `.env.*.local` variant are ignored (see the new `.gitignore`) |
-| 7.4 | **(manual)** No notification provider configured | Unset all Twilio/WhatsApp env vars, run the follow-up nudge cron | Runs to completion, `provider: null` in the summary, no leads/owners are silently dropped - just nothing is sent |
+| 7.1 | **(manual)** `.env`/`.env.local` never reach git | `git status` / `git check-ignore -v .env` in a real clone of this project | `.env`, `.env.local`, and every `.env.*.local` variant are ignored (see the new `.gitignore`) |
 
 ## 8. Password handling
 
@@ -124,4 +118,4 @@ npm run typecheck   # tsc --noEmit
 npm test            # vitest run - src/security/*.test.ts need DATABASE_URL, skip cleanly without it
 ```
 
-Against a local Postgres (see `docs/TESTING.md` for setup), the full automated suite includes `src/security/tenantIsolation.test.ts` (§5.1) and `src/security/refreshTokenReuse.test.ts` (§3.1–3.4). Everything else in this document is currently manual - a good next step, if this checklist is going to be re-run often, is wiring up a lightweight HTTP-level test harness (e.g. calling the Vercel handlers directly with mocked `req`/`res` objects) so §1, §2.3–2.9, §4, §5.2–5.9 and §6 can be automated too; none of it is automated today because this codebase's existing test suite only exercises application/repository functions directly, never the Vercel handler layer.
+Against a local Postgres (see `docs/TESTING.md` for setup), the full automated suite includes `src/security/tenantIsolation.test.ts` (§5.1) and `src/security/refreshTokenReuse.test.ts` (§3.1–3.4). Everything else in this document is currently manual - a good next step, if this checklist is going to be re-run often, is wiring up a lightweight HTTP-level test harness (e.g. calling the Vercel handlers directly with mocked `req`/`res` objects) so §1, §2.3–2.9, §4, §5.2–5.7 and §6 can be automated too; none of it is automated today because this codebase's existing test suite only exercises application/repository functions directly, never the Vercel handler layer.

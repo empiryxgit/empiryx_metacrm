@@ -552,11 +552,11 @@ export interface InsertLeadFollowUpInput {
   createdBy?: string;
 }
 
-/** Logs one follow-up entry. When `nextFollowUpAt` is provided, also
- * updates the parent lead's own `nextFollowUpAt` column in the same call -
- * so the Pipeline list's "Next follow-up" column always reflects whatever
- * was most recently set here, without the caller needing a second request.
- * Scoped to companyId on both writes as defense in depth (the caller has
+/** Logs one follow-up entry, and - only when `nextFollowUpAt` is provided -
+ * moves the lead's own `nextFollowUpAt` column forward in the same call, so
+ * the Pipeline list's "Next follow-up" column always reflects whatever was
+ * most recently set here without the caller needing a second request.
+ * Scoped to companyId on every write as defense in depth (the caller has
  * already been authorized via isLeadAccessible above, including branch
  * access, before this is ever invoked). */
 export async function insertLeadFollowUp(input: InsertLeadFollowUpInput) {

@@ -162,11 +162,7 @@ export async function listUsers(companyId: string) {
 export async function updateUser(
   companyId: string,
   userId: string,
-  // phoneNumber: E.164 delivery address for smart-follow-up WhatsApp/SMS
-  // nudges (see schema.ts's own comment on users.phoneNumber) - null clears
-  // it, undefined leaves it untouched, same convention as every other
-  // optional field here.
-  input: { roleId?: string; status?: string; fullName?: string; phoneNumber?: string | null },
+  input: { roleId?: string; status?: string; fullName?: string },
 ) {
   const db = await getDb();
   await db

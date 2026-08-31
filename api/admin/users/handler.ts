@@ -21,7 +21,6 @@ import {
 } from "../../../src/infrastructure/db/repositories/tenancy";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
-import { isValidE164 } from "../../../src/domain/phoneNumber";
 import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
 import { resolveBranchAccess } from "../../../src/application/branchAccess";
 import {
@@ -151,7 +150,6 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
       fullName: user.fullName,
       email: user.email,
       status: user.status,
-      phoneNumber: user.phoneNumber,
       lastLoginAt: user.lastLoginAt,
       createdAt: user.createdAt,
       mustChangePassword: user.mustChangePassword,
@@ -194,11 +192,10 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
   }
 
   if (req.method === "PATCH") {
-    const { roleId, status, fullName, phoneNumber } = (req.body ?? {}) as {
+    const { roleId, status, fullName } = (req.body ?? {}) as {
       roleId?: string;
       status?: string;
       fullName?: string;
-      phoneNumber?: string | null;
     };
 
     if (roleId) {
@@ -207,16 +204,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
         res.status(400).json({ error: "That role does not belong to this company." });
         return;
       }
-    }
-
-    // Smart follow-up nudges dial this number directly (Twilio WhatsApp/
-    // SMS) - reject anything that isn't even plausibly E.164 up front with
-    // a clear 400, rather than silently storing junk that only surfaces as
-    // an opaque Twilio send failure in the once-a-day cron's logs.
-    const trimmedPhone = phoneNumber === undefined ? undefined : phoneNumber?.trim() || null;
-    if (trimmedPhone && !isValidE164(trimmedPhone)) {
-      res.status(400).json({ error: "phoneNumber must be in E.164 format, e.g. +14155238886." });
-      return;
     }
 
     // Guard rail: don't allow disabling or re-roling the last active user
@@ -236,7 +223,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
       roleId,
       status,
       fullName,
-      phoneNumber: trimmedPhone,
     });
     res.status(200).json({ updated: true });
     return;

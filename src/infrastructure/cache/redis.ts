@@ -181,31 +181,6 @@ export async function setCachedCampaignInsights(tenantId: string, metaCampaignId
   }
 }
 
-// ---------------------------------------------------------------------
-// Smart follow-up nudge dedup (see api/internal/handler.ts's
-// "followup-nudges" action). Vercel's own daily Cron on Hobby has no
-// exactly-once guarantee (a redeploy, a manual re-trigger via the
-// dashboard, or a retried invocation could all fire the same day's sweep
-// twice) - this is a claim, same NX/EX shape as tryClaimLeadId above, that
-// keeps one agent from getting the same day's WhatsApp/SMS nudge more than
-// once. Same fail-open posture as the rest of this file: if Redis is
-// down, the nudge just might send twice in the same day rather than the
-// whole run being blocked over a cache outage - an occasional duplicate
-// text is a far smaller problem than silently never nudging anyone.
-// ---------------------------------------------------------------------
-
-const NUDGE_KEY_PREFIX = "followupnudge:";
-
-export async function tryClaimFollowUpNudge(ownerId: string, dateKey: string, ttlSeconds = 60 * 60 * 26): Promise<boolean> {
-  try {
-    const redis = getRedis();
-    const result = await redis.set(`${NUDGE_KEY_PREFIX}${dateKey}:${ownerId}`, "1", { nx: true, ex: ttlSeconds });
-    return result === "OK";
-  } catch (err) {
-    console.warn(`[followup-nudge] Redis unavailable, failing open for owner ${ownerId}:`, err);
-    return true;
-  }
-}
 
 // ---------------------------------------------------------------------
 // Security hardening - fixed-window rate limiting for the auth endpoints

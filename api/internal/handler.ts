@@ -13,7 +13,6 @@ import { timingSafeEqual } from "node:crypto";
 import { processLead, RetryableProcessingError } from "../../src/application/processLead";
 import { processMetaLeadEvent } from "../../src/application/metaSync/processMetaLeadEvent";
 import { runReconciliation } from "../../src/application/reconcile";
-import { runFollowUpNudges } from "../../src/application/followUpNudges";
 import { incrementRetryCount, logEvent, markLeadDeadLettered } from "../../src/infrastructure/db/repositories";
 import { markMetaLeadEventFailed } from "../../src/infrastructure/db/repositories/metaLeadEvents";
 
@@ -55,8 +54,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return handleProcessLead(req, res);
     case "reconciliation":
       return handleReconciliation(req, res);
-    case "followup-nudges":
-      return handleFollowUpNudges(req, res);
     case "dead-letter":
       return handleDeadLetter(req, res);
     default:
@@ -250,32 +247,6 @@ async function handleReconciliation(req: VercelRequest, res: VercelResponse) {
     res.status(200).json(summary);
   } catch (err) {
     console.error("[reconciliation] Run failed:", err);
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-}
-
-// Smart follow-up's outbound sweep (see src/application/followUpNudges.ts).
-// Vercel-Cron-only (no QStash schedule) - unlike reconciliation, this is
-// inherently a once-a-day operation (an agent doesn't need "you have a
-// follow-up due" more than once a day), so Hobby's once-daily cron cap is
-// not a limitation here the way it is for reconciliation's much tighter
-// sweep interval. Same CRON_SECRET bearer-token auth as reconciliation's
-// GET path - see isAuthorizedVercelCron above.
-async function handleFollowUpNudges(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "GET" && req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
-  if (!isAuthorizedVercelCron(req)) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
-  try {
-    const summary = await runFollowUpNudges();
-    console.log("[followup-nudges] Completed:", summary);
-    res.status(200).json(summary);
-  } catch (err) {
-    console.error("[followup-nudges] Run failed:", err);
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 }

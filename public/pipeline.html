@@ -1019,7 +1019,7 @@
         }
         document.getElementById("fuNextFollowUp").value = "";
         await loadFollowUpsIntoModal(lead.id);
-        load(); // background refresh so the list's own "Next follow-up" column stays in sync
+        load(); // background refresh so the list's own "Next follow-up" column and quality badge stay in sync
       } catch (err) {
         errBox.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       } finally {

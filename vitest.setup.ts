@@ -47,7 +47,6 @@ vi.mock("./src/infrastructure/cache/redis", () => ({
   tryClaimOAuthStateNonce: vi.fn(async (nonce: string, ttlSeconds: number) => fakeTryClaim(`oauthstate:${nonce}`, ttlSeconds)),
   setMetaSyncProgress: vi.fn(async () => {}),
   getMetaSyncProgress: vi.fn(async () => null),
-  tryClaimFollowUpNudge: vi.fn(async () => true),
   // Rate limiting (src/infrastructure/cache/redis.ts's checkRateLimit) -
   // always reports "within limit" under test, same "never block the flow
   // under test" convention as the other fakes above. A test that wants to
