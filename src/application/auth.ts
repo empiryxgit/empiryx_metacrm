@@ -1,4 +1,5 @@
 import {
+  createAgencyFixedRoles,
   createCompany,
   createOwnerRole,
   createUser,
@@ -17,6 +18,7 @@ import {
   completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
 import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
+import { getUserAssignedClientIds } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { hashPassword, verifyPassword } from "../infrastructure/auth/password";
 import {
   generateRefreshToken,
@@ -28,17 +30,25 @@ import {
 import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
 import { resolveAccountType } from "../domain/accountType";
 import { ALL_PERMISSIONS } from "../domain/permissions";
+import { isFullAccessSystemRoleName } from "../domain/fixedRoles";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 
-/** The built-in Owner role is documented as "always holds every
- * permission, cannot be edited" - but its `permissions` column is a
+/** The built-in "full access" system roles (the legacy single "Owner" role,
+ * plus AGENCY_OWNER/CLIENT_OWNER from the fixed role catalogs - see
+ * isFullAccessSystemRoleName's own comment) are documented as "always holds
+ * every permission, cannot be edited" - but their `permissions` column is a
  * point-in-time snapshot taken when the role was created, so it silently
  * falls behind whenever a new PERMISSIONS.* constant is added later. Rather
- * than requiring a data migration every time that happens, system roles
- * are always granted the current full permission set at the point they're
- * turned into a token/response. */
-function effectivePermissions(role: { isSystem: boolean; permissions: unknown }): string[] {
-  return role.isSystem ? ALL_PERMISSIONS : (role.permissions as string[]);
+ * than requiring a data migration every time that happens, those specific
+ * roles are always granted the current full permission set at the point
+ * they're turned into a token/response. Every OTHER isSystem role (the
+ * tiered AGENCY_ADMIN/MANAGER/USER and CLIENT_ADMIN/MANAGER/USER roles -
+ * isSystem only means "cannot be edited/deleted via the admin UI", not
+ * "always full access") reads its stored `permissions` column literally,
+ * same as any fully custom role - see api/admin/roles/handler.ts's isSystem
+ * check for where "cannot be edited" is actually enforced. */
+function effectivePermissions(role: { isSystem: boolean; name: string; permissions: unknown }): string[] {
+  return role.isSystem && isFullAccessSystemRoleName(role.name) ? ALL_PERMISSIONS : (role.permissions as string[]);
 }
 
 export class AuthError extends Error {
@@ -142,7 +152,14 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   // here (company created, user creation fails) is recoverable manually
   // since it's a rare, low-volume, admin-visible path (see README).
   const company = await createCompany({ name: input.companyName, slug, industryTemplate, accountType });
-  const ownerRole = await createOwnerRole(company.id);
+  // Agency companies get the four fixed AGENCY_OWNER/ADMIN/MANAGER/USER
+  // roles (src/domain/fixedRoles.ts) instead of the single generic Owner
+  // role every other company gets - the registering user becomes
+  // AGENCY_OWNER (full access, sees every client). Every other accountType
+  // (just "individual" today) is unaffected - unchanged from before this
+  // feature existed.
+  const ownerRole =
+    accountType === "agency" ? (await createAgencyFixedRoles(company.id)).get("AGENCY_OWNER")! : await createOwnerRole(company.id);
   const user = await createUser({
     companyId: company.id,
     roleId: ownerRole.id,
@@ -250,13 +267,14 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     throw new AuthError("Account has no role assigned - contact your administrator.", 403);
   }
 
-  const branchIds = await getUserBranchIds(user.id);
+  const [branchIds, assignedClientIds] = await Promise.all([getUserBranchIds(user.id), getUserAssignedClientIds(user.id)]);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
     branchIds,
+    assignedClientIds,
   });
 
   const rememberMe = input.rememberMe === true;
@@ -326,13 +344,14 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
   // blast radius of a stolen refresh token to a single use.
   await revokeSession(session.id);
 
-  const branchIds = await getUserBranchIds(user.id);
+  const [branchIds, assignedClientIds] = await Promise.all([getUserBranchIds(user.id), getUserAssignedClientIds(user.id)]);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
     branchIds,
+    assignedClientIds,
   });
   const { token: newRefreshToken, hash: newHash } = generateRefreshToken();
   // Carry the ORIGINAL login's "remember me" choice forward across every

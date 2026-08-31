@@ -53,6 +53,15 @@ export interface AccessTokenClaims {
   // token issued before this field existed still verifies (jose/JWT just
   // omits it; branchIds is treated as [] when absent, never as a crash).
   branchIds?: string[];
+  // Every client company this AGENCY user has been explicitly assigned to
+  // (agency_client_assignments rows), same "carry it in the token, avoid a
+  // DB round trip per request" shape as branchIds above. Unlike branchIds,
+  // an empty array here does NOT mean "unrestricted" - see
+  // resolveAgencyClientAccess() in src/application/agencyClientAccess.ts.
+  // Meaningless (and always empty/unused) for a user of a non-agency
+  // company. Optional for the same "token issued before this field
+  // existed still verifies" reason branchIds is.
+  assignedClientIds?: string[];
 }
 
 function getSecret(): Uint8Array {

@@ -8,7 +8,7 @@
 // on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAuth, requirePermission } from "../../../src/infrastructure/auth/context";
+import { requireAuth, requirePermission, type AuthContext } from "../../../src/infrastructure/auth/context";
 import {
   countOtherActiveUsersWithRole,
   createUser,
@@ -19,6 +19,9 @@ import {
   listUsers,
   updateUser,
 } from "../../../src/infrastructure/db/repositories/tenancy";
+import { resolveAgencyClientAccess } from "../../../src/application/agencyClientAccess";
+import { getUserAssignedClientIds, setAssignedClients } from "../../../src/infrastructure/db/repositories/agencyClientAssignments";
+import { listClaimedClientOrganizations } from "../../../src/infrastructure/db/repositories/organizations";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
 import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
@@ -115,7 +118,16 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
     if (!auth) return;
 
-    const { fullName, email, roleId } = (req.body ?? {}) as { fullName?: string; email?: string; roleId?: string };
+    const { fullName, email, roleId, assignedClientIds } = (req.body ?? {}) as {
+      fullName?: string;
+      email?: string;
+      roleId?: string;
+      // Assigned Clients, set at creation time - see the PATCH branch
+      // below (handleOne) for the full tenant-safety validation this
+      // shares; only meaningful (and only validated/applied) for an agency
+      // company - silently ignored for any other accountType.
+      assignedClientIds?: string[];
+    };
     if (!fullName || !email || !roleId) {
       res.status(400).json({ error: "fullName, email and roleId are all required." });
       return;
@@ -131,6 +143,18 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    const isAgencyWithAssignments = Array.isArray(assignedClientIds) && assignedClientIds.length > 0;
+    const company = isAgencyWithAssignments ? await getCompanyById(auth.companyId) : null;
+    if (isAgencyWithAssignments && company?.accountType === "agency") {
+      const claimed = await listClaimedClientOrganizations(auth.companyId);
+      const claimedIds = new Set(claimed.map((c) => c.clientCompanyId));
+      const invalid = assignedClientIds!.filter((id) => !claimedIds.has(id));
+      if (invalid.length > 0) {
+        res.status(400).json({ error: "One or more clients are not part of your agency's roster." });
+        return;
+      }
+    }
+
     const tempPassword = generateTempPassword();
     const passwordHash = await hashPassword(tempPassword);
     const user = await createUser({
@@ -141,6 +165,15 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
       fullName,
       mustChangePassword: true,
     });
+
+    if (isAgencyWithAssignments && company?.accountType === "agency") {
+      await setAssignedClients({
+        agencyCompanyId: auth.companyId,
+        userId: user.id,
+        clientCompanyIds: assignedClientIds!,
+        createdBy: auth.userId,
+      });
+    }
 
     res.status(201).json({
       user: { id: user.id, email: user.email, fullName: user.fullName },
@@ -171,6 +204,14 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
   const role = await getRoleById(auth.companyId, user.roleId);
   const template = company ? getIndustryTemplate(company.industryTemplate) : null;
 
+  // Assigned Clients (Users -> View -> "which clients can this teammate
+  // see") is only a meaningful concept for an agency company's own users -
+  // see src/domain/fixedRoles.ts/agencyClientAccess.ts. Omitted entirely
+  // (not just empty) for any other company so the frontend has a clean
+  // "does this even apply" signal rather than inferring it from an
+  // always-empty array.
+  const assignedClientIds = company?.accountType === "agency" ? await getUserAssignedClientIds(userId) : undefined;
+
   res.status(200).json({
     user: {
       id: user.id,
@@ -189,6 +230,7 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
           industry: template?.name ?? null,
         }
       : null,
+    assignedClientIds,
   });
 }
 
@@ -219,10 +261,15 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
   }
 
   if (req.method === "PATCH") {
-    const { roleId, status, fullName } = (req.body ?? {}) as {
+    const { roleId, status, fullName, assignedClientIds } = (req.body ?? {}) as {
       roleId?: string;
       status?: string;
       fullName?: string;
+      // "Assigned Clients" (see agencyClientAssignments.ts) - only honored
+      // for an agency company's own users, checked just below. Undefined
+      // means "leave assignments unchanged"; an array (even empty) means
+      // "replace with exactly this set" - see setAssignedClients.
+      assignedClientIds?: string[];
     };
 
     if (roleId) {
@@ -244,6 +291,32 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
         res.status(409).json({ error: "Cannot disable or re-role the last admin who can manage users." });
         return;
       }
+    }
+
+    if (Array.isArray(assignedClientIds)) {
+      const company = await getCompanyById(auth.companyId);
+      if (company?.accountType !== "agency") {
+        res.status(400).json({ error: "Assigned clients only apply to agency accounts." });
+        return;
+      }
+      // Tenant-safety: every id must actually be one of THIS agency's own
+      // currently-claimed clients - never trust a clientCompanyId the
+      // request body supplies on its own (same posture as every other
+      // client-facing id in this codebase - see agency.ts's own header
+      // comment).
+      const claimed = await listClaimedClientOrganizations(auth.companyId);
+      const claimedIds = new Set(claimed.map((c) => c.clientCompanyId));
+      const invalid = assignedClientIds.filter((id) => !claimedIds.has(id));
+      if (invalid.length > 0) {
+        res.status(400).json({ error: "One or more clients are not part of your agency's roster." });
+        return;
+      }
+      await setAssignedClients({
+        agencyCompanyId: auth.companyId,
+        userId,
+        clientCompanyIds: assignedClientIds,
+        createdBy: auth.userId,
+      });
     }
 
     await updateUser(auth.companyId, userId, {
@@ -641,10 +714,10 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   }
 
   const action = getQueryString(req, "action");
-  if (action === "dashboard") return handleAgencyDashboard(req, res, auth.companyId);
+  if (action === "dashboard") return handleAgencyDashboard(req, res, auth);
   if (action === "add-client") return handleAgencyAddClient(req, res, auth.companyId, auth.userId);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
-  if (action === "client-detail") return handleAgencyClientDetail(req, res, auth.companyId);
+  if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
   if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId);
   if (action === "generate-onboarding-link") return handleAgencyGenerateOnboardingLink(req, res, auth.companyId, auth.userId);
   if (action === "list-onboarding-links") return handleAgencyListOnboardingLinks(req, res, auth.companyId);
@@ -653,12 +726,12 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   res.status(404).json({ error: "Not found" });
 }
 
-async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const summary = await getAgencyDashboardSummary(agencyCompanyId);
+  const summary = await getAgencyDashboardSummary(auth.companyId, resolveAgencyClientAccess(auth));
   res.status(200).json(summary);
 }
 
@@ -713,7 +786,7 @@ async function handleAgencyInviteClient(req: VercelRequest, res: VercelResponse,
   }
 }
 
-async function handleAgencyClientDetail(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+async function handleAgencyClientDetail(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -724,7 +797,7 @@ async function handleAgencyClientDetail(req: VercelRequest, res: VercelResponse,
     return;
   }
   try {
-    const detail = await getClientDetail(agencyCompanyId, clientId);
+    const detail = await getClientDetail(auth.companyId, clientId, resolveAgencyClientAccess(auth));
     res.status(200).json(detail);
   } catch (err) {
     if (err instanceof AuthError) {

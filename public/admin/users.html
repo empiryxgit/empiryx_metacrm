@@ -38,6 +38,7 @@
         </div>
         <label for="roleId">Role</label>
         <select id="roleId" required></select>
+        <div id="createAssignedClients" style="display:none; margin-top:14px"></div>
         <button class="btn" type="submit" style="margin-top:14px">Create user</button>
       </form>
       <div id="tempPasswordBox" style="display:none; margin-top:14px">
@@ -61,7 +62,12 @@
 
 <script src="/assets/app.js"></script>
 <script>
-  let me, roles = [];
+  // Assigned Clients (see src/domain/fixedRoles.ts / agencyClientAssignments)
+  // only exists for agency accounts - agencyClients is the agency's own
+  // roster, fetched once from the same endpoint clients.html/
+  // agency-dashboard.html already use. Every other company type leaves
+  // this null and the whole feature stays invisible on this page.
+  let me, roles = [], agencyClients = null;
 
   function fmt(iso){ return iso ? new Date(iso).toLocaleString() : "Never"; }
 
@@ -69,6 +75,43 @@
     const { roles: r } = await App.apiJson("/api/admin/roles");
     roles = r;
     document.getElementById("roleId").innerHTML = roles.map(r => `<option value="${r.id}">${App.escapeHtml(r.name)}</option>`).join("");
+  }
+
+  async function loadAgencyClientsIfAgency() {
+    if (me?.company?.accountType !== "agency") return;
+    try {
+      const { clients } = await App.apiJson("/api/agency/dashboard");
+      agencyClients = clients;
+    } catch {
+      agencyClients = [];
+    }
+  }
+
+  // Renders a checkbox per claimed client, `checked` pre-selected. Returns
+  // "" (renders nothing) when this isn't an agency account or the agency
+  // has no clients yet - the create form's own wrapper div stays hidden in
+  // that case (see its caller).
+  function assignedClientsCheckboxesHtml(idPrefix, checked) {
+    if (!agencyClients || agencyClients.length === 0) return "";
+    const checkedSet = new Set(checked || []);
+    return `
+      <label>Assigned Clients</label>
+      <p class="hint" style="margin-top:0">
+        Owner/Admin roles always see every client regardless of this list. Manager/User roles see ONLY the clients checked here.
+      </p>
+      <div class="checkbox-row" style="flex-direction:column; align-items:flex-start; gap:6px">
+        ${agencyClients.map(c => `
+          <label style="display:flex; align-items:center; gap:8px; font-weight:400">
+            <input type="checkbox" class="${idPrefix}-client" value="${c.id}" ${checkedSet.has(c.id) ? "checked" : ""} />
+            ${App.escapeHtml(c.name)}
+          </label>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function readCheckedClientIds(idPrefix) {
+    return Array.from(document.querySelectorAll(`.${idPrefix}-client:checked`)).map(el => el.value);
   }
 
   async function loadUsers() {
@@ -163,7 +206,8 @@
 
     const body = document.getElementById("userModalBody");
     try {
-      const { user, role, company } = await App.apiJson(`/api/admin/users/${userId}`);
+      const { user, role, company, assignedClientIds } = await App.apiJson(`/api/admin/users/${userId}`);
+      const showAssignedClients = assignedClientIds !== undefined;
       body.innerHTML = `
         <div class="lead-identity" style="margin-bottom:14px">
           <span class="avatar">${App.escapeHtml(App.initials(user.fullName))}</span>
@@ -181,7 +225,27 @@
         ${detailRow("Company", App.escapeHtml(company?.name || "—"))}
         ${detailRow("Company size", App.escapeHtml(company?.companySize || "—"))}
         ${detailRow("Industry", App.escapeHtml(company?.industry || "—"))}
+        ${showAssignedClients ? `
+          <div style="height:1px; background:var(--border); margin:14px 0"></div>
+          <div id="viewAssignedClients">${assignedClientsCheckboxesHtml("view", assignedClientIds)}</div>
+          ${agencyClients && agencyClients.length > 0 ? `<button class="btn secondary sm" type="button" id="saveAssignedClients" style="margin-top:10px">Save assigned clients</button>` : ""}
+        ` : ""}
       `;
+      const saveBtn = document.getElementById("saveAssignedClients");
+      if (saveBtn) {
+        saveBtn.addEventListener("click", async () => {
+          try {
+            await App.apiJson(`/api/admin/users/${userId}`, {
+              method: "PATCH",
+              body: { assignedClientIds: readCheckedClientIds("view") },
+            });
+            saveBtn.textContent = "Saved";
+            setTimeout(() => { saveBtn.textContent = "Save assigned clients"; }, 1500);
+          } catch (err) {
+            body.insertAdjacentHTML("beforeend", `<div class="banner error">${App.escapeHtml(err.message)}</div>`);
+          }
+        });
+      }
     } catch (err) {
       body.innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Unable to load user details.")}</div>`;
     }
@@ -202,6 +266,7 @@
           fullName: document.getElementById("fullName").value.trim(),
           email: document.getElementById("email").value.trim(),
           roleId: document.getElementById("roleId").value,
+          assignedClientIds: agencyClients ? readCheckedClientIds("create") : undefined,
         },
       });
       document.getElementById("tempPasswordBox").style.display = "block";
@@ -227,6 +292,12 @@
       return;
     }
     document.getElementById("createCard").style.display = "block";
+    await loadAgencyClientsIfAgency();
+    if (agencyClients && agencyClients.length > 0) {
+      const wrap = document.getElementById("createAssignedClients");
+      wrap.innerHTML = assignedClientsCheckboxesHtml("create", []);
+      wrap.style.display = "block";
+    }
     await loadRoles();
     await loadUsers();
   })();

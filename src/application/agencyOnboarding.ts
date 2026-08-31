@@ -36,8 +36,8 @@ import {
 } from "../infrastructure/db/repositories/organizationInvitations";
 import { effectiveInvitationStatus } from "../domain/organizationInvitationStatus";
 import {
+  createClientFixedRoles,
   createCompany,
-  createOwnerRole,
   createUser,
   emailExists,
   getCompanyById,
@@ -45,6 +45,7 @@ import {
   completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
 import { linkOrReactivateClientOrganization } from "../infrastructure/db/repositories/organizations";
+import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { getIndustryTemplate } from "../domain/industryTemplates";
 
@@ -222,7 +223,12 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
   const industryTemplate = "real_estate" as const;
 
   const company = await createCompany({ name: companyName, slug, industryTemplate, accountType: "individual" });
-  const ownerRole = await createOwnerRole(company.id);
+  // The four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles (see
+  // src/domain/fixedRoles.ts), same as addClientOrganization's own
+  // Add-Client flow - this company is likewise being originated as an
+  // agency's client, just via a self-service link instead of the agency
+  // typing everything in directly.
+  const ownerRole = (await createClientFixedRoles(company.id)).get("CLIENT_OWNER")!;
   const owner = await createUser({
     companyId: company.id,
     roleId: ownerRole.id,
@@ -238,6 +244,25 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
     createdBy: claimed.createdBy ?? undefined,
     status: "active",
   });
+
+  // Auto-assign whichever agency user generated this onboarding link (the
+  // invitation's own createdBy) to the client it just produced - same
+  // reasoning as addClientOrganization's own comment on assignClientToUser.
+  // Best-effort: claimed.createdBy is nullable (the generating user could
+  // since have been removed - see organizationInvitations.createdBy's own
+  // ON DELETE SET NULL), and a failure here must never block onboarding.
+  if (claimed.createdBy) {
+    try {
+      await assignClientToUser({
+        agencyCompanyId: claimed.agencyCompanyId,
+        clientCompanyId: company.id,
+        userId: claimed.createdBy,
+        createdBy: claimed.createdBy,
+      });
+    } catch (err) {
+      console.error("[agency-onboarding/complete] Failed to auto-assign inviting user to new client:", err);
+    }
+  }
 
   try {
     await setInvitationResultingCompany(claimed.id, company.id);

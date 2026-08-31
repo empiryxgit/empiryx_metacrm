@@ -33,6 +33,18 @@ export const PERMISSIONS = {
   // above: this one governs the tenant-wide OAuth connection itself, not
   // any single campaign's webhook config.
   INTEGRATIONS_MANAGE: "integrations.manage",
+  // Agency-only visibility flag, same "doubles as the unrestricted-scope
+  // flag" shape as BRANCHES_MANAGE above: an agency user who holds this
+  // sees every client the agency manages; one who doesn't is restricted to
+  // whichever client(s) they've been explicitly assigned via
+  // agency_client_assignments (see src/application/agencyClientAccess.ts) -
+  // with NO "zero assignments means unrestricted" fallback the way branches
+  // has, since the whole point of this permission is that an agency user
+  // must see nothing until someone deliberately assigns them a client.
+  // Meaningless (never checked) outside an agency company's own dashboard/
+  // clients/client-detail endpoints - a client company's own team never
+  // consults this.
+  AGENCY_CLIENTS_VIEW_ALL: "agency_clients.view_all",
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -57,6 +69,7 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.SUBMISSIONS_VIEW, label: "View form submissions", category: "Forms" },
   { code: PERMISSIONS.BRANCHES_MANAGE, label: "Create and manage branches", category: "Administration" },
   { code: PERMISSIONS.INTEGRATIONS_MANAGE, label: "Connect and manage the Meta integration", category: "Integrations" },
+  { code: PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL, label: "See every client (not just assigned ones)", category: "Clients" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

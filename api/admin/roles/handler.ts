@@ -81,7 +81,10 @@ async function handleOne(req: VercelRequest, res: VercelResponse, roleId: string
     return;
   }
   if (role.isSystem) {
-    res.status(403).json({ error: "The Owner role cannot be edited or deleted." });
+    // Covers both the legacy single "Owner" role and the fixed AGENCY_*/
+    // CLIENT_* catalog roles (src/domain/fixedRoles.ts) - all isSystem,
+    // none editable/deletable via this admin UI, regardless of name.
+    res.status(403).json({ error: "This is a system-defined role and cannot be edited or deleted." });
     return;
   }
 

@@ -3,6 +3,16 @@ import { getDb } from "../client";
 import { companies, roles, sessions, users } from "../schema";
 import { firstOrThrow } from "../util";
 import { ALL_PERMISSIONS } from "../../../domain/permissions";
+import {
+  AGENCY_ROLE_DESCRIPTIONS,
+  AGENCY_ROLE_NAMES,
+  AGENCY_ROLE_PERMISSIONS,
+  CLIENT_ROLE_DESCRIPTIONS,
+  CLIENT_ROLE_NAMES,
+  CLIENT_ROLE_PERMISSIONS,
+  type AgencyRoleName,
+  type ClientRoleName,
+} from "../../../domain/fixedRoles";
 
 // ---- Companies --------------------------------------------------------
 
@@ -65,6 +75,57 @@ export async function createOwnerRole(companyId: string) {
     })
     .returning();
   return firstOrThrow(rows);
+}
+
+/**
+ * Seeds the four fixed AGENCY_OWNER/ADMIN/MANAGER/USER roles (see
+ * src/domain/fixedRoles.ts) for a brand-new agency company, INSTEAD OF the
+ * single generic createOwnerRole() below - only called from
+ * registerCompanyAndOwner (src/application/auth.ts) when accountType is
+ * "agency". Returns a name -> role map so the caller can pick out
+ * AGENCY_OWNER for the registering user without a second query.
+ */
+export async function createAgencyFixedRoles(companyId: string): Promise<Map<AgencyRoleName, typeof roles.$inferSelect>> {
+  const db = await getDb();
+  const rows = await db
+    .insert(roles)
+    .values(
+      AGENCY_ROLE_NAMES.map((name) => ({
+        companyId,
+        name,
+        description: AGENCY_ROLE_DESCRIPTIONS[name],
+        permissions: AGENCY_ROLE_PERMISSIONS[name],
+        isSystem: true,
+      })),
+    )
+    .returning();
+  return new Map(rows.map((r) => [r.name as AgencyRoleName, r]));
+}
+
+/**
+ * Seeds the four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles for a
+ * brand-new client company an agency itself originates - see
+ * addClientOrganization/completeAgencyOnboarding
+ * (src/application/agency.ts / agencyOnboarding.ts) for the two call sites.
+ * A client company an agency merely links via inviteExistingClient
+ * deliberately does NOT go through this - that company predates the
+ * relationship and keeps whatever role system it already had.
+ */
+export async function createClientFixedRoles(companyId: string): Promise<Map<ClientRoleName, typeof roles.$inferSelect>> {
+  const db = await getDb();
+  const rows = await db
+    .insert(roles)
+    .values(
+      CLIENT_ROLE_NAMES.map((name) => ({
+        companyId,
+        name,
+        description: CLIENT_ROLE_DESCRIPTIONS[name],
+        permissions: CLIENT_ROLE_PERMISSIONS[name],
+        isSystem: true,
+      })),
+    )
+    .returning();
+  return new Map(rows.map((r) => [r.name as ClientRoleName, r]));
 }
 
 export async function listRoles(companyId: string) {

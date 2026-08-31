@@ -285,10 +285,57 @@ export const organizationInvitations = crm.table(
 );
 
 /**
- * A role's permission set. `isSystem` marks the built-in "Owner" role every
- * company gets at signup (always holds every permission, cannot be edited
- * or deleted) - everything else is a fully custom role the admin defines
- * from the fixed permission catalog in src/domain/permissions.ts.
+ * Which specific client organization(s) a given AGENCY user is allowed to
+ * see - the "Agency User -> Assigned Clients -> Client A, Client C" model
+ * (see src/domain/fixedRoles.ts and src/application/agencyClientAccess.ts).
+ * Deliberately per-USER, unlike agencyClients above (which is per-COMPANY:
+ * "this agency manages this client at all") - two agency teammates can be
+ * assigned to completely different subsets of the same agency's client
+ * roster, which agencyClients alone has no way to express.
+ *
+ * `agencyCompanyId` is denormalized here (derivable by joining through
+ * `users`) purely so every query in
+ * src/infrastructure/db/repositories/agencyClientAssignments.ts can filter
+ * directly on it without a join, the same tenant-safety convention
+ * agencyClients/organizationInvitations above already both follow for
+ * their own agency-scoped columns.
+ *
+ * Holding AGENCY_CLIENTS_VIEW_ALL (Owner/Admin tiers - see
+ * AGENCY_ROLE_PERMISSIONS) bypasses this table entirely: those users see
+ * every claimed client regardless of what is or isn't assigned here. A row
+ * here only matters for a user whose role does NOT hold that permission
+ * (Manager/User tiers, or any custom role an admin builds without it).
+ */
+export const agencyClientAssignments = crm.table(
+  "agency_client_assignments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    clientCompanyId: uuid("client_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agencyIdx: index("ix_agency_client_assignments_agency_company_id").on(t.agencyCompanyId),
+    userIdx: index("ix_agency_client_assignments_user_id").on(t.userId),
+    clientIdx: index("ix_agency_client_assignments_client_company_id").on(t.clientCompanyId),
+    // One row per (user, client) pair - re-assigning is an upsert, not a
+    // second row, same shape as ux_branch_users_branch_user.
+    userClientIdx: uniqueIndex("ux_agency_client_assignments_user_client").on(t.userId, t.clientCompanyId),
+  }),
+);
+
+/**
+ * A role's permission set. `isSystem` marks a built-in, non-editable role -
+ * either the single generic "Owner" role every ordinary company gets at
+ * signup, or one of the four fixed AGENCY_ or CLIENT_ prefixed roles an
+ * agency-context company gets instead (see src/domain/fixedRoles.ts) -
+ * always holding a fixed permission set that only the application layer
+ * changes (never the admin UI, which refuses to edit/delete any isSystem
+ * row - see api/admin/roles/handler.ts). Everything else is a fully custom
+ * role the admin defines from the fixed permission catalog in
+ * src/domain/permissions.ts.
  */
 export const roles = crm.table("roles", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),

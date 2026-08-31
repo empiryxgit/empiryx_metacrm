@@ -31,8 +31,8 @@ import { AuthError } from "./auth";
 import { uniqueSlug } from "./auth";
 import { hashPassword, generateTempPassword } from "../infrastructure/auth/password";
 import {
+  createClientFixedRoles,
   createCompany,
-  createOwnerRole,
   createUser,
   emailExists,
   getCompanyById,
@@ -48,11 +48,13 @@ import {
   listClaimedClientOrganizations,
   setAgencyClientStatus,
 } from "../infrastructure/db/repositories/organizations";
+import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { listCampaigns } from "../infrastructure/db/repositories/campaigns";
 import { getRelevantMetaConnectionView } from "../infrastructure/db/repositories/metaIntegration";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { getIndustryTemplate } from "../domain/industryTemplates";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../domain/agencyClientStatus";
+import { canAccessClient, type AgencyClientAccess } from "./agencyClientAccess";
 
 export interface AgencyDashboardClientRow {
   id: string;
@@ -80,9 +82,19 @@ export interface AgencyDashboardSummary {
  * Everything the Agency Dashboard's KPI row and Clients table need, in one
  * call. Clients are sorted by lead volume (most leads first) - the same
  * "what needs my attention" ordering a busy agency wants, not alphabetical.
+ *
+ * `access` (resolveAgencyClientAccess(auth), from the caller) is what
+ * actually implements "the user cannot see Client B": every claimed client
+ * is filtered down to whichever ones the caller can access BEFORE the KPIs
+ * are computed from them, so a Manager/User's KPI row also only reflects
+ * their own assigned clients, not the whole agency's.
  */
-export async function getAgencyDashboardSummary(agencyCompanyId: string): Promise<AgencyDashboardSummary> {
-  const claimed = await listClaimedClientOrganizations(agencyCompanyId);
+export async function getAgencyDashboardSummary(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+): Promise<AgencyDashboardSummary> {
+  const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
+  const claimed = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
   const metrics = await getClientMetrics(claimed.map((c) => c.clientCompanyId));
 
   const clients: AgencyDashboardClientRow[] = claimed
@@ -167,7 +179,13 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
   // in ./auth.ts for why nothing here collects one.
   const industryTemplate = "real_estate" as const;
   const company = await createCompany({ name: companyName, slug, industryTemplate, accountType: "individual" });
-  const ownerRole = await createOwnerRole(company.id);
+  // The four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles (see
+  // src/domain/fixedRoles.ts), not the single generic Owner role - this
+  // client company is being originated BY the agency, so it starts on the
+  // same fixed catalog every agency-originated client gets (see
+  // createClientFixedRoles' own doc comment for why inviteExistingClient's
+  // pre-existing companies deliberately do NOT go through this).
+  const ownerRole = (await createClientFixedRoles(company.id)).get("CLIENT_OWNER")!;
   const owner = await createUser({
     companyId: company.id,
     roleId: ownerRole.id,
@@ -185,6 +203,25 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
     createdBy: input.actingUserId,
     status: "active",
   });
+
+  // Auto-assign the acting agency user to the client they just created -
+  // see agencyClientAssignments' own doc comment on assignClientToUser for
+  // why: an assignment-scoped (Manager/User tier) agency teammate must
+  // never be immediately locked out of a client they themselves just
+  // brought onto the roster. Best-effort, same posture as the steps below -
+  // a failure here never blocks the client itself from being created, and
+  // is harmless for a full-access (Owner/Admin) acting user too, since
+  // AGENCY_CLIENTS_VIEW_ALL bypasses this table regardless of what's in it.
+  try {
+    await assignClientToUser({
+      agencyCompanyId: input.agencyCompanyId,
+      clientCompanyId: company.id,
+      userId: input.actingUserId,
+      createdBy: input.actingUserId,
+    });
+  } catch (err) {
+    console.error("[agency/add-client] Failed to auto-assign acting user to new client:", err);
+  }
 
   // Every new account (agency-created clients included) skips the old
   // company-profile + first-campaign onboarding wizard - see
@@ -281,6 +318,24 @@ export async function inviteExistingClient(input: {
     status: "invited",
   });
 
+  // Same auto-assign as addClientOrganization's own doc comment explains -
+  // harmless even though the relationship is still "invited" (not yet
+  // accepted): getClientDetail/getAgencyDashboardSummary already exclude
+  // anything that isn't active/suspended regardless of assignment, and a
+  // declined invite simply leaves this row pointing at a client the agency
+  // no longer manages, same orphaned-but-harmless shape a removed client
+  // leaves behind for any other agency user's assignments.
+  try {
+    await assignClientToUser({
+      agencyCompanyId: input.agencyCompanyId,
+      clientCompanyId: company.id,
+      userId: input.actingUserId,
+      createdBy: input.actingUserId,
+    });
+  } catch (err) {
+    console.error("[agency/invite-client] Failed to auto-assign acting user to invited client:", err);
+  }
+
   return { company: { id: company.id, name: company.name }, ownerEmail: user.email };
 }
 
@@ -326,10 +381,13 @@ export async function respondToAgencyInvite(input: {
 // connected (status only - never tokens, via getRelevantMetaConnectionView's
 // own masking), and the client's own profile - but NOT a client's raw lead
 // list (that's real customer PII the agency hasn't been given row-level
-// access to yet - only the aggregate counts already on the dashboard). A
-// future phase can widen this once there's an actual permission model for
-// "which agency staff can see which client's leads", rather than every
-// agency user getting full access the moment a client is claimed.
+// access to yet - only the aggregate counts already on the dashboard).
+// WHICH agency staff can even reach this at all for a given client is its
+// own permission model now - see src/application/agencyClientAccess.ts and
+// the `access` parameter both this function and getAgencyDashboardSummary
+// take: an AGENCY_MANAGER/AGENCY_USER (or any custom role without
+// agency_clients.view_all) only gets a non-404 response for a client
+// they've been explicitly assigned, never every client the agency manages.
 
 export interface ClientDetail {
   company: {
@@ -348,8 +406,20 @@ export interface ClientDetail {
 /** Throws if this agency does not currently have a CONSENTED (active or
  * suspended) relationship with this client - "invited"/"pending" never
  * grants data access, only "active"/"suspended" do (removed/unclaimed
- * clients obviously don't either). */
-export async function getClientDetail(agencyCompanyId: string, clientCompanyId: string): Promise<ClientDetail> {
+ * clients obviously don't either) - OR if the caller (per `access`,
+ * resolveAgencyClientAccess(auth)) isn't allowed to see this specific
+ * client. Deliberately the same 404 either way - a client this agency
+ * relationship doesn't cover and a client this CALLER isn't assigned to
+ * are indistinguishable from the outside, same "don't confirm more than
+ * the outcome" posture the rest of this codebase's auth checks follow. */
+export async function getClientDetail(
+  agencyCompanyId: string,
+  clientCompanyId: string,
+  access: AgencyClientAccess,
+): Promise<ClientDetail> {
+  if (!canAccessClient(access, clientCompanyId)) {
+    throw new AuthError("Client not found.", 404);
+  }
   const claim = await getClaimingAgencyForClient(clientCompanyId);
   if (!claim || claim.agencyCompanyId !== agencyCompanyId || !["active", "suspended"].includes(claim.relationshipStatus)) {
     throw new AuthError("Client not found.", 404);
