@@ -1,7 +1,7 @@
 // Agency <-> client organization relationships (see schema.ts's own doc
-// comment on agencyOrganizations for why this is a relationship table, not
-// a third `account_type`). Deliberately just the data-access layer for now
-// - no application-layer service or API handler wires these up yet, same
+// comment on agencyClients for why this is a relationship table, not a
+// third `account_type`). Deliberately just the data-access layer for now -
+// no application-layer service or API handler wires these up yet, same
 // "schema + repository now, pipeline wiring later" split
 // src/infrastructure/db/repositories/metaIntegration.ts's own history
 // followed when tenant-level Meta auth was first added.
@@ -12,93 +12,123 @@
 // belongs to the calling agency, same tenant-isolation discipline every
 // other repository in this codebase already follows.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getDb } from "../client";
-import { agencyOrganizations, companies } from "../schema";
+import { agencyClients, companies } from "../schema";
 import { firstOrThrow } from "../util";
+import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../../../domain/agencyClientStatus";
 
 export interface LinkClientOrganizationInput {
   agencyCompanyId: string;
   clientCompanyId: string;
   createdBy?: string;
+  // Defaults to "invited" - see agencyClientStatus.ts's lifecycle comment.
+  // Pass "active" directly for a flow that skips the invite/accept step
+  // (e.g. an agency admin adding a client it already has an offline
+  // agreement with).
+  status?: AgencyClientStatus;
 }
 
 /**
- * Links a client organization to an agency. Enforced invariants live on the
- * table itself (see schema.ts): at most one ACTIVE agency per client
- * (partial unique index - inserting a second active link for the same
- * client fails at the database level rather than silently overwriting the
- * first), and an organization can never link to itself (CHECK constraint).
- * Re-linking a PREVIOUSLY REVOKED client to a (possibly different) agency
- * is just a normal insert - the old revoked row is left in place as history,
- * never deleted or reused.
+ * Creates (or REACTIVATES) the relationship between one agency and one
+ * client organization. Because `ux_agency_clients_agency_client` makes
+ * (agencyCompanyId, clientCompanyId) unique for the row's entire lifetime
+ * (see schema.ts), this is an upsert, not a plain insert: re-inviting a
+ * client this same agency had previously removed reactivates that original
+ * row (and its id/history) rather than creating a second one.
+ *
+ * `ux_agency_clients_one_claimed_agency_per_client` (also on the table)
+ * still applies on top of that - if this client organization is currently
+ * claimed (invited/pending/active/suspended) by a DIFFERENT agency, this
+ * throws a Postgres unique-violation error rather than silently
+ * transferring ownership. No API/application layer exists yet to translate
+ * that into a friendly error (see this file's header comment) - a future
+ * caller must catch it and report "this client already belongs to another
+ * agency" rather than a raw 500.
  */
-export async function linkClientOrganization(input: LinkClientOrganizationInput) {
+export async function linkOrReactivateClientOrganization(input: LinkClientOrganizationInput) {
   const db = await getDb();
   const rows = await db
-    .insert(agencyOrganizations)
+    .insert(agencyClients)
     .values({
       agencyCompanyId: input.agencyCompanyId,
       clientCompanyId: input.clientCompanyId,
       createdBy: input.createdBy,
+      status: input.status ?? "invited",
+    })
+    .onConflictDoUpdate({
+      target: [agencyClients.agencyCompanyId, agencyClients.clientCompanyId],
+      set: { status: input.status ?? "invited", updatedAt: new Date() },
     })
     .returning();
   return firstOrThrow(rows);
 }
 
 /**
- * Revokes the CURRENT active relationship between this agency and this
- * client (a no-op, zero rows affected, if none is currently active) -
- * never deletes the row, matching every other "revoke" operation in this
- * schema (see sessions.revokedAt, meta_connections.status="revoked").
- * Scoped by agencyCompanyId so an agency can only revoke a link it is
- * actually a party to, never another agency's.
+ * Moves an existing (agency, client) relationship to a new status - accept
+ * an invite, suspend, remove, etc. Scoped by agencyCompanyId so an agency
+ * can only transition a relationship it is actually a party to, never
+ * another agency's. No-op (zero rows affected) if no such relationship
+ * exists. Deliberately does not validate the FROM status - the fixed
+ * lifecycle in agencyClientStatus.ts is documented, not enforced as a state
+ * machine here (see that file's own comment) - a future application-layer
+ * service is the right place for "can't go from removed back to active
+ * without going through invited again"-style rules, if ever needed.
  */
-export async function revokeClientOrganizationLink(agencyCompanyId: string, clientCompanyId: string) {
+export async function setAgencyClientStatus(agencyCompanyId: string, clientCompanyId: string, status: AgencyClientStatus) {
   const db = await getDb();
   await db
-    .update(agencyOrganizations)
-    .set({ status: "revoked", updatedAt: new Date() })
+    .update(agencyClients)
+    .set({ status, updatedAt: new Date() })
+    .where(and(eq(agencyClients.agencyCompanyId, agencyCompanyId), eq(agencyClients.clientCompanyId, clientCompanyId)));
+}
+
+/** Every client organization CURRENTLY CLAIMED (invited/pending/active/
+ * suspended - i.e. not "removed") by this agency, joined with the client's
+ * own name/status for display. */
+export async function listClaimedClientOrganizations(agencyCompanyId: string) {
+  const db = await getDb();
+  return db
+    .select({
+      linkId: agencyClients.id,
+      clientCompanyId: agencyClients.clientCompanyId,
+      clientName: companies.name,
+      clientStatus: companies.status,
+      relationshipStatus: agencyClients.status,
+      linkedAt: agencyClients.createdAt,
+    })
+    .from(agencyClients)
+    .innerJoin(companies, eq(companies.id, agencyClients.clientCompanyId))
     .where(
       and(
-        eq(agencyOrganizations.agencyCompanyId, agencyCompanyId),
-        eq(agencyOrganizations.clientCompanyId, clientCompanyId),
-        eq(agencyOrganizations.status, "active"),
+        eq(agencyClients.agencyCompanyId, agencyCompanyId),
+        inArray(agencyClients.status, CLAIMED_AGENCY_CLIENT_STATUSES),
       ),
     );
 }
 
-/** Every client organization currently (actively) managed by this agency,
- * joined with the client's own name/status for display. */
-export async function listActiveClientOrganizations(agencyCompanyId: string) {
-  const db = await getDb();
-  return db
-    .select({
-      linkId: agencyOrganizations.id,
-      clientCompanyId: agencyOrganizations.clientCompanyId,
-      clientName: companies.name,
-      clientStatus: companies.status,
-      linkedAt: agencyOrganizations.createdAt,
-    })
-    .from(agencyOrganizations)
-    .innerJoin(companies, eq(companies.id, agencyOrganizations.clientCompanyId))
-    .where(and(eq(agencyOrganizations.agencyCompanyId, agencyCompanyId), eq(agencyOrganizations.status, "active")));
-}
-
-/** The agency (if any) currently managing this client organization - null
- * for an independent organization with no active agency link. */
-export async function getActiveAgencyForClient(clientCompanyId: string) {
+/** The agency currently claiming this client organization (any non-"removed"
+ * status), or null for an independent/unclaimed organization. Relies on
+ * ux_agency_clients_one_claimed_agency_per_client to guarantee at most one
+ * row can ever match. */
+export async function getClaimingAgencyForClient(clientCompanyId: string) {
   const db = await getDb();
   const [row] = await db
     .select({
-      linkId: agencyOrganizations.id,
-      agencyCompanyId: agencyOrganizations.agencyCompanyId,
+      linkId: agencyClients.id,
+      agencyCompanyId: agencyClients.agencyCompanyId,
       agencyName: companies.name,
-      linkedAt: agencyOrganizations.createdAt,
+      relationshipStatus: agencyClients.status,
+      linkedAt: agencyClients.createdAt,
     })
-    .from(agencyOrganizations)
-    .innerJoin(companies, eq(companies.id, agencyOrganizations.agencyCompanyId))
-    .where(and(eq(agencyOrganizations.clientCompanyId, clientCompanyId), eq(agencyOrganizations.status, "active")))
+    .from(agencyClients)
+    .innerJoin(companies, eq(companies.id, agencyClients.agencyCompanyId))
+    .where(
+      and(
+        eq(agencyClients.clientCompanyId, clientCompanyId),
+        inArray(agencyClients.status, CLAIMED_AGENCY_CLIENT_STATUSES),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }

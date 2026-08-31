@@ -119,25 +119,30 @@ export const companies = crm.table("companies", {
 // row - typically accountType "individual", but nothing here requires
 // that - that happens to have a row here pointing at it.
 //
-// Both sides reference `companies.id` (an agency and its client are each a
-// first-class tenant/organization in their own right, with their own
-// users/branches/campaigns/leads) - this table only records the
-// relationship between two organizations, never merges their data or
-// their tenant isolation. Wiring actual cross-tenant access (an agency
-// user being able to act inside a client's tenant) is a separate, later
-// phase - same "schema now, pipeline wiring later" split already used for
-// meta_connections/meta_pages above when tenant-level Meta auth was added.
-export const agencyOrganizations = crm.table(
-  "agency_organizations",
+// Both sides reference `companies.id`, this schema's own tenant/
+// organization table (an agency and its client are each a first-class
+// tenant in their own right, with their own users/branches/campaigns/
+// leads) - "organization" in the product/requirements vocabulary IS
+// "company" in this codebase's, same mapping already established for
+// companies.accountType. This table only records the relationship between
+// two organizations, never merges their data or their tenant isolation.
+// Wiring actual cross-tenant access (an agency user being able to act
+// inside a client's tenant) is a separate, later phase - same "schema now,
+// pipeline wiring later" split already used for meta_connections/
+// meta_pages above when tenant-level Meta auth was added.
+export const agencyClients = crm.table(
+  "agency_clients",
   {
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
     clientCompanyId: uuid("client_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    // "active" | "revoked" - not a DB enum, same convention as every other
-    // status column in this schema. Revoking never deletes the row (see
-    // the partial unique index below) - same "keep history, don't delete"
-    // posture as meta_connections' own revoked/error rows.
-    status: text("status").notNull().default("active"),
+    // "invited" | "pending" | "active" | "suspended" | "removed" - see
+    // src/domain/agencyClientStatus.ts for the fixed catalog. Not a DB
+    // enum, same convention as every other status column in this schema.
+    // A status TRANSITION is an UPDATE on this same row, never a new row -
+    // see the composite unique index below, which is what makes that true
+    // rather than just a convention someone could accidentally violate.
+    status: text("status").notNull().default("invited"),
     // The (typically agency-side) user who created this link. Nullable +
     // ON DELETE SET NULL - that user being removed later must never delete
     // the relationship itself.
@@ -146,20 +151,33 @@ export const agencyOrganizations = crm.table(
     updatedAt: timestamp("updated_at", { withTimezone: true }),
   },
   (t) => ({
-    agencyIdx: index("ix_agency_organizations_agency_company_id").on(t.agencyCompanyId),
-    clientIdx: index("ix_agency_organizations_client_company_id").on(t.clientCompanyId),
-    // THE cardinality rule: a client organization has at most one ACTIVE
-    // managing agency at a time (confirmed - not many-to-many). A partial
-    // unique index (not a plain unique on clientCompanyId) so a client can
-    // be re-linked to a different agency later, or unlinked and relinked
-    // to the same one, without deleting the earlier relationship's history
-    // - identical pattern to meta_connections.ux_meta_connections_one_active_per_tenant
-    // and meta_pages.ux_meta_pages_one_selected_per_tenant above.
-    oneActiveAgencyPerClientIdx: uniqueIndex("ux_agency_organizations_one_active_per_client")
+    agencyIdx: index("ix_agency_clients_agency_company_id").on(t.agencyCompanyId),
+    clientIdx: index("ix_agency_clients_client_company_id").on(t.clientCompanyId),
+    // One row EVER per (agency, client) pair - re-engaging after "removed"
+    // reactivates this same row (see linkOrReactivateClient in
+    // src/infrastructure/db/repositories/organizations.ts, an INSERT ...
+    // ON CONFLICT DO UPDATE keyed on exactly this index), it never inserts
+    // a second one. This is what "agency_id + client_id must be unique"
+    // means in practice: the pair's entire history lives in one row's
+    // status column, not across multiple rows.
+    agencyClientPairIdx: uniqueIndex("ux_agency_clients_agency_client").on(t.agencyCompanyId, t.clientCompanyId),
+    // THE cardinality rule: a client organization can be actively (in any
+    // non-"removed" sense - invited, pending, active, or suspended) claimed
+    // by at most one agency at a time (confirmed - not many-to-many); only
+    // "removed" frees a client to be invited by a different agency. A
+    // partial unique index (not a plain unique on clientCompanyId alone) so
+    // a client's full relationship history with every agency it has ever
+    // been connected to stays queryable - same pattern as
+    // meta_connections.ux_meta_connections_one_active_per_tenant and
+    // meta_pages.ux_meta_pages_one_selected_per_tenant above. Listed as a
+    // positive enumeration (not "status <> 'removed'") so adding a further
+    // terminal status later can't silently start occupying this slot by
+    // accident - it has to be a conscious edit here.
+    oneClaimedAgencyPerClientIdx: uniqueIndex("ux_agency_clients_one_claimed_agency_per_client")
       .on(t.clientCompanyId)
-      .where(sql`status = 'active'`),
+      .where(sql`status IN ('invited', 'pending', 'active', 'suspended')`),
     // An organization can never be its own client.
-    notSelfLinkCheck: check("ck_agency_organizations_not_self", sql`${t.agencyCompanyId} <> ${t.clientCompanyId}`),
+    notSelfLinkCheck: check("ck_agency_clients_not_self", sql`${t.agencyCompanyId} <> ${t.clientCompanyId}`),
   }),
 );
 
