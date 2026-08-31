@@ -1,11 +1,41 @@
-node_modules/
-.vercel/
-dist/
+# Security hardening: this repo's own .env / .env.local files (Neon
+# connection strings, AUTH_JWT_SECRET, ENCRYPTION_KEY, Twilio/WhatsApp
+# tokens, Meta app secret, CRON_SECRET, ...) were sitting in the project
+# root with NO .gitignore at all - a single `git add .` on a real clone of
+# this project would have committed every one of those secrets straight
+# into git history, where deleting the file afterward does NOT remove it
+# (history rewriting/secret rotation would then be required). This file
+# closes that gap. Only .env.example (a template with no real values) is
+# meant to ever be committed.
+
+# Environment variables / secrets - never commit real values.
 .env
 .env.local
-*.log
-.DS_Store
+.env.*.local
+.env.development
+.env.production
+.env.test
 
-.vercel
-.env*
-_to_delete/
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.vercel/
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Editor/OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Coverage / test artifacts
+coverage/

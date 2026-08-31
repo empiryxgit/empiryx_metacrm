@@ -162,7 +162,11 @@ export async function listUsers(companyId: string) {
 export async function updateUser(
   companyId: string,
   userId: string,
-  input: { roleId?: string; status?: string; fullName?: string },
+  // phoneNumber: E.164 delivery address for smart-follow-up WhatsApp/SMS
+  // nudges (see schema.ts's own comment on users.phoneNumber) - null clears
+  // it, undefined leaves it untouched, same convention as every other
+  // optional field here.
+  input: { roleId?: string; status?: string; fullName?: string; phoneNumber?: string | null },
 ) {
   const db = await getDb();
   await db
@@ -228,6 +232,28 @@ export async function getActiveSessionByHash(refreshTokenHash: string) {
     .limit(1);
   if (!row || row.revokedAt || row.expiresAt < new Date()) return null;
   return row;
+}
+
+// Security hardening: unlike getActiveSessionByHash above, this returns the
+// row regardless of revoked/expired state - used ONLY by refresh()'s reuse
+// detection (src/application/auth.ts) to tell "this refresh token was never
+// issued" apart from "this refresh token WAS issued, but has already been
+// rotated out." The latter is the signal that matters: refresh tokens are
+// rotated on every use (see revokeSession in refresh()), so a legitimate
+// client only ever presents the CURRENT one - a revoked token being replayed
+// means either a client bug/race, or that the token leaked and an attacker
+// (or the original client, whichever got there second) is now racing the
+// rightful owner for it. Either way, the safe response is to burn every
+// session for that user, not just silently 401 the replay and let whichever
+// side "won" the rotation keep going unnoticed.
+export async function getSessionByHashIncludingRevoked(refreshTokenHash: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.refreshTokenHash, refreshTokenHash))
+    .limit(1);
+  return row ?? null;
 }
 
 export async function revokeSession(sessionId: string) {

@@ -180,3 +180,69 @@ export async function setCachedCampaignInsights(tenantId: string, metaCampaignId
     console.warn(`[campaign-insights] Redis unavailable while writing cache for ${metaCampaignId}:`, err);
   }
 }
+
+// ---------------------------------------------------------------------
+// Smart follow-up nudge dedup (see api/internal/handler.ts's
+// "followup-nudges" action). Vercel's own daily Cron on Hobby has no
+// exactly-once guarantee (a redeploy, a manual re-trigger via the
+// dashboard, or a retried invocation could all fire the same day's sweep
+// twice) - this is a claim, same NX/EX shape as tryClaimLeadId above, that
+// keeps one agent from getting the same day's WhatsApp/SMS nudge more than
+// once. Same fail-open posture as the rest of this file: if Redis is
+// down, the nudge just might send twice in the same day rather than the
+// whole run being blocked over a cache outage - an occasional duplicate
+// text is a far smaller problem than silently never nudging anyone.
+// ---------------------------------------------------------------------
+
+const NUDGE_KEY_PREFIX = "followupnudge:";
+
+export async function tryClaimFollowUpNudge(ownerId: string, dateKey: string, ttlSeconds = 60 * 60 * 26): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const result = await redis.set(`${NUDGE_KEY_PREFIX}${dateKey}:${ownerId}`, "1", { nx: true, ex: ttlSeconds });
+    return result === "OK";
+  } catch (err) {
+    console.warn(`[followup-nudge] Redis unavailable, failing open for owner ${ownerId}:`, err);
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Security hardening - fixed-window rate limiting for the auth endpoints
+// (api/auth/handler.ts's login/register/refresh/change-password). A simple
+// INCR-then-EXPIRE counter per key, same "fail OPEN on Redis errors" posture
+// as every other helper in this file: an Upstash outage degrades this
+// deployment back to "no rate limiting" rather than locking every tenant
+// out of login entirely, which would be a far worse outage than the brute-
+// force window it's meant to close. bcrypt's own ~12-round cost already
+// bounds a single guess to well over 100ms even without this, so a Redis
+// outage is a temporary widening of the window, never an open door.
+//
+// `key` should already be fully scoped by the caller (e.g. an IP address,
+// or "ip:email") - this helper itself only namespaces it so auth rate-limit
+// counters can never collide with any other key this file manages.
+// ---------------------------------------------------------------------
+
+const RATE_LIMIT_KEY_PREFIX = "ratelimit:";
+
+/** Returns true when the caller is still within `limit` calls per
+ * `windowSeconds` for this key, incrementing the counter as a side effect;
+ * false once the window's limit has been exceeded (the caller should
+ * respond 429). */
+export async function checkRateLimit(key: string, limit: number, windowSeconds: number): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const fullKey = RATE_LIMIT_KEY_PREFIX + key;
+    const count = await redis.incr(fullKey);
+    if (count === 1) {
+      // Only the request that actually created the counter sets its
+      // expiry, so a burst of concurrent requests can't each reset the
+      // window and keep it alive forever.
+      await redis.expire(fullKey, windowSeconds);
+    }
+    return count <= limit;
+  } catch (err) {
+    console.warn(`[rate-limit] Redis unavailable, failing open for ${key}:`, err);
+    return true;
+  }
+}

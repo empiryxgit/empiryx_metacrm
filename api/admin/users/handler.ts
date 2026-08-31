@@ -21,6 +21,7 @@ import {
 } from "../../../src/infrastructure/db/repositories/tenancy";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
+import { isValidE164 } from "../../../src/domain/phoneNumber";
 import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
 import { resolveBranchAccess } from "../../../src/application/branchAccess";
 import {
@@ -150,6 +151,7 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
       fullName: user.fullName,
       email: user.email,
       status: user.status,
+      phoneNumber: user.phoneNumber,
       lastLoginAt: user.lastLoginAt,
       createdAt: user.createdAt,
       mustChangePassword: user.mustChangePassword,
@@ -173,11 +175,30 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
   const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
   if (!auth) return;
 
+  // Tenant-isolation hardening: previously this branch went straight to
+  // updateUser() below, which IS correctly scoped by companyId (a
+  // cross-tenant userId simply matches zero rows there - no data was ever
+  // written or leaked) - but nothing here checked existence/ownership
+  // FIRST, so a PATCH aimed at another company's userId silently fell
+  // through the "everything below is a no-op" path and still came back
+  // `200 {"updated": true}`, a misleading success response for a request
+  // that changed nothing. Checking company ownership up front, the same
+  // way handleView (GET) already does, makes this endpoint respond
+  // consistently (404) for a userId outside the caller's own company
+  // instead of only being safe by accident of how the UPDATE's WHERE
+  // clause happens to be written.
+  const existingTarget = await getUserById(userId);
+  if (!existingTarget || existingTarget.companyId !== auth.companyId) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+
   if (req.method === "PATCH") {
-    const { roleId, status, fullName } = (req.body ?? {}) as {
+    const { roleId, status, fullName, phoneNumber } = (req.body ?? {}) as {
       roleId?: string;
       status?: string;
       fullName?: string;
+      phoneNumber?: string | null;
     };
 
     if (roleId) {
@@ -188,23 +209,35 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
       }
     }
 
+    // Smart follow-up nudges dial this number directly (Twilio WhatsApp/
+    // SMS) - reject anything that isn't even plausibly E.164 up front with
+    // a clear 400, rather than silently storing junk that only surfaces as
+    // an opaque Twilio send failure in the once-a-day cron's logs.
+    const trimmedPhone = phoneNumber === undefined ? undefined : phoneNumber?.trim() || null;
+    if (trimmedPhone && !isValidE164(trimmedPhone)) {
+      res.status(400).json({ error: "phoneNumber must be in E.164 format, e.g. +14155238886." });
+      return;
+    }
+
     // Guard rail: don't allow disabling or re-roling the last active user
     // who holds a role capable of managing users - that would permanently
     // lock the company out of its own admin panel.
     if (status === "disabled" || roleId) {
-      const target = await getUserById(userId);
-      if (target) {
-        const others = await countOtherActiveUsersWithRole(auth.companyId, target.roleId, userId);
-        const targetRole = await getRoleById(auth.companyId, target.roleId);
-        const targetManagesUsers = ((targetRole?.permissions as string[]) ?? []).includes(PERMISSIONS.USERS_MANAGE);
-        if (targetManagesUsers && others === 0) {
-          res.status(409).json({ error: "Cannot disable or re-role the last admin who can manage users." });
-          return;
-        }
+      const others = await countOtherActiveUsersWithRole(auth.companyId, existingTarget.roleId, userId);
+      const targetRole = await getRoleById(auth.companyId, existingTarget.roleId);
+      const targetManagesUsers = ((targetRole?.permissions as string[]) ?? []).includes(PERMISSIONS.USERS_MANAGE);
+      if (targetManagesUsers && others === 0) {
+        res.status(409).json({ error: "Cannot disable or re-role the last admin who can manage users." });
+        return;
       }
     }
 
-    await updateUser(auth.companyId, userId, { roleId, status, fullName });
+    await updateUser(auth.companyId, userId, {
+      roleId,
+      status,
+      fullName,
+      phoneNumber: trimmedPhone,
+    });
     res.status(200).json({ updated: true });
     return;
   }

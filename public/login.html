@@ -344,8 +344,17 @@
       } catch (err) {
         // Never surface the raw API/technical error - a generic message avoids
         // leaking whether an account exists and keeps this consistent for any
-        // failure mode (bad credentials, network issue, server error).
-        showBanner("Unable to sign in. Please check your email and password and try again.");
+        // failure mode (bad credentials, network issue, server error). The
+        // one deliberate exception is a 429 (see api/auth/handler.ts's
+        // checkRateLimit calls) - that response never depends on whether
+        // the email exists, so it's safe to say plainly rather than telling
+        // someone who's just being rate-limited to go double-check a
+        // password that was never the problem.
+        showBanner(
+          err.status === 429
+            ? err.message
+            : "Unable to sign in. Please check your email and password and try again.",
+        );
         submitting = false;
         submitBtn.disabled = false;
         btnText.textContent = "Sign in";

@@ -23,7 +23,8 @@ This document explains what the system does, how data flows through it end to en
 11. [Deploying to production (all free tier)](#deploying-to-production-all-free-tier)
 12. [Key endpoints](#key-endpoints)
 13. [n8n](#n8n)
-14. [Tests](#tests)
+14. [Security hardening](#security-hardening)
+15. [Tests](#tests)
 
 ---
 
@@ -205,6 +206,25 @@ A few deliberate choices:
 
 ---
 
+## Smart follow-up (v1)
+
+Two independent pieces, both built natively into this codebase — **no n8n or other external automation tool involved** (see the reasoning at the end of this section).
+
+**1. Auto-cold after 5 unanswered follow-ups** (`src/domain/followUpStreak.ts`). Every time an agent logs a follow-up on the Pipeline board's lead-detail popup, `leads.no_response_streak` is updated: an outcome of "No Answer" or "Left Voicemail" increments it, any other outcome resets it to zero. The moment the streak crosses 5 (`AUTO_COLD_THRESHOLD`), that lead's `qualityLabel` flips to `"cold"` — the same hot/warm/cold/likely_fake badge the AI lead-scoring feature (`src/domain/leadQuality.ts`) already renders on Pipeline cards, so there is no separate UI concept to learn. This is edge-triggered (fires once per crossing, not on every subsequent no-response log) and never overrides an existing `"likely_fake"` label, which is a stronger, data-quality-based signal.
+
+**2. Due-follow-up reminders.** The Pipeline board highlights each card's "Follow-up" chip amber when due today and red when overdue, plus a "Follow-up" filter to pull up exactly those leads — no extra page, ships in the board agents already work from. A daily cron (`api/internal/handler.ts`'s `followup-nudges` action, `src/application/followUpNudges.ts`) additionally sweeps every company once a day for leads whose follow-up is due-or-overdue, groups them by assigned agent, and sends each agent one WhatsApp message summarizing theirs, via **Twilio's WhatsApp API** (`src/infrastructure/notifications/twilioWhatsApp.ts`) — the configured default for this deployment:
+
+- **Get testing immediately with Twilio's Sandbox.** Set `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` from the Twilio Console, and `TWILIO_WHATSAPP_FROM=+14155238886` (Twilio's fixed shared sandbox number). Each agent sends a one-time WhatsApp "join &lt;code&gt;" text to that number first (your Console's WhatsApp Sandbox page shows the exact code and a scannable QR) — after that, they receive nudges as plain text with zero approval process.
+- **Go to production with your own WhatsApp Sender + an approved template.** WhatsApp's Business Platform (which Twilio sits on top of, same as Meta's own Cloud API) only allows a business to message someone OUTSIDE a live 24-hour conversation using a **Meta-approved message template** — a nudge the agent didn't start is always outside that window. Register a real WhatsApp Sender (Twilio Console → Messaging → Senders) and build/submit one Content Template (Messaging → Content Template Builder); once approved, set `TWILIO_WHATSAPP_CONTENT_SID` and swap `TWILIO_WHATSAPP_FROM` to your own number — no code change either time. This is a WhatsApp/Meta review requirement, not a Twilio limitation, so it applies identically whether you go through Twilio or Meta's Cloud API directly.
+- Two other channels remain available behind the same interface if you'd rather not deal with WhatsApp's approval process at all, or prefer to manage your own WhatsApp Business Account outside Twilio — plain **Twilio SMS** (`TWILIO_FROM_NUMBER` instead of `TWILIO_WHATSAPP_FROM`, no template process at all) and **WhatsApp via Meta's Cloud API directly** (`WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID`/`WHATSAPP_TEMPLATE_NAME`, bypassing Twilio). See `.env.example` and `src/infrastructure/notifications/index.ts` for the exact precedence.
+- Nothing configured → the cron still runs and logs a summary, it just sends nothing. An agent's WhatsApp/SMS number is set per-user from **Manage Users → (View) → Smart follow-up nudges**.
+
+Deployment is exactly the same as every other cron in this project: registered in `vercel.json`'s `crons` array (`30 2 * * *`, i.e. 2:30am UTC — adjust to your agents' timezone/working hours), authorized with the same `CRON_SECRET` bearer token reconciliation's fallback cron already uses. Vercel Hobby's cron restrictions (once/day, ±59 min timing precision, [confirmed current as of mid-2026](https://vercel.com/docs/cron-jobs/usage-and-pricing)) are a non-issue here since a once-a-day nudge is the intended cadence anyway — unlike reconciliation, this one never needed QStash's tighter scheduling.
+
+**Why not n8n?** n8n is a workflow-automation platform that runs as its own persistent server process — it does not deploy onto Vercel's serverless functions the way the rest of this project does, so adopting it here would mean standing up and operating an entirely separate service (n8n Cloud, or self-hosted on Railway/Render/Fly.io/a small VPS via Docker), wiring it to this CRM over webhooks/polling, and maintaining that extra piece of infrastructure indefinitely. For a single, well-defined trigger → message flow like this one, that's meaningfully more operational surface than a ~150-line Vercel function using infrastructure (Postgres, Upstash Redis, Vercel Cron) this project already runs — consistent with this README's existing [n8n](#n8n) section, which deliberately keeps n8n outside the critical path as a read-only, best-effort consumer, never something core CRM behavior depends on. n8n remains a good choice if you later want a non-engineer on the team to visually edit multi-channel notification rules (WhatsApp → SMS fallback → Slack, say) without a code deploy — that's a real, different use case from this one.
+
+---
+
 ## Multi-tenancy & data model
 
 Every tenant's data lives in the same Postgres database, isolated by a `company_id` foreign key on every tenant-scoped table — there is no per-tenant database or schema. Application-layer checks (never just UI-level) enforce that a user can only ever read or write rows belonging to their own company.
@@ -278,7 +298,7 @@ Vercel's Hobby plan caps a project at **12 serverless functions**. RUTA has far 
 | `api/dashboard/index.ts` | dashboard summary data |
 | `api/admin/roles/handler.ts` | role management |
 | `api/admin/users/handler.ts` | user management, branches |
-| `api/internal/handler.ts` | process-lead (QStash job target), reconciliation (QStash job target), dead-letter handling |
+| `api/internal/handler.ts` | process-lead (QStash job target), reconciliation (QStash job target), followup-nudges (Vercel Cron target), dead-letter handling |
 | `api/system.ts` | health check, monitoring metrics, permission catalog |
 
 Each handler has its own `maxDuration` tuned to what it actually needs (the webhook and internal-job handlers get up to 60s for Graph API round-trips; most user-facing endpoints run at 10–15s).
@@ -357,13 +377,30 @@ All routes below are the clean, public-facing paths — `vercel.json` rewrites e
 | Dashboard | `GET /api/dashboard` |
 | Admin | `GET/POST /api/admin/roles`, `/api/admin/roles/:roleId`, `/api/admin/users`, `/api/admin/users/:userId` |
 | Branches | `GET /api/branches/mine`, `/company-users`, full CRUD under `/api/branches` |
-| Internal (QStash job targets, not public) | `POST /api/internal/process-lead`, `/api/internal/reconciliation`, `/api/internal/dead-letter` |
+| Internal (QStash/Vercel Cron job targets, not public) | `POST /api/internal/process-lead`, `/api/internal/reconciliation`, `/api/internal/followup-nudges`, `/api/internal/dead-letter` |
 
 ---
 
 ## n8n
 
 n8n is intentionally kept outside the critical path. It should poll `GET /api/leads` (with a `?status=` filter) or a similar read endpoint, rather than receiving the Meta webhook directly — that way n8n being slow or down can never block or lose a lead.
+
+---
+
+## Security hardening
+
+The auth/session stack was already: bcrypt (cost 12) password hashing, opaque refresh tokens (only their SHA-256 hash is ever persisted), short-lived signed JWT access tokens, and `HttpOnly; SameSite=Lax; Secure` (production) cookies with a server-authoritative TTL a client can never extend. A dedicated security review on top of that (see `docs/SECURITY_TEST_CASES.md` for the full test-case checklist) found and closed the following gaps:
+
+- **Brute-force / credential-stuffing protection.** `POST /api/auth/login`, `/register`, `/refresh` and `/change-password` are now rate-limited (Upstash Redis fixed-window counters, `src/infrastructure/cache/redis.ts`'s `checkRateLimit`) — login is capped both per `(IP, email)` pair and per IP alone, so neither "guess one account's password repeatedly" nor "spray one guess across many emails" goes unbounded. Fails open on a Redis outage (same posture as this file's other caches) rather than locking every tenant out of login over a cache-layer blip.
+- **Refresh-token reuse detection.** Refresh tokens rotate on every use; presenting an already-rotated-out (revoked) token now revokes **every** session for that user, not just that one request — the standard defense against a leaked refresh token quietly riding alongside the legitimate session indefinitely. See `refresh()` in `src/application/auth.ts` and `src/security/refreshTokenReuse.test.ts`.
+- **Login timing side-channel.** `POST /api/auth/login` previously skipped the (comparatively slow) bcrypt comparison entirely when the email didn't match any account, making "no such account" measurably faster than "wrong password" — enough to enumerate valid emails from response timing alone. It now always runs a bcrypt comparison, against a fixed dummy hash when there's no real one to check.
+- **JWT algorithm pinning.** `verifyAccessToken` now explicitly restricts accepted signing algorithms to `HS256` rather than accepting whatever the token claims, as defense-in-depth against algorithm-confusion attacks.
+- **Constant-time cron-secret comparison.** `isAuthorizedVercelCron` (`api/internal/handler.ts`) compared the `Authorization` header with plain `===`, which leaks how many leading bytes matched via timing. Now uses `crypto.timingSafeEqual` on equal-length buffers.
+- **Admin user-management IDOR/consistency gap.** `PATCH /api/admin/users/{userId}` writes were always correctly scoped to the caller's own company at the database layer (a cross-tenant `userId` matched zero rows), but the endpoint never checked that up front, so it returned a misleading `200 {"updated": true}` for another tenant's user id instead of `404`. It now checks company ownership first, matching the existing `GET` (view) behavior.
+- **Phone number validation.** `users.phoneNumber` (the smart-follow-up nudge recipient) is now validated as E.164 (`src/domain/phoneNumber.ts`) before being saved, so a malformed number fails fast with a clear `400` instead of surfacing only as an opaque Twilio error in the once-a-day nudge cron's logs.
+- **Secrets hygiene.** The repo had no `.gitignore` at all, despite `.env`/`.env.local` (real Neon/Twilio/Meta/JWT secrets) sitting in the project root — a single `git add .` on a real clone would have committed them into git history. Added a `.gitignore` covering every env file variant, `node_modules/`, build output, and editor/OS cruft.
+
+Reviewed and confirmed already sound (no change needed): tenant isolation on every lead/branch/campaign read and write (company id **and** branch access enforced in the same `WHERE` clause as the mutation, never checked-then-trusted separately — see `src/security/tenantIsolation.test.ts`), cookie flags and TTL enforcement, no CORS headers anywhere in the app (same-origin only), and no secrets ever logged by the Twilio/WhatsApp notification adapters.
 
 ---
 
@@ -380,3 +417,8 @@ Runs the Vitest suite, organized around **flow-level** tests rather than isolate
 - `src/application/metaSync/sync.flow.test.ts` — Page/campaign/ad/form sync after a Meta connection.
 - `src/application/leadCreation.flow.test.ts` — end-to-end lead ingestion and idempotency (duplicate webhook/QStash deliveries never create duplicate leads).
 - `src/application/failureRecovery.flow.test.ts` — reconciliation recovering leads after a simulated publish/delivery failure.
+- `src/security/tenantIsolation.test.ts` — Tenant A → Tenant B data must always come back unauthorized/not found, across every Meta record type plus leads.
+- `src/security/refreshTokenReuse.test.ts` — refresh-token rotation, and replaying a retired refresh token revoking the entire session family (see "Security hardening" above).
+- `src/domain/phoneNumber.test.ts`, `src/domain/followUpStreak.test.ts`, `src/domain/leadQuality.test.ts`, `src/infrastructure/meta/verifySignature.test.ts` — pure-logic unit tests needing no database.
+
+The two `src/security/*.test.ts` files need a real `DATABASE_URL` (see below) and skip cleanly without one; everything else runs with no external services at all. For the full manual/QA security test-case checklist (session/cookie tampering, rate limiting, IDOR, notification secrets, etc.), see `docs/SECURITY_TEST_CASES.md`.

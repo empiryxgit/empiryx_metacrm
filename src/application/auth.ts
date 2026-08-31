@@ -10,6 +10,8 @@ import {
   touchLastLogin,
   createSession,
   getActiveSessionByHash,
+  getSessionByHashIncludingRevoked,
+  revokeAllSessionsForUser,
   revokeSession,
 } from "../infrastructure/db/repositories/tenancy";
 import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
@@ -151,13 +153,25 @@ export interface AuthTokens {
   user: { id: string; email: string; fullName: string; companyId: string; mustChangePassword: boolean };
 }
 
+// Fixed, valid bcrypt hash of a value nobody will ever type in - used only
+// to give verifyPassword() something to actually hash-and-compare against
+// when no account matches the submitted email (see login() below). This is
+// NOT a real credential and matches no account.
+const NO_SUCH_USER_DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8w5aM/8FEEB0m5cWZUvVs5FivmyaVW";
+
 export async function login(input: LoginInput): Promise<AuthTokens> {
   const user = await getUserByEmail(input.email);
-  if (!user || user.status !== "active") {
-    throw new AuthError("Invalid email or password.", 401);
-  }
-  const valid = await verifyPassword(input.password, user.passwordHash);
-  if (!valid) {
+  // Security hardening: always run a bcrypt comparison, even when no
+  // account matches the email, against a fixed dummy hash. bcrypt.compare
+  // dominates this handler's response time (tens of milliseconds vs. a
+  // sub-millisecond lookup miss), so skipping it for a nonexistent email -
+  // as the previous "return early on !user" version did - made "no such
+  // account" measurably faster than "wrong password," letting an attacker
+  // enumerate valid emails purely from response timing without ever
+  // seeing a different error message. Both branches now do the same work
+  // and return the exact same generic error either way.
+  const valid = await verifyPassword(input.password, user?.passwordHash ?? NO_SUCH_USER_DUMMY_HASH);
+  if (!user || user.status !== "active" || !valid) {
     throw new AuthError("Invalid email or password.", 401);
   }
 
@@ -208,6 +222,24 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
   const hash = hashRefreshToken(refreshToken);
   const session = await getActiveSessionByHash(hash);
   if (!session) {
+    // Security hardening - refresh token reuse detection. Refresh tokens
+    // rotate on every single use (see the revokeSession call below), so a
+    // legitimate client only ever presents the ONE most recently issued
+    // token. If the hash presented here matches a session that DOES exist
+    // but is already revoked, that token has already been used once before
+    // - either a client-side race (rare, and self-corrects on next login)
+    // or, more importantly, a leaked refresh token being replayed by
+    // someone who isn't the current legitimate holder of it. Either way,
+    // OWASP's guidance for rotation-based refresh tokens is the same: treat
+    // reuse of a retired token as a compromise signal and burn the ENTIRE
+    // session family for that user, not just this one 401 - this is what
+    // actually stops a stolen-but-not-yet-detected refresh token from
+    // quietly staying valid indefinitely alongside the legitimate user's.
+    const stale = await getSessionByHashIncludingRevoked(hash);
+    if (stale && stale.revokedAt) {
+      console.warn(`[auth] Refresh token reuse detected for user ${stale.userId} - revoking all sessions.`);
+      await revokeAllSessionsForUser(stale.userId);
+    }
     throw new AuthError("Session expired or revoked. Please log in again.", 401);
   }
 

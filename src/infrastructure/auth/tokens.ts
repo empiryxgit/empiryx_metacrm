@@ -76,7 +76,15 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
 
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    // Security hardening: pin the accepted algorithm explicitly rather than
+    // trusting whatever `alg` the token itself claims. jose already refuses
+    // to verify an asymmetric-alg token against this symmetric secret, but
+    // being explicit here is cheap defense-in-depth against any future
+    // change to how the secret is provisioned (e.g. if it were ever swapped
+    // for a key type jose would otherwise accept a wider algorithm family
+    // for) - a tampered/forged token can never satisfy this by picking a
+    // different, weaker algorithm.
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
     return payload as unknown as AccessTokenClaims;
   } catch {
     return null;

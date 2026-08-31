@@ -34,11 +34,37 @@ import {
 } from "../../src/infrastructure/db/repositories/tenancy";
 import { hashPassword, verifyPassword } from "../../src/infrastructure/auth/password";
 import { ALL_PERMISSIONS } from "../../src/domain/permissions";
+import { checkRateLimit } from "../../src/infrastructure/cache/redis";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
   if (Array.isArray(segments)) return segments[0] ?? "";
   return typeof segments === "string" ? segments : "";
+}
+
+function getClientIp(req: VercelRequest): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  return (first?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown").toLowerCase();
+}
+
+// Security hardening: brute-force / credential-stuffing protection on the
+// auth endpoints, via the same Upstash Redis this deployment already uses
+// for idempotency (src/infrastructure/cache/redis.ts's checkRateLimit) -
+// fixed-window counters, fail OPEN on a Redis outage (see that file's own
+// comment on why). Two layers on login specifically: a tight per-IP+email
+// limit (catches someone hammering one target account) and a looser
+// per-IP-only limit (catches spraying many different emails from one
+// source, which the first limit alone would never trip). Sends 429 with a
+// generic message either way - never reveals which layer tripped, since
+// that alone would leak whether the email exists.
+async function enforceRateLimit(res: VercelResponse, key: string, limit: number, windowSeconds: number): Promise<boolean> {
+  const allowed = await checkRateLimit(key, limit, windowSeconds);
+  if (!allowed) {
+    res.status(429).json({ error: "Too many attempts. Please wait a few minutes and try again." });
+    return false;
+  }
+  return true;
 }
 
 // THE single place both auth cookies get set, from register/login/refresh
@@ -108,6 +134,10 @@ async function handleRegister(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  // Per-IP only (there's no existing account yet to key a tighter limit
+  // off of) - bounds automated mass account creation / spam signups.
+  if (!(await enforceRateLimit(res, `register:${getClientIp(req)}`, 8, 60 * 60))) return;
+
   try {
     await registerCompanyAndOwner(body);
 
@@ -150,6 +180,16 @@ async function handleLogin(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  const ip = getClientIp(req);
+  const normalizedEmail = email.trim().toLowerCase();
+  // Tight limit per (ip, email) pair - a few genuine typos are fine, this
+  // is meant to stop repeated guessing against ONE target account.
+  if (!(await enforceRateLimit(res, `login:${ip}:${normalizedEmail}`, 8, 15 * 60))) return;
+  // Looser limit per IP alone - catches one source spraying guesses across
+  // MANY different email addresses, which the per-account limit above
+  // would never trip since no single email gets hit often enough.
+  if (!(await enforceRateLimit(res, `login-ip:${ip}`, 30, 15 * 60))) return;
+
   try {
     const tokens = await login({
       email,
@@ -191,6 +231,13 @@ async function handleRefresh(req: VercelRequest, res: VercelResponse) {
     res.status(401).json({ error: "No refresh token." });
     return;
   }
+
+  // Refresh tokens are 256 bits of random data - brute-forcing one
+  // directly is not a realistic threat. This limit exists as defense in
+  // depth against a compromised/scripted client hammering this endpoint
+  // (each legitimate browser fires it at most a couple of times an hour,
+  // driven by the 60-minute access-token TTL), not against guessing.
+  if (!(await enforceRateLimit(res, `refresh:${getClientIp(req)}`, 30, 15 * 60))) return;
 
   try {
     const tokens = await refresh(refreshToken);
@@ -283,6 +330,13 @@ async function handleChangePassword(req: VercelRequest, res: VercelResponse) {
 
   const auth = await requireAuth(req, res);
   if (!auth) return;
+
+  // Keyed on the authenticated user, not the IP - this endpoint requires a
+  // valid session already, so the thing worth bounding is someone with a
+  // stolen/idle session trying to brute-force the CURRENT password (e.g.
+  // to lock the real owner out by changing it, or because they don't know
+  // it but rode along on a hijacked cookie).
+  if (!(await enforceRateLimit(res, `change-password:${auth.userId}`, 8, 15 * 60))) return;
 
   const { currentPassword, newPassword } = (req.body ?? {}) as { currentPassword?: string; newPassword?: string };
   if (!newPassword || newPassword.length < 10) {
