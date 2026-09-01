@@ -275,14 +275,24 @@
       { label: "Total Leads", value: kpis.totalLeads.value, delta: deltaBadge(kpis.totalLeads.deltaPct), note: "vs " + rangeNoteLabel() + " ago" },
       { label: "New Leads", value: kpis.newLeads.value, delta: deltaBadge(kpis.newLeads.deltaPct), note },
       { label: "Qualified Leads", value: kpis.qualified.value, delta: deltaBadge(kpis.qualified.deltaPct), note },
-      { label: template.milestoneLabel, value: kpis.milestone.value, delta: deltaBadge(kpis.milestone.deltaPct), note },
+      // Only shown when the company's industry template actually defines a
+      // milestone stage (e.g. Site Visits for Real Estate) - template.
+      // milestoneLabel is "" for the General/Custom templates (see
+      // industryTemplates.ts's own comment: "the dashboard simply omits
+      // that KPI card rather than rendering an empty-labeled one"). Omitted
+      // here via a falsy `label` rather than always pushed, so a company
+      // with no industry-specific milestone never sees a blank-labeled "0"
+      // tile - see the bug this fixes: it used to render one anyway.
+      template.milestoneLabel
+        ? { label: template.milestoneLabel, value: kpis.milestone.value, delta: deltaBadge(kpis.milestone.deltaPct), note }
+        : null,
       { label: "Won", value: kpis.won.value, tone: "success", delta: deltaBadge(kpis.won.deltaPct), note },
       {
         label: "Conversion Rate", value: kpis.conversionRate.value + "%",
         delta: `<span class="kpi-delta ${kpis.conversionRate.deltaPoints > 0 ? "up" : kpis.conversionRate.deltaPoints < 0 ? "down" : "flat"}">${kpis.conversionRate.deltaPoints > 0 ? "+" : ""}${kpis.conversionRate.deltaPoints} pts</span>`,
         note,
       },
-    ];
+    ].filter(Boolean);
     document.getElementById("kpiGrid").innerHTML = cards.map(c => `
       <div class="kpi-card ${c.tone ? "is-" + c.tone : ""}">
         <div class="kpi-label">${App.escapeHtml(c.label)}</div>
@@ -645,15 +655,36 @@
     }
 
     const totalLeads = dashboardData?.kpis?.totalLeads?.value ?? dashboardData?.leadsTotal ?? 0;
+    // `href` is the page a pending item's row links to so the user can go
+    // complete it directly from here, per the reported request ("any
+    // pending steps will have url... where user will click on it").
+    // Always-done items (business profile, pipeline) never render as
+    // pending so their `href` is irrelevant and left null. "Lead sources
+    // configured" links to Business Configuration - it's the general
+    // settings hub the onboarding flow itself points back to for anything
+    // set during setup (see docs/individual-user-manual.md section 8);
+    // there's no dedicated lead-source editor page today.
     const items = [
-      { label: "Business profile set up", done: true },
-      { label: "Sales pipeline ready", done: true },
-      { label: "Lead sources configured", done: Boolean(wizard.company.selectedLeadSources && wizard.company.selectedLeadSources.length) },
+      { label: "Business profile set up", done: true, href: null },
+      { label: "Sales pipeline ready", done: true, href: null },
+      {
+        label: "Lead sources configured",
+        done: Boolean(wizard.company.selectedLeadSources && wizard.company.selectedLeadSources.length),
+        href: "/settings/business-configuration.html",
+      },
       ...(wizard.isMetaConnectionApplicable
-        ? [{ label: "Facebook / Instagram connected", done: Boolean(meta?.connection && meta.connection.status === "active") }]
+        ? [{
+            label: "Facebook / Instagram connected",
+            done: Boolean(meta?.connection && meta.connection.status === "active"),
+            href: "/settings/integrations/meta-status.html",
+          }]
         : []),
-      { label: `First ${(wizard.company.leadTerminology || "lead").toLowerCase()} added`, done: Number(totalLeads) > 0 },
-      { label: "Invite a team member", done: Boolean(userList?.users?.length > 1) },
+      {
+        label: `First ${(wizard.company.leadTerminology || "lead").toLowerCase()} added`,
+        done: Number(totalLeads) > 0,
+        href: "/pipeline.html",
+      },
+      { label: "Invite a team member", done: Boolean(userList?.users?.length > 1), href: "/admin/users.html" },
     ];
 
     if (items.every((i) => i.done)) {
@@ -667,13 +698,22 @@
           style="position:absolute; top:14px; right:14px; background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:18px; line-height:1; padding:2px">×</button>
         <p class="dash-card-title" style="margin-bottom:12px">Finish setting up your CRM</p>
         <div style="display:flex; flex-direction:column; gap:9px">
-          ${items.map((i) => `
-            <div style="display:flex; align-items:center; gap:9px; font-size:13px; color:${i.done ? "var(--text-muted)" : "var(--text-primary)"}">
+          ${items.map((i) => {
+            const clickable = !i.done && i.href;
+            const rowStyle = `display:flex; align-items:center; gap:9px; font-size:13px; color:${i.done ? "var(--text-muted)" : "var(--text-primary)"}`;
+            const rowAttrs = clickable
+              ? ` href="${App.escapeHtml(i.href)}" style="${rowStyle}; text-decoration:none; cursor:pointer"`
+              : ` style="${rowStyle}"`;
+            const tag = clickable ? "a" : "div";
+            return `
+            <${tag}${rowAttrs}>
               <span style="width:18px; height:18px; border-radius:50%; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; font-size:11px;
                 ${i.done ? "background:var(--success-soft); color:var(--success)" : "border:1.5px solid var(--border-strong)"}">${i.done ? "✓" : ""}</span>
               <span style="${i.done ? "text-decoration:line-through" : ""}">${App.escapeHtml(i.label)}</span>
-            </div>
-          `).join("")}
+              ${clickable ? `<span style="margin-left:auto; color:var(--text-muted); font-size:12px">&rsaquo;</span>` : ""}
+            </${tag}>
+          `;
+          }).join("")}
         </div>
       </div>
     `;
