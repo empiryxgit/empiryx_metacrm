@@ -319,9 +319,27 @@
     };
     rebuild("lr_client", "All clients", filters.clients, "id", "name");
     rebuild("lr_source", "All sources", filters.sources, "key", "label");
-    rebuild("lr_campaign", "All campaigns", filters.campaigns, "id", "name");
+    // Campaign (and Assigned User) options span every authorized client at
+    // once - "aggregate campaign statistics but must not merge campaign
+    // ownership" means this dropdown must never present two different
+    // clients' campaigns (very plausibly sharing the same name, e.g. every
+    // client running their own "Spring Promo") as if they were one
+    // interchangeable thing. Each option is already tagged with its own
+    // owning clientId (see getAgencyLeadsReport in src/application/
+    // agency.ts) - prefixed onto the label here so ownership stays visually
+    // distinct even though the underlying data was never actually merged.
+    const clientNameById = new Map(filters.clients.map((c) => [c.id, c.name]));
+    const campaignsWithClient = filters.campaigns.map((c) => ({
+      ...c,
+      labelWithClient: `${clientNameById.get(c.clientId) ?? "Unknown client"} — ${c.name}`,
+    }));
+    rebuild("lr_campaign", "All campaigns", campaignsWithClient, "id", "labelWithClient");
     rebuild("lr_status", "All statuses", filters.statuses, "key", "label");
-    rebuild("lr_user", "All users", filters.assignedUsers, "id", "name");
+    const usersWithClient = filters.assignedUsers.map((u) => ({
+      ...u,
+      labelWithClient: `${clientNameById.get(u.clientId) ?? "Unknown client"} — ${u.name}`,
+    }));
+    rebuild("lr_user", "All users", usersWithClient, "id", "labelWithClient");
   }
 
   function renderLeadsReport(report) {

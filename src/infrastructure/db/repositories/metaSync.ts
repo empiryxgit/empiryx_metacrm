@@ -219,13 +219,35 @@ export async function getMetaCampaignWithMappingByRowId(tenantId: string, metaCa
 /**
  * THE mapping action - link one synced Meta campaign to an existing CRM
  * campaign. Both rows are re-checked against tenantId so a request can
- * never cross-tenant-link. Idempotent: mapping an already-mapped Meta
- * campaign simply repoints it (last call wins) rather than erroring, since
- * "change which CRM campaign this maps to" is a normal correction, not a
- * conflict.
+ * never cross-tenant-link - this is the ONE place a Meta campaign's
+ * ownership could otherwise get "merged" with another tenant's CRM
+ * campaign ("Campaigns must remain organization/client scoped"), so this
+ * function enforces it itself rather than trusting a caller's own
+ * pre-check (api/campaigns/handler.ts's handleMapMetaCampaign already
+ * validates crmCampaignId belongs to auth.companyId before ever calling
+ * this - the check below is deliberate defense in depth for this one
+ * specifically security-sensitive write, same "repository fails closed
+ * instead of trusting the caller" posture as
+ * getWebhookConfigByCampaignIdInternal's own Phase 19 comment). Idempotent:
+ * mapping an already-mapped Meta campaign simply repoints it (last call
+ * wins) rather than erroring, since "change which CRM campaign this maps
+ * to" is a normal correction, not a conflict.
  */
 export async function mapMetaCampaignToCrmCampaign(tenantId: string, metaCampaignRowId: string, crmCampaignId: string) {
   const db = await getDb();
+
+  // The target CRM campaign must itself belong to this same tenant - never
+  // trust crmCampaignId's ownership as already-established just because the
+  // caller is asking. Checked here, not just at the HTTP layer, so this
+  // invariant holds regardless of what ever calls this function in the
+  // future.
+  const [crmCampaign] = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(and(eq(campaigns.companyId, tenantId), eq(campaigns.id, crmCampaignId)))
+    .limit(1);
+  if (!crmCampaign) return null;
+
   const rows = await db
     .update(metaCampaigns)
     .set({ crmCampaignId, updatedAt: new Date() })
