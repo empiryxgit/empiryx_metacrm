@@ -125,21 +125,62 @@ const App = (() => {
     branches: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 17.5S4.5 12.4 4.5 8.3a5.5 5.5 0 0 1 11 0c0 4.1-5.5 9.2-5.5 9.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="10" cy="8.2" r="1.9" stroke="currentColor" stroke-width="1.4"/></svg>`,
     settings: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.4"/><path d="M10 3v1.6M10 15.4V17M17 10h-1.6M4.6 10H3M14.9 5.1l-1.1 1.1M6.2 13.7l-1.1 1.1M14.9 14.9l-1.1-1.1M6.2 6.2 5.1 5.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     metaIntegration: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8 6.5 4.8 9.7a2.3 2.3 0 0 0 3.3 3.3L11.2 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 13.5 15.2 10.3a2.3 2.3 0 0 0-3.3-3.3L8.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    // "Agency" nav-group trigger - a small two-building skyline, distinct
+    // from "branches" (a single location pin, used for one specific
+    // client/branch) so the two dropdown triggers read differently at a
+    // glance.
+    agency: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="5.5" width="6.5" height="10.5" rx="0.8" stroke="currentColor" stroke-width="1.4"/><rect x="10.5" y="8.5" width="6.5" height="7.5" rx="0.8" stroke="currentColor" stroke-width="1.4"/><path d="M5.2 8.2h1.1M5.2 10.6h1.1M5.2 13h1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+    // "Invitations" - a simple envelope, used for both the agency nav item
+    // and (implicitly, via the same page) the Invite Client / Generate
+    // Onboarding Link actions on clients.html.
+    invitations: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="5" width="14" height="10" rx="1.2" stroke="currentColor" stroke-width="1.4"/><path d="M3.5 5.8 10 11.2l6.5-5.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   };
 
+  // Individual (non-agency) company nav, and - doubling as - the "Current
+  // Client" group's contents while an agency user is managing a client
+  // (see renderNav's own clientLinks below): the client's own effective
+  // company (me.company) scopes these automatically, so the exact same
+  // three links work in both places unchanged. "Leads" used to be labeled
+  // "Pipeline" - pipeline.html's Kanban board view is currently disabled
+  // (BOARD_VIEW_ENABLED = false, see that file's own comment), so today
+  // this page only ever shows the leads list - "Leads" is what it actually
+  // is right now. A genuine Kanban "Pipeline" view is future work (would
+  // mean re-enabling/redesigning that disabled board view), not a nav
+  // change, so it's intentionally not a separate item here.
   const PRIMARY_LINKS = [
     { href: "/dashboard.html", label: "Dashboard", icon: NAV_ICONS.dashboard },
+    { href: "/pipeline.html", label: "Leads", icon: NAV_ICONS.pipeline },
     { href: "/campaigns.html", label: "Campaigns", icon: NAV_ICONS.campaigns },
-    { href: "/pipeline.html", label: "Pipeline", icon: NAV_ICONS.pipeline },
   ];
 
-  // An agency account's own company has no leads/pipeline/campaigns of its
-  // own to run (see src/application/agency.ts's header comment) - its top
-  // nav points at the Agency section instead of the regular per-tenant CRM
-  // pages above. Same icon set, just a different destination.
-  const AGENCY_PRIMARY_LINKS = [
+  // "Agency" nav group - the caller's OWN agency-level pages, always
+  // available to an agency identity regardless of whether a client context
+  // is currently active (see me.agency in api/auth/handler.ts's handleMe -
+  // unlike me.company, this never flips to a client's record). Rendered as
+  // a dropdown (see dropdownNavMenuHtml below), not flat top-level links -
+  // with the "Current Client" group potentially showing at the same time
+  // (see renderNav), a flat list here would crowd/wrap the header.
+  //
+  // "Leads"/"Campaigns" here are the aggregate cross-client reports (see
+  // getAgencyLeadsReport/getAgencyCampaignsReport in src/application/
+  // agency.ts), NOT a single client's own leads/campaigns - deliberately
+  // named the same as the Individual/"Current Client" nav items they sit
+  // alongside, since from an agency owner's perspective both answer "show
+  // me leads/campaigns," just at a different scope.
+  //
+  // "Invitations" reuses clients.html - see that page's own load(): a
+  // `?tab=invitations` query param auto-opens the existing "Generate
+  // Onboarding Link" modal, so this is a real, distinct landing action, not
+  // just a second link to an identical screen. "Users" is gated the same
+  // "users.manage" permission SETTINGS_LINKS used to gate it under -
+  // relocated here, not duplicated (see renderNav's settingsSource).
+  const AGENCY_LINKS = [
     { href: "/agency-dashboard.html", label: "Agency Dashboard", icon: NAV_ICONS.dashboard },
     { href: "/clients.html", label: "Clients", icon: NAV_ICONS.branches },
+    { href: "/agency-leads-report.html", label: "Leads", icon: NAV_ICONS.pipeline },
+    { href: "/agency-campaigns-report.html", label: "Campaigns", icon: NAV_ICONS.campaigns },
+    { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
+    { href: "/clients.html?tab=invitations", label: "Invitations", icon: NAV_ICONS.invitations },
   ];
 
   // Flat, top-level admin nav items - kept separate from the "Settings"
@@ -155,7 +196,10 @@ const App = (() => {
   // each being its own top-level nav item. "Meta Integration" points at
   // the same /settings.html page the old flat "Settings" link used to -
   // that page's content (Meta connection management) is unchanged, only
-  // where it's reached from and its label have changed.
+  // where it's reached from and its label have changed. For an agency's
+  // OWN identity this list is shown with "Users" filtered out (see
+  // renderNav's settingsSource) since Users already lives in AGENCY_LINKS
+  // above - Individual companies keep the full list unchanged.
   const SETTINGS_LINKS = [
     { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
@@ -169,29 +213,39 @@ const App = (() => {
     return `<a href="${link.href}" class="${extraClass || "nav-link"}${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}>${icon}${link.label}</a>`;
   }
 
-  /** Desktop "Settings" master menu - a dropdown trigger (styled like a
-   * nav-link) plus its own .dropdown panel, following the same
-   * menu-wrap/dropdown/toggleMenu pattern as the notifications and user
-   * menus. Returns "" when the signed-in user holds none of the
-   * permissions behind its sub-items, so the trigger itself never shows
-   * for a user who couldn't open any of Users/Roles/Branches/Meta
-   * Integration anyway. */
-  function settingsMenuHtml(settingsLinks, activeHref) {
-    if (!settingsLinks.length) return "";
-    const isActive = settingsLinks.some((l) => l.href === activeHref);
-    const itemsHtml = settingsLinks.map((l) => {
+  /** Desktop dropdown nav group - a trigger (styled like a nav-link) plus
+   * its own .dropdown panel, following the same menu-wrap/dropdown/
+   * toggleMenu pattern as the notifications and user menus. Shared by the
+   * "Settings", "Agency", and "Current Client" nav groups below - each
+   * just a different id/label/icon/link-set over the same markup. Returns
+   * "" for an empty link list, so a trigger never shows for a group with
+   * nothing in it (e.g. Settings when the signed-in user holds none of its
+   * sub-permissions). `id` becomes `${id}Btn`/`${id}Menu` in the DOM - see
+   * closeAllMenus/wireShellInteractions, which reference those same ids. */
+  function dropdownNavMenuHtml({ id, label, icon, links, activeHref }) {
+    if (!links.length) return "";
+    const isActive = links.some((l) => l.href === activeHref);
+    const itemsHtml = links.map((l) => {
       const active = l.href === activeHref;
       return `<a href="${l.href}" class="dropdown-item${active ? " active" : ""}"${active ? ' aria-current="page"' : ""}><span class="nav-link-icon">${l.icon}</span>${l.label}</a>`;
     }).join("");
     return `
       <div class="menu-wrap">
-        <button type="button" class="nav-link nav-link-btn${isActive ? " active" : ""}" id="settingsNavBtn" aria-haspopup="true" aria-expanded="false">
-          <span class="nav-link-icon">${NAV_ICONS.settings}</span>Settings
+        <button type="button" class="nav-link nav-link-btn${isActive ? " active" : ""}" id="${id}Btn" aria-haspopup="true" aria-expanded="false">
+          <span class="nav-link-icon">${icon}</span>${escapeHtml(label)}
           <svg class="chev" width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3.5 5.25 7 8.75l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <div class="dropdown nav-dropdown" id="settingsNavMenu" hidden>${itemsHtml}</div>
+        <div class="dropdown nav-dropdown" id="${id}Menu" hidden>${itemsHtml}</div>
       </div>
     `;
+  }
+
+  /** "Settings" master menu - Users/Roles/Branches/Meta Integration (or a
+   * permission-filtered subset). Thin wrapper over dropdownNavMenuHtml so
+   * every existing call site/id ("settingsNavBtn"/"settingsNavMenu") stays
+   * unchanged. */
+  function settingsMenuHtml(settingsLinks, activeHref) {
+    return dropdownNavMenuHtml({ id: "settingsNav", label: "Settings", icon: NAV_ICONS.settings, links: settingsLinks, activeHref });
   }
 
   function renderNav(me, activeHref) {
@@ -199,27 +253,69 @@ const App = (() => {
     if (!nav) return;
     nav.classList.add("topnav");
 
-    const isAgency = me?.company?.accountType === "agency";
-    const primaryLinks = isAgency ? AGENCY_PRIMARY_LINKS : PRIMARY_LINKS;
-    const admin = isAgency ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
+    // me.agency is the caller's OWN real agency identity - present whenever
+    // they belong to an agency, regardless of whether a client context is
+    // currently active (unlike me.company, which flips to the client's own
+    // record while managing one - see handleMe in api/auth/handler.ts).
+    // This is what lets the "Agency" group below stay visible at the same
+    // time as "Current Client" - the old isAgency = me.company.accountType
+    // check could only ever show one or the other.
+    const isAgencyIdentity = Boolean(me?.agency);
+    const inClientContext = Boolean(me?.clientContext);
+
+    // Individual (never-agency) companies keep the original flat nav
+    // unchanged: primary CRM pages + Forms/Submissions + Settings. An
+    // agency identity never shows these directly - its own equivalents
+    // live in the "Agency" and "Current Client" groups below instead.
+    const primaryLinks = isAgencyIdentity ? [] : PRIMARY_LINKS;
+    const admin = isAgencyIdentity ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
+
     // Settings (Users/Roles/Branches/Meta Integration) is deliberately
     // hidden entirely while an agency user is "managing" a client (see
     // src/application/agencyClientContext.ts's header comment): those
     // endpoints always act on the caller's OWN real company, never the
     // client's, regardless of any active client context - showing them here
-    // would let a user believe "Managing: ABC Realty" also scopes team/role
-    // administration, which it never does. Forms/Submissions (`admin`
-    // above) are NOT hidden - those five operational CRM handlers DO honor
-    // the client context, so they correctly keep showing while managing a
-    // client.
-    const inClientContext = Boolean(me?.clientContext);
-    const settingsLinks = inClientContext ? [] : SETTINGS_LINKS.filter((l) => hasPermission(me, l.perm));
+    // would let a user believe the "Current Client" group below also scopes
+    // team/role administration for that client, which it never does. For an
+    // agency's own identity (not in client context), "Users" is additionally
+    // filtered out of this list since it already lives in the "Agency"
+    // group - showing it in both places would be redundant.
+    const settingsSource = isAgencyIdentity ? SETTINGS_LINKS.filter((l) => l.label !== "Users") : SETTINGS_LINKS;
+    const settingsLinks = inClientContext ? [] : settingsSource.filter((l) => hasPermission(me, l.perm));
+
+    // "Agency" group - the caller's own agency-level pages. Safe to gate
+    // with hasPermission() here even mid client-context: me.role always
+    // reflects the caller's OWN real role (handleMe derives it from the
+    // JWT's auth.companyId/auth.roleId, never the client-context cookie),
+    // exactly like ADMIN_LINKS above already relies on.
+    const agencyLinks = isAgencyIdentity ? AGENCY_LINKS.filter((l) => hasPermission(me, l.perm)) : [];
+
+    // "Current Client" group - shown only while actually managing a client,
+    // pointing at the exact same per-tenant pages the plain Individual nav
+    // uses (me.company is already the client's own effective company, so
+    // no separate agency-flavored pages are needed). Labeled with the
+    // client's own name so it's immediately clear which client is active,
+    // matching the "ABC Digital / Current Client -> ABC Realty" structure
+    // this was built from.
+    const clientLinks = inClientContext ? PRIMARY_LINKS : [];
+    // Truncated defensively - unlike "Settings"/"Agency" (fixed, short
+    // labels), a client's own company name is arbitrary length and this
+    // trigger sits inline in a `white-space:nowrap` nav bar with no
+    // max-width/ellipsis of its own (see .nav-link in app.css).
+    const rawClientLabel = me?.clientContext?.name || "Current Client";
+    const clientLabel = rawClientLabel.length > 24 ? rawClientLabel.slice(0, 23) + "…" : rawClientLabel;
+
     const primaryHtml = primaryLinks.map((l) => navLinkHtml(l, activeHref)).join("");
-    const adminHtml = admin.length
-      ? `<span class="nav-sep" aria-hidden="true"></span>` + admin.map((l) => navLinkHtml(l, activeHref)).join("")
+    const sep = `<span class="nav-sep" aria-hidden="true"></span>`;
+    const adminHtml = admin.length ? sep + admin.map((l) => navLinkHtml(l, activeHref)).join("") : "";
+    const agencyHtml = agencyLinks.length
+      ? sep + dropdownNavMenuHtml({ id: "agencyNav", label: "Agency", icon: NAV_ICONS.agency, links: agencyLinks, activeHref })
+      : "";
+    const clientHtml = clientLinks.length
+      ? sep + dropdownNavMenuHtml({ id: "clientNav", label: clientLabel, icon: NAV_ICONS.branches, links: clientLinks, activeHref })
       : "";
     const settingsHtml = settingsLinks.length
-      ? `${admin.length ? "" : '<span class="nav-sep" aria-hidden="true"></span>'}` + settingsMenuHtml(settingsLinks, activeHref)
+      ? `${admin.length || agencyHtml || clientHtml ? "" : sep}` + settingsMenuHtml(settingsLinks, activeHref)
       : "";
 
     const displayName = me?.user?.fullName ?? "";
@@ -242,7 +338,7 @@ const App = (() => {
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
 
-        <div class="shell-center">${primaryHtml}${adminHtml}${settingsHtml}</div>
+        <div class="shell-center">${primaryHtml}${adminHtml}${agencyHtml}${clientHtml}${settingsHtml}</div>
 
         <div class="shell-right">
           <div class="agency-context-switch" id="agencyContextSlot" style="display:none"></div>
@@ -284,13 +380,26 @@ const App = (() => {
       </div>
     `;
 
-    renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks);
+    renderMobileDrawer(me, activeHref, {
+      primaryLinks,
+      admin,
+      agencyLinks,
+      clientLinks,
+      clientLabel,
+      settingsLinks,
+    });
     wireShellInteractions();
     loadBranchSwitcher(me);
     loadAgencyContextSwitcher(me);
   }
 
-  function renderMobileDrawer(me, activeHref, admin, settingsLinks, primaryLinks) {
+  /** Mirrors the desktop nav's groups exactly (see renderNav above), just
+   * rendered as labeled, stacked sections instead of a horizontal bar +
+   * dropdowns - a drawer has no header-width constraint, so "Agency" and
+   * "Current Client" can each get a plain section label rather than a
+   * dropdown trigger. */
+  function renderMobileDrawer(me, activeHref, groups) {
+    const { primaryLinks, admin, agencyLinks, clientLinks, clientLabel, settingsLinks } = groups;
     let drawer = document.getElementById("mobileDrawer");
     if (!drawer) {
       drawer = document.createElement("div");
@@ -304,6 +413,10 @@ const App = (() => {
 
     const groupHtml = (links, groupClass) =>
       links.map((l) => navLinkHtml(l, activeHref, `mobile-nav-link${groupClass ? " " + groupClass : ""}`)).join("");
+    const labeledSection = (label, links) =>
+      links.length
+        ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-section-label">${escapeHtml(label)}</div><div class="mobile-nav-group">${groupHtml(links)}</div>`
+        : "";
 
     drawer.innerHTML = `
       <div class="mobile-drawer-inner">
@@ -313,9 +426,11 @@ const App = (() => {
         </div>
         <div class="agency-context-switch agency-context-switch-mobile" id="agencyContextSlotMobile" style="display:none"></div>
         <div class="branch-switch branch-switch-mobile" id="branchSwitchSlotMobile" style="display:none"></div>
-        <div class="mobile-nav-group">${groupHtml(primaryLinks || PRIMARY_LINKS)}</div>
+        ${primaryLinks.length ? `<div class="mobile-nav-group">${groupHtml(primaryLinks)}</div>` : ""}
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
-        ${settingsLinks.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-section-label">Settings</div><div class="mobile-nav-group">${groupHtml(settingsLinks)}</div>` : ""}
+        ${labeledSection("Agency", agencyLinks)}
+        ${labeledSection(clientLabel, clientLinks)}
+        ${labeledSection("Settings", settingsLinks)}
         <div class="mobile-nav-divider"></div>
         <div class="mobile-nav-group">
           <a href="/change-password.html" class="mobile-nav-link">Account settings</a>
@@ -333,6 +448,10 @@ const App = (() => {
     document.getElementById("userTrigger")?.setAttribute("aria-expanded", "false");
     document.getElementById("settingsNavMenu")?.setAttribute("hidden", "");
     document.getElementById("settingsNavBtn")?.setAttribute("aria-expanded", "false");
+    document.getElementById("agencyNavMenu")?.setAttribute("hidden", "");
+    document.getElementById("agencyNavBtn")?.setAttribute("aria-expanded", "false");
+    document.getElementById("clientNavMenu")?.setAttribute("hidden", "");
+    document.getElementById("clientNavBtn")?.setAttribute("aria-expanded", "false");
   }
 
   function toggleMenu(btnId, menuId) {
@@ -361,6 +480,14 @@ const App = (() => {
     document.getElementById("settingsNavBtn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleMenu("settingsNavBtn", "settingsNavMenu");
+    });
+    document.getElementById("agencyNavBtn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMenu("agencyNavBtn", "agencyNavMenu");
+    });
+    document.getElementById("clientNavBtn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMenu("clientNavBtn", "clientNavMenu");
     });
 
     const burger = document.getElementById("navBurger");
@@ -398,9 +525,10 @@ const App = (() => {
   // honor this and which never do). Unlike the branch switcher below,
   // switching here is a FULL-PAGE NAVIGATION, not a live re-filter -
   // GET /api/auth/me's `company` field itself changes (to the client's own
-  // record) once the switch takes effect, which is what flips the whole
-  // nav (isAgency, admin/settings links) over to the ordinary per-tenant
-  // shell for free - see renderNav's own isAgency/inClientContext.
+  // record) once the switch takes effect, and `clientContext` becomes
+  // present - which is what makes the "Current Client" nav group appear
+  // (alongside "Agency", not instead of it) for free - see renderNav's own
+  // isAgencyIdentity/inClientContext.
   //
   // Populated from GET /api/agency/dashboard's `clients` array - already
   // scoped to exactly the clients this user is allowed to manage (see

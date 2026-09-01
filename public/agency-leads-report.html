@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agency Leads — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  /* "Total Leads: 18,420" - a single prominent stat line sitting between
+     the filter toolbar and the per-client breakdown table, matching the
+     dash-card-title/dash-card-sub type scale rather than a whole extra KPI
+     tile for just one number. Same convention this page's content was
+     moved out of (agency-dashboard.html) already used. */
+  .dash-stat-big{ font-size:22px; font-weight:700; color:var(--text-primary); margin:var(--space-3) 0; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Agency Leads</h1>
+        <p class="page-sub">Aggregate lead reporting across every client you manage.</p>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <!-- Aggregate lead reporting across every client this caller can see -
+         see getAgencyLeadsReport in src/application/agency.ts. Every filter
+         below is re-validated against the caller's own resolved client
+         access server-side on every request; the options offered here are
+         only ever what that same endpoint already authorized, but a stale
+         selection (e.g. a client removed after this page loaded) still
+         gets a real error back, never a silent wrong answer. Moved here
+         from agency-dashboard.html verbatim (same ids/markup/JS) so the
+         "Leads" nav item under the Agency group has somewhere of its own
+         to point - the Dashboard page itself now stays limited to KPIs +
+         the Clients table. -->
+    <div class="dash-section">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Agency Leads</p>
+            <p class="dash-card-sub" id="leadsReportSub">Loading…</p>
+          </div>
+        </div>
+
+        <div class="board-toolbar">
+          <div class="field-inline">
+            <label for="lr_client">Client</label>
+            <select id="lr_client"><option value="">All clients</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="lr_source">Source</label>
+            <select id="lr_source"><option value="">All sources</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="lr_campaign">Campaign</label>
+            <select id="lr_campaign"><option value="">All campaigns</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="lr_status">Status</label>
+            <select id="lr_status"><option value="">All statuses</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="lr_user">Assigned User</label>
+            <select id="lr_user"><option value="">All users</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="lr_dateRange">Date</label>
+            <select id="lr_dateRange">
+              <option value="">All time</option>
+              <option value="today">Today</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="custom">Custom range</option>
+            </select>
+          </div>
+          <div class="range-custom" id="lr_dateCustom" style="display:none">
+            <input type="date" id="lr_dateFrom" />
+            <span style="color:var(--text-muted); font-size:12px">to</span>
+            <input type="date" id="lr_dateTo" />
+            <button class="btn secondary sm" type="button" id="lr_dateApply">Apply</button>
+          </div>
+          <div class="board-toolbar-right">
+            <button class="btn secondary sm" type="button" id="lr_clearFilters">Clear filters</button>
+          </div>
+        </div>
+
+        <div id="leadsReportBanner"></div>
+
+        <p class="dash-stat-big" id="leadsReportTotal">Total Leads: —</p>
+
+        <div class="table-wrap" id="leadsReportTableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>Leads</th>
+              </tr>
+            </thead>
+            <tbody id="leadsReportBody"><tr><td colspan="2" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me = null;
+
+  function fmt(n) { return (n ?? 0).toLocaleString(); }
+
+  async function load() {
+    document.getElementById("banner").innerHTML = "";
+    me = await App.requireAuth();
+    if (!me) return;
+
+    document.getElementById("topnav").style.display = "flex";
+    App.renderNav(me, "/agency-leads-report.html");
+
+    await loadLeadsReport();
+  }
+
+  // ---- Agency Leads (aggregate report, filterable) -------------------------
+  // See getAgencyLeadsReport in src/application/agency.ts: every filter
+  // below is re-checked server-side against this caller's own resolved
+  // client access on every single request - the options populated here are
+  // themselves already scoped to exactly that same access, but a stale
+  // selection (a client removed after this page loaded, say) still comes
+  // back as a real error from the server, never a silently wrong number.
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // Same lazy-eval shape as pipeline.html's own date filter: a preset key
+  // plus custom from/to strings, resolved into an actual range only at
+  // fetch-time.
+  let leadsDateFilter = { key: "", from: "", to: "" };
+
+  function leadsDateFilterRange() {
+    if (!leadsDateFilter.key) return null;
+    const now = new Date();
+    const toISODate = (d) => d.toISOString().slice(0, 10);
+    if (leadsDateFilter.key === "today") return { from: toISODate(now), to: toISODate(now) };
+    if (leadsDateFilter.key === "7d") return { from: toISODate(new Date(now.getTime() - 7 * DAY_MS)), to: toISODate(now) };
+    if (leadsDateFilter.key === "30d") return { from: toISODate(new Date(now.getTime() - 30 * DAY_MS)), to: toISODate(now) };
+    if (leadsDateFilter.key === "custom" && leadsDateFilter.from && leadsDateFilter.to) {
+      return { from: leadsDateFilter.from, to: leadsDateFilter.to };
+    }
+    return null;
+  }
+
+  // Rebuilds every filter <select>'s options from whatever the last
+  // successful fetch returned (same "preserve the current value only if
+  // it's still a valid option, reset to the 'All ...' default otherwise"
+  // instinct as pipeline.html's own populateFilterOptions) - so a filter
+  // that's no longer offered (e.g. a client this caller lost access to
+  // mid-session) can never stay silently selected.
+  function populateLeadsReportOptions(filters) {
+    const rebuild = (id, allLabel, options, key, label) => {
+      const select = document.getElementById(id);
+      const current = select.value;
+      select.innerHTML = `<option value="">${allLabel}</option>` +
+        options.map((o) => `<option value="${o[key]}">${App.escapeHtml(o[label])}</option>`).join("");
+      select.value = options.some((o) => String(o[key]) === current) ? current : "";
+    };
+    rebuild("lr_client", "All clients", filters.clients, "id", "name");
+    rebuild("lr_source", "All sources", filters.sources, "key", "label");
+    // Campaign (and Assigned User) options span every authorized client at
+    // once - "aggregate campaign statistics but must not merge campaign
+    // ownership" means this dropdown must never present two different
+    // clients' campaigns (very plausibly sharing the same name, e.g. every
+    // client running their own "Spring Promo") as if they were one
+    // interchangeable thing. Each option is already tagged with its own
+    // owning clientId (see getAgencyLeadsReport in src/application/
+    // agency.ts) - prefixed onto the label here so ownership stays visually
+    // distinct even though the underlying data was never actually merged.
+    const clientNameById = new Map(filters.clients.map((c) => [c.id, c.name]));
+    const campaignsWithClient = filters.campaigns.map((c) => ({
+      ...c,
+      labelWithClient: `${clientNameById.get(c.clientId) ?? "Unknown client"} — ${c.name}`,
+    }));
+    rebuild("lr_campaign", "All campaigns", campaignsWithClient, "id", "labelWithClient");
+    rebuild("lr_status", "All statuses", filters.statuses, "key", "label");
+    const usersWithClient = filters.assignedUsers.map((u) => ({
+      ...u,
+      labelWithClient: `${clientNameById.get(u.clientId) ?? "Unknown client"} — ${u.name}`,
+    }));
+    rebuild("lr_user", "All users", usersWithClient, "id", "labelWithClient");
+  }
+
+  function renderLeadsReport(report) {
+    document.getElementById("leadsReportTotal").textContent = `Total Leads: ${fmt(report.totalLeads)}`;
+    document.getElementById("leadsReportSub").textContent =
+      report.clients.length === 0 ? "No clients to report on" : `${report.clients.length} client${report.clients.length === 1 ? "" : "s"}`;
+    const body = document.getElementById("leadsReportBody");
+    if (report.clients.length === 0) {
+      body.innerHTML = `<tr><td colspan="2" class="empty">No leads match these filters.</td></tr>`;
+      return;
+    }
+    body.innerHTML = report.clients.map((c) => `
+      <tr>
+        <td>${App.escapeHtml(c.name)}</td>
+        <td>${fmt(c.leads)}</td>
+      </tr>`).join("");
+  }
+
+  async function loadLeadsReport() {
+    document.getElementById("leadsReportBanner").innerHTML = "";
+    const params = new URLSearchParams();
+    const clientId = document.getElementById("lr_client").value;
+    const source = document.getElementById("lr_source").value;
+    const campaignId = document.getElementById("lr_campaign").value;
+    const status = document.getElementById("lr_status").value;
+    const assignedUserId = document.getElementById("lr_user").value;
+    if (clientId) params.set("clientId", clientId);
+    if (source) params.set("source", source);
+    if (campaignId) params.set("campaignId", campaignId);
+    if (status) params.set("status", status);
+    if (assignedUserId) params.set("assignedUserId", assignedUserId);
+    const range = leadsDateFilterRange();
+    if (range) {
+      params.set("from", range.from);
+      params.set("to", range.to);
+    }
+
+    try {
+      const query = params.toString();
+      const report = await App.apiJson(`/api/agency/leads-report${query ? "?" + query : ""}`);
+      populateLeadsReportOptions(report.filters);
+      renderLeadsReport(report);
+    } catch (err) {
+      document.getElementById("leadsReportBanner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  ["lr_client", "lr_source", "lr_campaign", "lr_status", "lr_user"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => loadLeadsReport());
+  });
+  document.getElementById("lr_dateRange").addEventListener("change", (e) => {
+    const val = e.target.value;
+    const customBox = document.getElementById("lr_dateCustom");
+    if (val === "custom") {
+      // Wait for Apply - same "show the pickers first, don't filter on a
+      // bare 'Custom range' selection with no dates yet" reasoning as
+      // pipeline.html's own date filter.
+      customBox.style.display = "flex";
+      return;
+    }
+    customBox.style.display = "none";
+    leadsDateFilter = { key: val, from: "", to: "" };
+    loadLeadsReport();
+  });
+  document.getElementById("lr_dateApply").addEventListener("click", () => {
+    leadsDateFilter = {
+      key: "custom",
+      from: document.getElementById("lr_dateFrom").value,
+      to: document.getElementById("lr_dateTo").value,
+    };
+    loadLeadsReport();
+  });
+  document.getElementById("lr_clearFilters").addEventListener("click", () => {
+    ["lr_client", "lr_source", "lr_campaign", "lr_status", "lr_user"].forEach((id) => {
+      document.getElementById(id).value = "";
+    });
+    document.getElementById("lr_dateRange").value = "";
+    document.getElementById("lr_dateCustom").style.display = "none";
+    leadsDateFilter = { key: "", from: "", to: "" };
+    loadLeadsReport();
+  });
+
+  load();
+</script>
+</body>
+</html>

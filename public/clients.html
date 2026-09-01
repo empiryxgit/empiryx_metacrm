@@ -342,6 +342,17 @@
     }
 
     await loadOnboardingLinks();
+
+    // Landed here from the nav's "Invitations" item (see AGENCY_LINKS in
+    // public/assets/app.js) rather than plain "Clients" - clients.html
+    // already IS the invitations UI (Invite Client + Generate Onboarding
+    // Link, both above, plus the Onboarding Links table just populated),
+    // so give this a genuinely different landing action instead of it
+    // being a second link to an identical screen: auto-open the Generate
+    // Onboarding Link modal, the more common of the two invitation flows.
+    if (new URLSearchParams(window.location.search).get("tab") === "invitations") {
+      openGenerateLinkModal();
+    }
   }
 
   document.getElementById("searchInput").addEventListener("input", renderClients);
