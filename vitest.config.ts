@@ -17,7 +17,6 @@ export default defineConfig({
     // concurrent short-lived Postgres connections is exactly the kind of
     // thing worth capping deliberately for a local dev/test database.
     poolOptions: {
-      threads: { maxThreads: 4 },
       forks: { maxForks: 4 },
     },
   },
