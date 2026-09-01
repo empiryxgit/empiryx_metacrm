@@ -1,10 +1,16 @@
 // The "client switcher" (Agency Context -> Client Context -> CRM Dashboard):
 // lets an agency user pick one of their own agency's clients and, for the
 // rest of that browser session, have the ordinary operational CRM pages
-// (Dashboard/Pipeline/Leads/Campaigns/Forms+Submissions - see each of
-// api/dashboard, api/pipeline, api/leads/handler, api/campaigns/handler,
-// api/forms/handler for where withEffectiveCompanyContext is actually
-// applied) show and act on THAT CLIENT's data instead of the agency's own.
+// (Dashboard/Pipeline/Leads/Campaigns/Forms+Submissions/Meta Integration -
+// see each of api/dashboard, api/pipeline, api/leads/handler,
+// api/campaigns/handler, api/forms/handler, api/webhooks/meta/handler for
+// where withEffectiveCompanyContext is actually applied) show and act on
+// THAT CLIENT's data instead of the agency's own. Meta Integration is
+// included deliberately, not as an afterthought: "Meta authentication
+// belongs to the client organization" is a CRITICAL requirement of its own
+// (see api/webhooks/meta/handler.ts's own header comment) - an agency may
+// assist a client through the connect flow, but the resulting connection
+// must be attributed to that client's own company, never the agency's.
 //
 // Deliberately NOT baked into the access-token JWT the way permissions/
 // branchIds/assignedClientIds are: this is ephemeral UI-session state (which
@@ -17,7 +23,7 @@
 // assignment is revoked mid-session, the very next request drops back to
 // the agency's own view automatically, without waiting for a token refresh.
 //
-// Deliberately narrow in scope: only the five operational CRM handler files
+// Deliberately narrow in scope: only the six operational CRM handler files
 // above ever call withEffectiveCompanyContext. Company/team administration
 // (admin/users, admin/roles, admin/branches, company settings, the agency's
 // own /api/agency/* endpoints) NEVER does - those always operate on the
@@ -107,7 +113,8 @@ export async function resolveActiveClientContext(req: VercelRequest, auth: AuthC
 
 /**
  * The one function every operational CRM handler (dashboard/pipeline/leads/
- * campaigns/forms) calls right after requirePermission/requireAuth succeeds,
+ * campaigns/forms/Meta integration) calls right after requirePermission/
+ * requireAuth succeeds,
  * BEFORE using auth.companyId for anything: returns a (possibly) new
  * AuthContext with companyId swapped to the active client's, or the
  * ORIGINAL auth object unchanged when no valid context applies. Every other

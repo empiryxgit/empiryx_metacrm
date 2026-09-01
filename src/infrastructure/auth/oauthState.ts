@@ -2,11 +2,16 @@
 // src/application/metaOAuth.ts). This is what makes it safe to say "never
 // trust a raw tenant_id supplied by the frontend": the tenant/user this
 // connection belongs to is decided ONCE, server-side, at /connect time (from
-// the caller's already-verified session - see requirePermission in
+// the caller's already-verified session, run through withEffectiveCompanyContext
+// so an agency user "inside" a client seals THAT CLIENT's own company id
+// here, never the agency's - see handleOAuthConnect in
 // api/webhooks/meta/handler.ts), then sealed into this signed, short-lived,
 // single-use token. The /callback handler recovers the tenant/user ONLY from
 // this verified token - never from a query param, never from a cookie that
-// may or may not have survived Meta's redirect chain.
+// may or may not have survived Meta's redirect chain (which also means the
+// callback never needs to re-resolve client context itself - the tenant id
+// this connection belongs to was already decided and sealed at /connect
+// time).
 //
 // Reuses AUTH_JWT_SECRET (already a required, existing env var - see
 // src/infrastructure/auth/tokens.ts) rather than introducing a second signing

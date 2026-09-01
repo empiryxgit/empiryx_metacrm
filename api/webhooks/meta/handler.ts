@@ -42,6 +42,24 @@
 //                          whichever Page this tenant currently has
 //                          selected ("Retry" button).
 //
+//      "Tenant" above is deliberately the EFFECTIVE company, not always the
+//      caller's own real one: every handler in this group runs its auth
+//      through withEffectiveCompanyContext (same call dashboard/pipeline/
+//      leads/campaigns/forms already make) BEFORE touching any Meta table,
+//      so an agency user "inside" a client (via the client switcher) reads
+//      and writes THAT CLIENT's own Meta connection/Pages/ad accounts/forms,
+//      never the agency's own. This is the CRITICAL requirement Meta
+//      authentication belongs to the client organization: an agency may
+//      assist a client through the connect flow (gated on its own
+//      INTEGRATIONS_MANAGE permission, exactly as before), but the resulting
+//      connection is always attributed to and stored under the CLIENT's
+//      company id - each client authorizes its own Meta assets, and the
+//      agency is never left holding one shared connection every client's
+//      leads flow through. Outside any active client context (the agency's
+//      own Settings screen, or any ordinary non-agency tenant), this is a
+//      total no-op - withEffectiveCompanyContext returns the caller's own
+//      auth unchanged, exactly like every other handler that calls it.
+//
 //   3. The APP-LEVEL Meta leadgen webhook receiver, THE CRM-native Meta
 //      webhook endpoint (Phase 7, formalized/hardened in Phase 11) -
 //      /api/webhooks/meta/leadgen - ONE fixed URL for the whole deployment
@@ -101,6 +119,7 @@ import { ingestWebhookPayload } from "../../../src/application/ingestWebhook";
 import { getWebhookConfigBySlug, markWebhookVerified } from "../../../src/infrastructure/db/repositories/campaigns";
 import { getAuthContext, hasPermission, requirePermission } from "../../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../../src/domain/permissions";
+import { withEffectiveCompanyContext } from "../../../src/application/agencyClientContext";
 import { createOAuthState, verifyOAuthState } from "../../../src/infrastructure/auth/oauthState";
 import { buildAuthorizationUrl, completeMetaConnection, getAppSecret, MetaOAuthConfigError, MetaPermissionError } from "../../../src/application/metaOAuth";
 import {
@@ -205,11 +224,21 @@ async function handleOAuthConnect(req: VercelRequest, res: VercelResponse) {
     res.redirect(302, `/login.html?next=${encodeURIComponent("/api/integrations/meta/connect")}`);
     return;
   }
+  // Permission check stays against the caller's own real permissions
+  // (never swapped by client context - see withEffectiveCompanyContext's
+  // own comment) so this is gated on INTEGRATIONS_MANAGE exactly as before,
+  // whether the caller is an ordinary tenant or an agency user assisting a
+  // client. Only WHICH company the resulting connection belongs to changes.
   if (!hasPermission(authCtx, PERMISSIONS.INTEGRATIONS_MANAGE)) {
     res.redirect(302, `${SETTINGS_META_PAGE}?error=no_permission`);
     return;
   }
-  const auth = authCtx;
+  // If an agency user currently has a client "open" (client switcher), the
+  // OAuth state below binds tenantId to THAT CLIENT's company id, not the
+  // agency's own - so the connection this flow produces is attributed to,
+  // and forever scoped to, the client, matching "each client must
+  // authorize its own Meta assets."
+  const auth = await withEffectiveCompanyContext(req, authCtx);
 
   try {
     const state = await createOAuthState({ tenantId: auth.companyId, userId: auth.userId });
@@ -293,8 +322,9 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   try {
     // Phase 15 - three extra fields for the clean status screen
@@ -377,8 +407,9 @@ async function handleOAuthDisconnect(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   try {
     const disconnected = await disconnectActiveMetaConnection(auth.companyId);
@@ -409,8 +440,9 @@ async function handleSelectAsset(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const body = await readJsonBody(req);
   const type = typeof body.type === "string" ? body.type : "";
@@ -469,8 +501,9 @@ async function handleSync(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   try {
     const result = await runMetaSync(auth.companyId);
@@ -495,8 +528,9 @@ async function handleSyncStatus(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const progress = await getMetaSyncProgress(auth.companyId);
   res.status(200).json({ progress });
@@ -518,8 +552,9 @@ async function handleWebhookRetry(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   try {
     const result = await retryPageWebhook(auth.companyId);
@@ -647,8 +682,9 @@ async function handleMetaFormsCollection(req: VercelRequest, res: VercelResponse
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   // Scoped to the tenant's CURRENTLY SELECTED Page only - review finding,
   // same fix as the Campaigns screen's ad-account scoping: reconnecting
@@ -679,8 +715,9 @@ async function handleGetOneMetaForm(req: VercelRequest, res: VercelResponse, met
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const form = await getMetaFormById(auth.companyId, metaFormId);
   if (!form) {
@@ -727,8 +764,9 @@ async function handleMetaFormMapping(req: VercelRequest, res: VercelResponse, me
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
+  let auth = await requirePermission(req, res, PERMISSIONS.INTEGRATIONS_MANAGE);
   if (!auth) return;
+  auth = await withEffectiveCompanyContext(req, auth);
 
   const form = await getMetaFormById(auth.companyId, metaFormId);
   if (!form) {
