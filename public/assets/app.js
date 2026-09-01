@@ -416,10 +416,26 @@ const App = (() => {
   // every call site.
   let agencyContextInfo = null;
 
+  /** THE one place that actually calls POST /api/agency/context/enter -
+   * used by the nav switcher below, and exposed on the public API (see the
+   * return statement at the bottom of this file) so any page that offers
+   * its own "open this client's CRM" action (clients.html,
+   * client-detail.html - see the client-detail.html-driven "when an agency
+   * opens a client, they should see the client's normal CRM interface"
+   * requirement this was built for) can reuse the exact same call rather
+   * than re-implementing it. Navigates to /dashboard.html on success -
+   * from that point on it IS the client's own, completely unchanged
+   * dashboard.html/pipeline.html/etc., not a separate agency-side view of
+   * their data. Rethrows on failure so each caller can show its own error
+   * UI instead of this function always alert()-ing. */
+  async function enterClient(clientCompanyId) {
+    await apiJson("/api/agency/context/enter", { method: "POST", body: { clientCompanyId } });
+    window.location.href = "/dashboard.html";
+  }
+
   async function enterClientContext(clientCompanyId) {
     try {
-      await apiJson("/api/agency/context/enter", { method: "POST", body: { clientCompanyId } });
-      window.location.href = "/dashboard.html";
+      await enterClient(clientCompanyId);
     } catch (err) {
       alert(err.message || "Could not switch to that client. It may no longer be assigned to you.");
       renderAgencyContextSwitcher(); // reset the select back to the last-known-good state
@@ -722,5 +738,6 @@ const App = (() => {
     getMyBranches,
     onBranchChange,
     mountBranchFilter,
+    enterClient,
   };
 })();

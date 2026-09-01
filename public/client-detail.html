@@ -26,6 +26,22 @@
         <h1 class="page-title" id="clientName">Client</h1>
         <p class="page-sub"><span class="pill" id="statusPill"></span></p>
       </div>
+      <!-- THE way an agency opens a client - see src/application/
+           agencyClientContext.ts's header comment for the full design.
+           Clicking this is what "when an agency opens a client, they
+           should see the client's normal CRM interface" actually means:
+           it lands on the exact same, completely unchanged
+           dashboard.html/pipeline.html/campaigns.html/forms.html a real
+           user of this client would see - never a second, agency-specific
+           rebuild of any of those pages. Everything below on THIS page
+           (Users/Campaigns/Integration/Settings, Suspend/Remove) stays a
+           separate, read-only AGENCY-side relationship-management view -
+           deliberately not routed through client context (see that same
+           header comment for why admin/settings never is) - so it's
+           unaffected by this change. -->
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="openCrmBtn">Open CRM Dashboard</button>
+      </div>
     </div>
 
     <div id="banner"></div>
@@ -232,7 +248,29 @@
 
     renderRelationshipActions(detail.relationshipStatus);
     document.getElementById("content").style.display = "";
+    // "Open CRM Dashboard" only ever appears once this page's own load
+    // already succeeded - getClientDetail (the endpoint this page calls)
+    // grants access under exactly the same rules checkAgencyCanManageClient
+    // enforces for entering context (active/suspended relationship,
+    // resolveAgencyClientAccess), so reaching this render() at all already
+    // means the button below is expected to work.
+    document.getElementById("headActions").style.display = "flex";
   }
+
+  async function openCrmDashboard() {
+    const btn = document.getElementById("openCrmBtn");
+    document.getElementById("banner").innerHTML = "";
+    btn.disabled = true;
+    btn.textContent = "Opening…";
+    try {
+      await App.enterClient(clientId);
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      btn.disabled = false;
+      btn.textContent = "Open CRM Dashboard";
+    }
+  }
+  document.getElementById("openCrmBtn").addEventListener("click", openCrmDashboard);
 
   async function load() {
     document.getElementById("banner").innerHTML = "";

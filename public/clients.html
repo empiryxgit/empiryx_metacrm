@@ -23,7 +23,7 @@
   .client-card-main{ display:flex; flex-direction:column; gap:4px; min-width:0; }
   .client-card-name{ font-weight:600; font-size:15px; }
   .client-card-meta{ display:flex; gap:14px; font-size:13px; color:var(--text-muted); flex-wrap:wrap; }
-  .client-card-actions{ flex-shrink:0; }
+  .client-card-actions{ flex-shrink:0; display:flex; gap:8px; }
 </style>
 </head>
 <body>
@@ -245,10 +245,38 @@
           </span>
         </div>
         <div class="client-card-actions">
-          <button class="btn secondary" type="button" data-open="${c.id}"${c.status === "active" || c.status === "suspended" ? "" : " disabled title=\"Available once the client accepts\""}>Open</button>
+          <button class="btn" type="button" data-enter="${c.id}"${c.status === "active" || c.status === "suspended" ? "" : " disabled title=\"Available once the client accepts\""}>Open CRM</button>
+          <button class="btn secondary" type="button" data-open="${c.id}">Details</button>
         </div>
       </div>`).join("");
 
+    // "Open CRM" - THE fast path into a client's own, completely unchanged
+    // CRM (dashboard.html/pipeline.html/etc.), reusing the exact same
+    // App.enterClient() helper client-detail.html's own "Open CRM Dashboard"
+    // button calls - see that page's header-button comment for the full
+    // design. This bypasses client-detail.html entirely so an agency user
+    // doesn't have to detour through the read-only relationship-management
+    // view just to reach a client's leads/pipeline/campaigns.
+    wrap.querySelectorAll("[data-enter]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        document.getElementById("banner").innerHTML = "";
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening…";
+        try {
+          await App.enterClient(btn.dataset.enter);
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's CRM.")}</div>`;
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
+
+    // "Details" - the separate, read-only agency-side relationship view
+    // (Users/Campaigns/Integration/Settings, Suspend/Remove) - unaffected by
+    // the change above, and reachable regardless of relationship status so
+    // an agency can still review/reactivate a suspended client from there.
     wrap.querySelectorAll("[data-open]").forEach((btn) => {
       btn.addEventListener("click", () => {
         window.location.href = `/client-detail.html?id=${encodeURIComponent(btn.dataset.open)}`;
