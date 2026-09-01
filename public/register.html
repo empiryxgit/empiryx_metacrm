@@ -9,8 +9,8 @@
 <body>
   <div class="auth-shell">
     <div class="auth-card" style="width:440px">
-      <h1 id="stepTitle">Account type</h1>
-      <p class="sub" id="stepSub">Are you working alone, or as part of an agency/team?</p>
+      <h1 id="stepTitle">How will you use the platform?</h1>
+      <p class="sub" id="stepSub"></p>
       <div class="steps">
         <div class="step active" id="s1"></div>
         <div class="step" id="s2"></div>
@@ -18,22 +18,26 @@
       <div id="banner"></div>
 
       <!-- Step 1: Account Type - "individual" | "agency", see
-           src/domain/accountType.ts for the fixed catalog this mirrors.
-           Chosen FIRST (not last) because it determines which LABELS step
-           2 shows - "Agency Name"/"Contact Person" only make sense once we
-           already know this is an agency. The field set itself (including
-           Mobile) is identical either way. -->
+           src/domain/accountType.ts for the fixed catalog this mirrors -
+           the radio VALUES stay exactly "individual"/"agency" (what the
+           backend/domain layer knows), only the visible copy below is
+           user-facing. Chosen FIRST (not last) because it determines which
+           LABELS step 2 shows - "Agency Name"/"Contact Person" only make
+           sense once we already know this is an agency. The field set
+           itself (including Mobile) is identical either way. No industry
+           selection anywhere in this flow, for either account type - see
+           step 2's own comment below on why. -->
       <form id="step1">
-        <div class="choice-group" role="radiogroup" aria-label="Account type">
+        <div class="choice-group" role="radiogroup" aria-label="How will you use the platform?">
           <label class="choice-card">
             <input type="radio" name="accountType" value="individual" checked />
-            <span class="choice-card-title">Individual</span>
-            <span class="choice-card-desc">Just me - I work my own leads.</span>
+            <span class="choice-card-title">Individual / Business</span>
+            <span class="choice-card-desc">Manage your own CRM and leads.</span>
           </label>
           <label class="choice-card">
             <input type="radio" name="accountType" value="agency" />
-            <span class="choice-card-title">Agency</span>
-            <span class="choice-card-desc">My team manages leads on behalf of clients.</span>
+            <span class="choice-card-title">Agency / Reseller</span>
+            <span class="choice-card-desc">Manage multiple clients from one platform.</span>
           </label>
         </div>
         <button class="btn full" type="submit">Continue</button>
@@ -125,8 +129,8 @@
   document.getElementById("backBtn").addEventListener("click", () => {
     document.getElementById("s2").classList.remove("active");
     document.getElementById("s1").classList.remove("done");
-    document.getElementById("stepTitle").textContent = "Account type";
-    document.getElementById("stepSub").textContent = "Are you working alone, or as part of an agency/team?";
+    document.getElementById("stepTitle").textContent = "How will you use the platform?";
+    document.getElementById("stepSub").textContent = "";
     step2.style.display = "none";
     step1.style.display = "block";
   });
