@@ -169,6 +169,13 @@
       "when": 1788244657169,
       "tag": "0023_tenancy_relationship_status_created_at_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788248595656,
+      "tag": "0024_add_agency_audit_log",
+      "breakpoints": true
     }
   ]
 }

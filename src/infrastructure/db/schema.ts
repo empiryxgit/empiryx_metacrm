@@ -380,6 +380,45 @@ export const agencyClientAssignments = crm.table(
 );
 
 /**
+ * Agency/client access audit trail - see src/application/agencyAuditLog.ts's
+ * own header comment for the full design (the fixed 11-action catalog in
+ * src/domain/agencyAuditAction.ts, what `agencyUserId` means per action, and
+ * the write-only "never log secrets" contract). Structurally the same
+ * "bigserial id + free-text event type + optional detail + indexed
+ * timestamp" shape as leadProcessingLog above, adjusted to this feature's
+ * exact fields: `agencyUserId` and `clientCompanyId` are both nullable
+ * because several events genuinely have no agency-side actor (e.g. a client
+ * accepting an invite) or no client subject (e.g. AGENCY_CREATED,
+ * AGENCY_USER_CREATED) - see agencyAuditLog.ts for exactly when each is
+ * null. `detail` is free text for non-secret context ONLY (an email, a
+ * client name, a "declined invitation" note, a subject user id) - it must
+ * NEVER hold a password, token, API secret, or other credential; every
+ * call site that writes here goes through recordAgencyAuditEvent's typed
+ * parameters specifically so a secret can never be passed through as an
+ * arbitrary payload. ON DELETE SET NULL (not CASCADE) on every FK here,
+ * deliberately - a row in an audit trail must survive the company or user
+ * it refers to being deleted, same reasoning as leadFollowUps.createdBy.
+ */
+export const agencyAuditLog = crm.table(
+  "agency_audit_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    agencyCompanyId: uuid("agency_company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    agencyUserId: uuid("agency_user_id").references(() => users.id, { onDelete: "set null" }),
+    clientCompanyId: uuid("client_company_id").references(() => companies.id, { onDelete: "set null" }),
+    action: text("action").notNull(), // AgencyAuditAction - see src/domain/agencyAuditAction.ts
+    detail: text("detail"), // non-secret context only - see this table's own doc comment
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    agencyIdx: index("ix_agency_audit_log_agency_company_id").on(t.agencyCompanyId),
+    clientIdx: index("ix_agency_audit_log_client_company_id").on(t.clientCompanyId),
+    actionIdx: index("ix_agency_audit_log_action").on(t.action),
+    createdAtIdx: index("ix_agency_audit_log_created_at").on(t.createdAt),
+  }),
+);
+
+/**
  * A role's permission set. `isSystem` marks a built-in, non-editable role -
  * either the single generic "Owner" role every ordinary company gets at
  * signup, or one of the four fixed AGENCY_ or CLIENT_ prefixed roles an

@@ -31,6 +31,7 @@ import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/
 import { resolveAccountType } from "../domain/accountType";
 import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../domain/fixedRoles";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
+import { recordAgencyAuditEvent } from "./agencyAuditLog";
 
 /** The built-in "full access" system roles (the legacy single "Owner" role,
  * plus AGENCY_OWNER/CLIENT_OWNER from the fixed role catalogs - see
@@ -219,6 +220,20 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     await provisionDefaultForms(company.id, getIndustryTemplate(industryTemplate), user.id);
   } catch (err) {
     console.error("[auth/register] Failed to provision default forms:", err);
+  }
+
+  // AGENCY_CREATED - only for the "agency" accountType (see
+  // src/application/agencyAuditLog.ts's header comment for the full 11-event
+  // design). The registering user is both the actor and the new agency's
+  // first/only user at this point, so agencyUserId = user.id unambiguously;
+  // clientCompanyId is null, this event has no client subject.
+  if (accountType === "agency") {
+    await recordAgencyAuditEvent({
+      agencyCompanyId: company.id,
+      action: "AGENCY_CREATED",
+      agencyUserId: user.id,
+      detail: `Agency "${company.name}" registered by ${user.email}`,
+    });
   }
 
   return { company, user, role: ownerRole };

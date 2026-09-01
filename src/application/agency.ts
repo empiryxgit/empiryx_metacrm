@@ -58,6 +58,7 @@ import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { resolveEffectiveIndustryTemplate, LEAD_SOURCES } from "../domain/industryTemplates";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../domain/agencyClientStatus";
 import { canAccessClient, type AgencyClientAccess } from "./agencyClientAccess";
+import { recordAgencyAuditEvent } from "./agencyAuditLog";
 
 export interface AgencyDashboardClientRow {
   id: string;
@@ -622,9 +623,36 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
       userId: input.actingUserId,
       createdBy: input.actingUserId,
     });
+    // CLIENT_ACCESS_GRANTED - see agencyAuditLog.ts's header comment: the
+    // acting agency user is both the grant's actor and its subject here
+    // (auto-assigning themselves), so agencyUserId = input.actingUserId.
+    // Only logged once the grant itself actually succeeded, in the same
+    // try block, so this never claims access was granted when it wasn't.
+    await recordAgencyAuditEvent({
+      agencyCompanyId: input.agencyCompanyId,
+      action: "CLIENT_ACCESS_GRANTED",
+      agencyUserId: input.actingUserId,
+      clientCompanyId: company.id,
+      detail: "Auto-assigned to acting user on client creation",
+    });
   } catch (err) {
     console.error("[agency/add-client] Failed to auto-assign acting user to new client:", err);
   }
+
+  // CLIENT_CREATED - fires once the client company + owner user + agency
+  // link above have all actually succeeded (a throw anywhere before this
+  // line means no client was created, so nothing to log). The optional
+  // steps below (completeOnboarding, setCompanyCreatedBy,
+  // provisionDefaultForms) are all best-effort polish that never change
+  // whether a client was created, so this intentionally does not wait for
+  // them.
+  await recordAgencyAuditEvent({
+    agencyCompanyId: input.agencyCompanyId,
+    action: "CLIENT_CREATED",
+    agencyUserId: input.actingUserId,
+    clientCompanyId: company.id,
+    detail: `Client "${company.name}" created (owner: ${owner.email})`,
+  });
 
   // Every new account (agency-created clients included) skips the old
   // company-profile + first-campaign onboarding wizard - see
@@ -721,6 +749,17 @@ export async function inviteExistingClient(input: {
     status: "invited",
   });
 
+  // CLIENT_INVITED - the link above succeeded, so this company is now
+  // genuinely "invited" (see agencyAuditLog.ts's header comment for the
+  // 11-event catalog this belongs to).
+  await recordAgencyAuditEvent({
+    agencyCompanyId: input.agencyCompanyId,
+    action: "CLIENT_INVITED",
+    agencyUserId: input.actingUserId,
+    clientCompanyId: company.id,
+    detail: `Invited existing company "${company.name}" (${user.email})`,
+  });
+
   // Same auto-assign as addClientOrganization's own doc comment explains -
   // harmless even though the relationship is still "invited" (not yet
   // accepted): getClientDetail/getAgencyDashboardSummary already exclude
@@ -734,6 +773,15 @@ export async function inviteExistingClient(input: {
       clientCompanyId: company.id,
       userId: input.actingUserId,
       createdBy: input.actingUserId,
+    });
+    // CLIENT_ACCESS_GRANTED - see addClientOrganization's identical comment
+    // above; same reasoning applies here.
+    await recordAgencyAuditEvent({
+      agencyCompanyId: input.agencyCompanyId,
+      action: "CLIENT_ACCESS_GRANTED",
+      agencyUserId: input.actingUserId,
+      clientCompanyId: company.id,
+      detail: "Auto-assigned to acting user on client invite",
     });
   } catch (err) {
     console.error("[agency/invite-client] Failed to auto-assign acting user to invited client:", err);
@@ -769,12 +817,33 @@ export async function respondToAgencyInvite(input: {
   companyId: string;
   agencyCompanyId: string;
   accept: boolean;
+  /** The client-side user who clicked Accept/Decline - see
+   * agencyAuditLog.ts's header comment: this is NOT an agency-side user, so
+   * it is recorded in `detail`, never in agencyUserId (which stays null for
+   * both events this function can fire). */
+  actingClientUserId: string;
 }): Promise<void> {
   const claim = await getClaimingAgencyForClient(input.companyId);
   if (!claim || claim.relationshipStatus !== "invited" || claim.agencyCompanyId !== input.agencyCompanyId) {
     throw new AuthError("That invitation is no longer available.", 404);
   }
   await setAgencyClientStatus(input.agencyCompanyId, input.companyId, input.accept ? "active" : "removed");
+
+  // INVITATION_ACCEPTED / CLIENT_REMOVED - the client's own accept/decline
+  // action on an agency's invite (see this function's own header comment).
+  // agencyUserId is null for both: the actor here is a CLIENT-side user, not
+  // an agency one - see agencyAuditLog.ts's header comment for why that's
+  // the one case in this whole feature where agencyUserId is deliberately
+  // left null instead of recording the actor.
+  await recordAgencyAuditEvent({
+    agencyCompanyId: input.agencyCompanyId,
+    action: input.accept ? "INVITATION_ACCEPTED" : "CLIENT_REMOVED",
+    agencyUserId: null,
+    clientCompanyId: input.companyId,
+    detail: input.accept
+      ? `Invitation accepted by client user ${input.actingClientUserId}`
+      : `Invitation declined by client user ${input.actingClientUserId}`,
+  });
 }
 
 // ---- Client detail (read-only) --------------------------------------------
@@ -867,6 +936,7 @@ export async function setClientRelationshipStatus(
   agencyCompanyId: string,
   clientCompanyId: string,
   status: Extract<AgencyClientStatus, "active" | "suspended" | "removed">,
+  actingUserId: string,
 ): Promise<void> {
   const claim = await getClaimingAgencyForClient(clientCompanyId);
   if (
@@ -877,4 +947,19 @@ export async function setClientRelationshipStatus(
     throw new AuthError("Client not found.", 404);
   }
   await setAgencyClientStatus(agencyCompanyId, clientCompanyId, status);
+
+  // CLIENT_SUSPENDED / CLIENT_REMOVED - see agencyAuditLog.ts's header
+  // comment. Deliberately NOT logged for a transition back to "active"
+  // (reactivation) - the user's 11-action catalog has no event for that, and
+  // this feature only ever logs the exact 11 names given, never an invented
+  // one (see that file's header comment).
+  if (status === "suspended" || status === "removed") {
+    await recordAgencyAuditEvent({
+      agencyCompanyId,
+      action: status === "suspended" ? "CLIENT_SUSPENDED" : "CLIENT_REMOVED",
+      agencyUserId: actingUserId,
+      clientCompanyId,
+      detail: "Relationship status changed via agency Client Settings",
+    });
+  }
 }

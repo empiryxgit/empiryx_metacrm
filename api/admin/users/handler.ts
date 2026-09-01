@@ -8,7 +8,7 @@
 // on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAuth, requirePermission, type AuthContext } from "../../../src/infrastructure/auth/context";
+import { requireAuth, requirePermission, parseCookies, type AuthContext } from "../../../src/infrastructure/auth/context";
 import {
   countOtherActiveUsersWithRole,
   createUser,
@@ -43,6 +43,7 @@ import {
 import { AuthError, login } from "../../../src/application/auth";
 import { setAuthCookies, CLIENT_CONTEXT_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../../../src/infrastructure/auth/tokens";
 import { checkAgencyCanManageClient } from "../../../src/application/agencyClientContext";
+import { recordAgencyAuditEvent } from "../../../src/application/agencyAuditLog";
 import {
   addClientOrganization,
   getAgencyCampaignsReport,
@@ -170,6 +171,21 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
       mustChangePassword: true,
     });
 
+    // AGENCY_USER_CREATED - only meaningful for an agency company (see
+    // agencyAuditLog.ts's header comment: agencyUserId is always the ACTOR,
+    // here the admin creating the account; the new user's own id/email is
+    // recorded in `detail` as non-secret context, not as agencyUserId).
+    // clientCompanyId is null - user creation itself has no client subject.
+    const isAgencyCompany = (company ?? (await getCompanyById(auth.companyId)))?.accountType === "agency";
+    if (isAgencyCompany) {
+      await recordAgencyAuditEvent({
+        agencyCompanyId: auth.companyId,
+        action: "AGENCY_USER_CREATED",
+        agencyUserId: auth.userId,
+        detail: `Created user ${email}`,
+      });
+    }
+
     if (isAgencyWithAssignments && company?.accountType === "agency") {
       await setAssignedClients({
         agencyCompanyId: auth.companyId,
@@ -177,6 +193,17 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
         clientCompanyIds: assignedClientIds!,
         createdBy: auth.userId,
       });
+      // CLIENT_ACCESS_GRANTED - one event per client the new user was
+      // assigned at creation time (see agencyAuditLog.ts's header comment).
+      for (const clientCompanyId of assignedClientIds!) {
+        await recordAgencyAuditEvent({
+          agencyCompanyId: auth.companyId,
+          action: "CLIENT_ACCESS_GRANTED",
+          agencyUserId: auth.userId,
+          clientCompanyId,
+          detail: `Granted to new user ${email} at creation`,
+        });
+      }
     }
 
     res.status(201).json({
@@ -315,12 +342,57 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
         res.status(400).json({ error: "One or more clients are not part of your agency's roster." });
         return;
       }
+      // Snapshot the BEFORE set so CLIENT_ACCESS_GRANTED/CLIENT_ACCESS_REVOKED
+      // can be logged per-client, diffed against the AFTER set - setAssignedClients
+      // itself is a replace-all with no diff of its own (see its doc comment).
+      const before = new Set(await getUserAssignedClientIds(userId));
       await setAssignedClients({
         agencyCompanyId: auth.companyId,
         userId,
         clientCompanyIds: assignedClientIds,
         createdBy: auth.userId,
       });
+      const after = new Set(assignedClientIds);
+      for (const clientCompanyId of after) {
+        if (!before.has(clientCompanyId)) {
+          await recordAgencyAuditEvent({
+            agencyCompanyId: auth.companyId,
+            action: "CLIENT_ACCESS_GRANTED",
+            agencyUserId: auth.userId,
+            clientCompanyId,
+            detail: `Granted to user ${userId} via Assigned Clients`,
+          });
+        }
+      }
+      for (const clientCompanyId of before) {
+        if (!after.has(clientCompanyId)) {
+          await recordAgencyAuditEvent({
+            agencyCompanyId: auth.companyId,
+            action: "CLIENT_ACCESS_REVOKED",
+            agencyUserId: auth.userId,
+            clientCompanyId,
+            detail: `Revoked from user ${userId} via Assigned Clients`,
+          });
+        }
+      }
+    }
+
+    // AGENCY_USER_ASSIGNED - a role (re)assignment for an existing agency
+    // user (see agencyAuditLog.ts's header comment: agencyUserId is always
+    // the ACTOR, here the admin making the change; the target user's id is
+    // recorded in `detail`, not as a second agencyUserId-shaped column).
+    // clientCompanyId is null - a role change has no client subject; that's
+    // exactly what the CLIENT_ACCESS_* events just above are for.
+    if (roleId && roleId !== existingTarget.roleId) {
+      const company = await getCompanyById(auth.companyId);
+      if (company?.accountType === "agency") {
+        await recordAgencyAuditEvent({
+          agencyCompanyId: auth.companyId,
+          action: "AGENCY_USER_ASSIGNED",
+          agencyUserId: auth.userId,
+          detail: `Reassigned role for user ${userId}`,
+        });
+      }
     }
 
     await updateUser(auth.companyId, userId, {
@@ -724,12 +796,12 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   if (action === "clients") return handleAgencyClientsCollection(req, res, auth);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
-  if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId);
+  if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId, auth.userId);
   if (action === "generate-onboarding-link") return handleAgencyGenerateOnboardingLink(req, res, auth.companyId, auth.userId);
   if (action === "list-onboarding-links") return handleAgencyListOnboardingLinks(req, res, auth.companyId);
   if (action === "revoke-onboarding-link") return handleAgencyRevokeOnboardingLink(req, res, auth.companyId);
   if (action === "enter-client-context") return handleAgencyEnterClientContext(req, res, auth);
-  if (action === "exit-client-context") return handleAgencyExitClientContext(req, res);
+  if (action === "exit-client-context") return handleAgencyExitClientContext(req, res, auth);
 
   res.status(404).json({ error: "Not found" });
 }
@@ -757,15 +829,41 @@ async function handleAgencyEnterClientContext(req: VercelRequest, res: VercelRes
   // own comment in tokens.ts for why this deliberately doesn't persist
   // across a browser restart the way "remember me" sessions can.
   res.setHeader("Set-Cookie", [`${CLIENT_CONTEXT_COOKIE_NAME}=${clientCompanyId}; ${cookieOptions(null)}`]);
+  // CLIENT_CONTEXT_SWITCHED - see agencyAuditLog.ts's header comment. Only
+  // logged once checkAgencyCanManageClient has actually authorized the
+  // switch above (result.ok), so this never claims a switch happened when
+  // access was denied.
+  await recordAgencyAuditEvent({
+    agencyCompanyId: auth.companyId,
+    action: "CLIENT_CONTEXT_SWITCHED",
+    agencyUserId: auth.userId,
+    clientCompanyId,
+    detail: "Entered client context",
+  });
   res.status(200).json({ ok: true, clientName: result.clientName, agencyName: result.agencyName });
 }
 
-async function handleAgencyExitClientContext(req: VercelRequest, res: VercelResponse) {
+async function handleAgencyExitClientContext(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
+  // The client being exited must be read from the cookie BEFORE it's
+  // cleared below - this is the only place that "which client was I in"
+  // information is available server-side (see this section's own header
+  // comment: neither this handler nor the cookie value round-trips through
+  // the request body).
+  const previousClientCompanyId = parseCookies(req)[CLIENT_CONTEXT_COOKIE_NAME] ?? null;
   res.setHeader("Set-Cookie", [`${CLIENT_CONTEXT_COOKIE_NAME}=; ${clearCookieOptions()}`]);
+  if (previousClientCompanyId) {
+    await recordAgencyAuditEvent({
+      agencyCompanyId: auth.companyId,
+      action: "CLIENT_CONTEXT_SWITCHED",
+      agencyUserId: auth.userId,
+      clientCompanyId: previousClientCompanyId,
+      detail: "Exited client context",
+    });
+  }
   res.status(200).json({ ok: true });
 }
 
@@ -927,7 +1025,7 @@ async function handleAgencyClientDetail(req: VercelRequest, res: VercelResponse,
   }
 }
 
-async function handleAgencySetClientStatus(req: VercelRequest, res: VercelResponse, agencyCompanyId: string) {
+async function handleAgencySetClientStatus(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -939,7 +1037,7 @@ async function handleAgencySetClientStatus(req: VercelRequest, res: VercelRespon
     return;
   }
   try {
-    await setClientRelationshipStatus(agencyCompanyId, clientId, status as "active" | "suspended" | "removed");
+    await setClientRelationshipStatus(agencyCompanyId, clientId, status as "active" | "suspended" | "removed", actingUserId);
     res.status(200).json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) {
@@ -1009,7 +1107,7 @@ async function handleAgencyInviteResource(req: VercelRequest, res: VercelRespons
 
   const action = getQueryString(req, "action");
   if (action === "pending") return handleAgencyInvitePending(req, res, auth.companyId);
-  if (action === "respond") return handleAgencyInviteRespond(req, res, auth.companyId);
+  if (action === "respond") return handleAgencyInviteRespond(req, res, auth.companyId, auth.userId);
 
   res.status(404).json({ error: "Not found" });
 }
@@ -1023,7 +1121,7 @@ async function handleAgencyInvitePending(req: VercelRequest, res: VercelResponse
   res.status(200).json({ invite });
 }
 
-async function handleAgencyInviteRespond(req: VercelRequest, res: VercelResponse, companyId: string) {
+async function handleAgencyInviteRespond(req: VercelRequest, res: VercelResponse, companyId: string, actingClientUserId: string) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -1034,7 +1132,7 @@ async function handleAgencyInviteRespond(req: VercelRequest, res: VercelResponse
     return;
   }
   try {
-    await respondToAgencyInvite({ companyId, agencyCompanyId, accept });
+    await respondToAgencyInvite({ companyId, agencyCompanyId, accept, actingClientUserId });
     res.status(200).json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) {

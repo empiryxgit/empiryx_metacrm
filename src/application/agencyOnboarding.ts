@@ -49,6 +49,7 @@ import { linkOrReactivateClientOrganization } from "../infrastructure/db/reposit
 import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { getIndustryTemplate } from "../domain/industryTemplates";
+import { recordAgencyAuditEvent } from "./agencyAuditLog";
 
 export interface GenerateOnboardingLinkInput {
   agencyCompanyId: string;
@@ -107,6 +108,20 @@ export async function generateOnboardingLink(input: GenerateOnboardingLinkInput)
     }
     throw err;
   }
+
+  // CLIENT_INVITED - this self-serve onboarding link is a third "invite a
+  // client" path alongside inviteExistingClient (agency.ts), which fires the
+  // same event - see agencyAuditLog.ts's header comment. clientCompanyId is
+  // null: no client company exists yet at this point, only an invitation for
+  // one that may or may not ever be redeemed (see completeAgencyOnboarding
+  // below for CLIENT_CREATED, fired once one actually is).
+  await recordAgencyAuditEvent({
+    agencyCompanyId: input.agencyCompanyId,
+    action: "CLIENT_INVITED",
+    agencyUserId: input.actingUserId,
+    clientCompanyId: null,
+    detail: `Generated onboarding link for "${clientName}" (${email})`,
+  });
 
   return { token, expiresAt };
 }
@@ -267,6 +282,32 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
     status: "active",
   });
 
+  // INVITATION_ACCEPTED / CLIENT_CREATED - the token redemption above
+  // (acceptInvitationByHash) and the company+owner+link above have all
+  // actually succeeded by this point. agencyUserId is null for
+  // INVITATION_ACCEPTED - see agencyAuditLog.ts's header comment: the actor
+  // completing this form is the brand-new CLIENT owner, not an agency user
+  // (the agency user who generated the link is recorded separately below,
+  // on CLIENT_CREATED and CLIENT_ACCESS_GRANTED, as the acting user for
+  // those). CLIENT_CREATED does carry claimed.createdBy as agencyUserId
+  // (nullable - the generating user could since have been removed, same
+  // as the auto-assign below), since a client company genuinely was
+  // created by/on behalf of that agency user's invitation.
+  await recordAgencyAuditEvent({
+    agencyCompanyId: claimed.agencyCompanyId,
+    action: "INVITATION_ACCEPTED",
+    agencyUserId: null,
+    clientCompanyId: company.id,
+    detail: `Onboarding link redeemed by ${owner.email}`,
+  });
+  await recordAgencyAuditEvent({
+    agencyCompanyId: claimed.agencyCompanyId,
+    action: "CLIENT_CREATED",
+    agencyUserId: claimed.createdBy ?? null,
+    clientCompanyId: company.id,
+    detail: `Client "${company.name}" created via onboarding link (owner: ${owner.email})`,
+  });
+
   // Auto-assign whichever agency user generated this onboarding link (the
   // invitation's own createdBy) to the client it just produced - same
   // reasoning as addClientOrganization's own comment on assignClientToUser.
@@ -280,6 +321,15 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
         clientCompanyId: company.id,
         userId: claimed.createdBy,
         createdBy: claimed.createdBy,
+      });
+      // CLIENT_ACCESS_GRANTED - see addClientOrganization's identical
+      // comment in agency.ts for the reasoning.
+      await recordAgencyAuditEvent({
+        agencyCompanyId: claimed.agencyCompanyId,
+        action: "CLIENT_ACCESS_GRANTED",
+        agencyUserId: claimed.createdBy,
+        clientCompanyId: company.id,
+        detail: "Auto-assigned to inviting user on client creation via onboarding link",
       });
     } catch (err) {
       console.error("[agency-onboarding/complete] Failed to auto-assign inviting user to new client:", err);
