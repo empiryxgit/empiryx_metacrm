@@ -26,6 +26,7 @@ import { AuthError } from "./auth";
 import { uniqueSlug } from "./auth";
 import { hashPassword } from "../infrastructure/auth/password";
 import { generateOnboardingToken, hashOnboardingToken, ONBOARDING_TOKEN_TTL_SECONDS } from "../infrastructure/auth/tokens";
+import { isUniqueViolation } from "../infrastructure/db/repositories";
 import {
   acceptInvitationByHash,
   createInvitation,
@@ -71,7 +72,16 @@ export interface GenerateOnboardingLinkResult {
  * (shown back on the public landing page before an account exists to read
  * them from) - they place no constraint on what completeAgencyOnboarding
  * ultimately creates. Always creates a PENDING invitation - see
- * createInvitation's own comment on why nothing else is possible here. */
+ * createInvitation's own comment on why nothing else is possible here.
+ *
+ * At most one PENDING invitation may exist per (agency, email) pair at a
+ * time - enforced by ux_organization_invitations_one_pending_per_agency_email
+ * in schema.ts, not just a soft application-layer check, so it holds even
+ * under concurrent requests. This function pre-checks nothing and instead
+ * catches that constraint's violation below, translating it into the same
+ * friendly AuthError shape every other validation failure here uses - an
+ * agency generating a second link before the first is revoked/accepted
+ * gets a clear message, never a raw 500. */
 export async function generateOnboardingLink(input: GenerateOnboardingLinkInput): Promise<GenerateOnboardingLinkResult> {
   const clientName = input.clientName.trim();
   const email = input.contactEmail.trim().toLowerCase();
@@ -82,14 +92,21 @@ export async function generateOnboardingLink(input: GenerateOnboardingLinkInput)
   const { token, hash } = generateOnboardingToken();
   const expiresAt = new Date(Date.now() + ONBOARDING_TOKEN_TTL_SECONDS * 1000);
 
-  await createInvitation({
-    agencyCompanyId: input.agencyCompanyId,
-    tokenHash: hash,
-    clientName,
-    email,
-    expiresAt,
-    createdBy: input.actingUserId,
-  });
+  try {
+    await createInvitation({
+      agencyCompanyId: input.agencyCompanyId,
+      tokenHash: hash,
+      clientName,
+      email,
+      expiresAt,
+      createdBy: input.actingUserId,
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new AuthError(`An onboarding invitation to ${email} is already pending. Revoke it first, or wait for it to be accepted or expire, before generating a new one.`);
+    }
+    throw err;
+  }
 
   return { token, expiresAt };
 }

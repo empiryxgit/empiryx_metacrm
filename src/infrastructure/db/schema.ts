@@ -119,6 +119,12 @@ export const companies = crm.table("companies", {
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (t) => ({
   slugIdx: uniqueIndex("ux_companies_slug").on(t.slug),
+  // Added for admin/status-filtered listings (e.g. "suspended companies")
+  // and chronological views ("newest companies first") - status isn't
+  // enforced as a login/API gate yet (see the column's own comment above),
+  // but the index costs nothing to have ready for when it is.
+  statusIdx: index("ix_companies_status").on(t.status),
+  createdAtIdx: index("ix_companies_created_at").on(t.createdAt),
 }));
 
 // ---------------------------------------------------------------------------
@@ -195,6 +201,13 @@ export const agencyClients = crm.table(
       .where(sql`status IN ('invited', 'pending', 'active', 'suspended')`),
     // An organization can never be its own client.
     notSelfLinkCheck: check("ck_agency_clients_not_self", sql`${t.agencyCompanyId} <> ${t.clientCompanyId}`),
+    // Status-filtered listings (e.g. "active clients only") and
+    // chronological ordering ("most recently linked client first") -
+    // neither had its own index before; both are cheap and additive
+    // alongside the composite/partial unique indexes above, which serve a
+    // different purpose (correctness, not lookup speed).
+    statusIdx: index("ix_agency_clients_status").on(t.status),
+    createdAtIdx: index("ix_agency_clients_created_at").on(t.createdAt),
   }),
 );
 
@@ -298,6 +311,28 @@ export const organizationInvitations = crm.table(
     // bits of entropy, but the index still needs to exist for the lookup
     // itself to be fast, and uniqueness costs nothing extra to declare).
     tokenHashIdx: uniqueIndex("ux_organization_invitations_token_hash").on(t.tokenHash),
+    // Status-filtered listings (Clients page's pending/accepted/revoked
+    // tabs) and chronological ordering - neither had its own index before.
+    statusIdx: index("ix_organization_invitations_status").on(t.status),
+    createdAtIdx: index("ix_organization_invitations_created_at").on(t.createdAt),
+    // generateOnboardingLink (src/application/agencyOnboarding.ts) had no
+    // guard against the same agency generating a second still-outstanding
+    // invite to the same email while the first is still PENDING - a
+    // prospective client could end up with two valid, independent links.
+    // Partial unique index (same idiom as
+    // ux_agency_clients_one_claimed_agency_per_client /
+    // ux_meta_connections_one_active_per_tenant above: "at most one active
+    // X" expressed as a WHERE-scoped unique index, not a plain composite
+    // unique) so only ONE PENDING invitation can exist per (agency, email)
+    // pair at a time; ACCEPTED/EXPIRED/REVOKED rows are exempt and keep
+    // accumulating as history exactly as before. The corresponding
+    // migration defuses any pre-existing duplicate PENDING rows (by
+    // revoking all but the newest per pair) before this index is created,
+    // so it never fails against real data - see migration 0023's own
+    // comment.
+    onePendingPerAgencyEmailIdx: uniqueIndex("ux_organization_invitations_one_pending_per_agency_email")
+      .on(t.agencyCompanyId, t.email)
+      .where(sql`status = 'PENDING'`),
   }),
 );
 
@@ -340,6 +375,7 @@ export const agencyClientAssignments = crm.table(
     // One row per (user, client) pair - re-assigning is an upsert, not a
     // second row, same shape as ux_branch_users_branch_user.
     userClientIdx: uniqueIndex("ux_agency_client_assignments_user_client").on(t.userId, t.clientCompanyId),
+    createdAtIdx: index("ix_agency_client_assignments_created_at").on(t.createdAt),
   }),
 );
 
@@ -366,6 +402,7 @@ export const roles = crm.table("roles", {
 }, (t) => ({
   companyNameIdx: uniqueIndex("ux_roles_company_name").on(t.companyId, t.name),
   companyIdx: index("ix_roles_company_id").on(t.companyId),
+  createdAtIdx: index("ix_roles_created_at").on(t.createdAt),
 }));
 
 export const users = crm.table("users", {
@@ -392,6 +429,10 @@ export const users = crm.table("users", {
 }, (t) => ({
   emailIdx: uniqueIndex("ux_users_email").on(t.email),
   companyIdx: index("ix_users_company_id").on(t.companyId),
+  // Status-filtered listings (admin "active users" / "disabled users") and
+  // chronological ordering - neither had its own index before.
+  statusIdx: index("ix_users_status").on(t.status),
+  createdAtIdx: index("ix_users_created_at").on(t.createdAt),
 }));
 
 /**

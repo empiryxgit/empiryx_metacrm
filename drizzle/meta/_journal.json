@@ -162,6 +162,13 @@
       "when": 1788243941195,
       "tag": "0022_industry_template_general_default_and_custom_config",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788244657169,
+      "tag": "0023_tenancy_relationship_status_created_at_indexes",
+      "breakpoints": true
     }
   ]
 }
