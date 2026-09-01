@@ -19,7 +19,7 @@ import {
   listUsers,
   updateUser,
 } from "../../../src/infrastructure/db/repositories/tenancy";
-import { resolveAgencyClientAccess } from "../../../src/application/agencyClientAccess";
+import { resolveAgencyClientAccess, assertAgencyAccountType } from "../../../src/application/agencyClientAccess";
 import { getUserAssignedClientIds, setAssignedClients } from "../../../src/infrastructure/db/repositories/agencyClientAssignments";
 import { listClaimedClientOrganizations } from "../../../src/infrastructure/db/repositories/organizations";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
@@ -784,9 +784,14 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  if (company.accountType !== "agency") {
-    res.status(403).json({ error: "This is only available to agency accounts." });
-    return;
+  try {
+    assertAgencyAccountType(company.accountType);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    throw err;
   }
 
   const action = getQueryString(req, "action");

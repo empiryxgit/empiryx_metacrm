@@ -24,6 +24,7 @@
 import type { AuthContext } from "../infrastructure/auth/context";
 import { hasPermission } from "../infrastructure/auth/context";
 import { PERMISSIONS } from "../domain/permissions";
+import { AuthError } from "./auth";
 
 export type AgencyClientAccess = { scope: "all" } | { scope: "restricted"; clientCompanyIds: string[] };
 
@@ -50,4 +51,24 @@ export function resolveAgencyClientAccess(auth: AuthContext): AgencyClientAccess
  * canAccessBranch plays for branches. */
 export function canAccessClient(access: AgencyClientAccess, clientCompanyId: string): boolean {
   return access.scope === "all" || access.clientCompanyIds.includes(clientCompanyId);
+}
+
+/**
+ * The tenant-type gate every "Agency" surface (dashboard, clients, reports,
+ * client detail, client-switcher) sits behind: a company whose own
+ * accountType is not "agency" has no business calling ANY of it, regardless
+ * of that user's individual permissions - a client company's Owner has
+ * every permission there is for their own tenant, but that must never make
+ * agency-only endpoints reachable. Extracted out of api/admin/users/
+ * handler.ts's inline check (handleAgencyResource) into its own named,
+ * independently-testable function specifically so this tenant boundary has
+ * real backend test coverage rather than living only in code no automated
+ * test exercises - see agencyClientAccessScenarios.test.ts's "client user
+ * attempts agency dashboard" scenario. Same behavior as before this
+ * extraction: throws the identical 403 AuthError the inline check raised.
+ */
+export function assertAgencyAccountType(accountType: string): void {
+  if (accountType !== "agency") {
+    throw new AuthError("This is only available to agency accounts.", 403);
+  }
 }
