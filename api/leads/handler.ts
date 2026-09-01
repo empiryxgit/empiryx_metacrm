@@ -25,7 +25,7 @@ import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy
 import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
 import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 import {
-  getIndustryTemplate,
+  resolveEffectiveIndustryTemplate,
   getInitialStageKey,
   isValidStageKey,
   MANUAL_LEAD_SOURCE_KEYS,
@@ -151,7 +151,7 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
 
   if (!stage || !isValidStageKey(template, stage)) {
     res.status(400).json({ error: `stage must be one of: ${template.stages.map((s) => s.key).join(", ")}` });
@@ -287,7 +287,7 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
 
   const body = (req.body ?? {}) as ManualCreateBody;
   const fullName = body.fullName?.trim();
@@ -360,7 +360,7 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: str
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
 
   const body = (req.body ?? {}) as UpdateBody;
   const patch: Record<string, unknown> = {};

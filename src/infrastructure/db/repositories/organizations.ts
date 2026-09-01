@@ -101,6 +101,11 @@ export async function listClaimedClientOrganizations(agencyCompanyId: string) {
       clientName: companies.name,
       clientStatus: companies.status,
       clientIndustryTemplate: companies.industryTemplate,
+      // Only meaningful when clientIndustryTemplate is "custom" - see
+      // buildStatusOptions in src/application/agency.ts, which needs each
+      // authorized client's real custom stage set (not just the safe
+      // placeholder) to build an accurate cross-client Status filter.
+      clientCustomTemplateConfig: companies.customTemplateConfig,
       relationshipStatus: agencyClients.status,
       linkedAt: agencyClients.createdAt,
     })

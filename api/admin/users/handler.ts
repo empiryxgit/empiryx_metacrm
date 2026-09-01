@@ -24,7 +24,7 @@ import { getUserAssignedClientIds, setAssignedClients } from "../../../src/infra
 import { listClaimedClientOrganizations } from "../../../src/infrastructure/db/repositories/organizations";
 import { generateTempPassword, hashPassword } from "../../../src/infrastructure/auth/password";
 import { PERMISSIONS } from "../../../src/domain/permissions";
-import { getIndustryTemplate } from "../../../src/domain/industryTemplates";
+import { resolveEffectiveIndustryTemplate } from "../../../src/domain/industryTemplates";
 import { resolveBranchAccess } from "../../../src/application/branchAccess";
 import {
   addUserToBranch,
@@ -204,7 +204,7 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
   }
 
   const role = await getRoleById(auth.companyId, user.roleId);
-  const template = company ? getIndustryTemplate(company.industryTemplate) : null;
+  const template = company ? resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig) : null;
 
   // Assigned Clients (Users -> View -> "which clients can this teammate
   // see") is only a meaningful concept for an agency company's own users -

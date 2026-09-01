@@ -28,6 +28,7 @@
 
     { "source": "/api/onboarding/company", "destination": "/api/onboarding/handler?action=company" },
     { "source": "/api/onboarding/complete", "destination": "/api/onboarding/handler?action=complete" },
+    { "source": "/api/settings/business-configuration", "destination": "/api/onboarding/handler?action=business-config" },
 
     { "source": "/api/internal/process-lead", "destination": "/api/internal/handler?action=process-lead" },
     { "source": "/api/internal/reconciliation", "destination": "/api/internal/handler?action=reconciliation" },

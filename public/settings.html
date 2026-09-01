@@ -38,15 +38,27 @@
     App.renderNav(me, "/settings.html");
 
     const grid = document.getElementById("settingsGrid");
+    const cards = [];
+    if (App.hasPermission(me, "company.manage")) {
+      cards.push(`
+        <a class="settings-card" href="/settings/business-configuration.html">
+          <h3>Business Configuration</h3>
+          <p>Optional industry template — Leads, Pipeline and Forms fields.</p>
+        </a>
+      `);
+    }
     if (App.hasPermission(me, "integrations.manage")) {
-      grid.innerHTML = `
+      cards.push(`
         <a class="settings-card" href="/settings/integrations.html">
           <h3>Integrations</h3>
           <p>Connect Meta and manage third-party lead sources.</p>
         </a>
-      `;
+      `);
+    }
+    if (cards.length) {
+      grid.innerHTML = cards.join("");
     } else {
-      grid.innerHTML = `<div class="state-block"><p class="state-title">Nothing to configure yet</p><p class="state-desc">Ask an admin for access to manage integrations.</p></div>`;
+      grid.innerHTML = `<div class="state-block"><p class="state-title">Nothing to configure yet</p><p class="state-desc">Ask an admin for access to manage settings.</p></div>`;
     }
   })();
 </script>

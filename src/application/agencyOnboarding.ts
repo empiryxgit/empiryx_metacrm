@@ -220,7 +220,12 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
 
   const slug = await uniqueSlug(companyName);
   const passwordHash = await hashPassword(input.password);
-  const industryTemplate = "real_estate" as const;
+  // "general" - plain Core CRM, no industry specialization picked on this
+  // client's behalf. The onboarding link's own form never collects an
+  // industry choice; the client (or the agency, on their behalf) can pick a
+  // real template any time afterward from Settings -> Business
+  // Configuration -> Industry/Template.
+  const industryTemplate = "general" as const;
 
   const company = await createCompany({ name: companyName, slug, industryTemplate, accountType: "individual" });
   // The four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles (see

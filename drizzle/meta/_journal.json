@@ -155,6 +155,13 @@
       "when": 1788198155824,
       "tag": "0021_add_agency_client_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788243941195,
+      "tag": "0022_industry_template_general_default_and_custom_config",
+      "breakpoints": true
     }
   ]
 }

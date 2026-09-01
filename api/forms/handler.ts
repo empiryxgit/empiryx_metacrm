@@ -28,7 +28,7 @@ import {
   FORM_FIELD_TYPES,
   LEAD_SOURCES,
   SYSTEM_FIELD_KEYS,
-  getIndustryTemplate,
+  resolveEffectiveIndustryTemplate,
   getInitialStageKey,
   isValidStageKey,
   type FormFieldType,
@@ -493,7 +493,7 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
   const defaultsResult = await validateFormDefaultsBody(auth.companyId, body, template);
   if (!defaultsResult.ok) {
     res.status(400).json({ error: defaultsResult.error });
@@ -630,7 +630,7 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
         res.status(401).json({ error: "Account no longer exists." });
         return;
       }
-      const template = getIndustryTemplate(company.industryTemplate);
+      const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
       const defaultsResult = await validateFormDefaultsBody(auth.companyId, body, template);
       if (!defaultsResult.ok) {
         res.status(400).json({ error: defaultsResult.error });
@@ -822,7 +822,7 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
   const fields = await getFormFields(formId);
 
   const body = (req.body ?? {}) as InternalSubmitBody;
@@ -1005,7 +1005,7 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
     res.status(404).json({ error: "This form is not available." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
 
   const body = (req.body ?? {}) as PublicSubmitBody;
   const values = body.values ?? {};

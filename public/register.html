@@ -46,9 +46,11 @@
            required for both - see RegisterInput.phoneNumber's own comment
            in src/application/auth.ts. Industry selection has been removed
            from registration entirely - see RegisterInput.industry's own
-           comment there; every new company defaults to the "real_estate"
-           CRM template and this form never sends a value for it, for
-           either account type. -->
+           comment there; every new company defaults to "general" (plain
+           Core CRM, no industry specialization) and this form never sends
+           a value for it, for either account type. A real industry
+           template (or a custom one) can always be picked afterward from
+           Settings -> Business Configuration -> Industry/Template. -->
       <form id="step2" style="display:none">
         <label for="orgName" id="orgNameLabel">Business / Organization Name</label>
         <input id="orgName" required autocomplete="organization" />

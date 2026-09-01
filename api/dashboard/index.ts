@@ -31,7 +31,7 @@ import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositories/tenancy";
 import { listCampaigns } from "../../src/infrastructure/db/repositories/campaigns";
 import { listBranches } from "../../src/infrastructure/db/repositories/branches";
-import { getIndustryTemplate, resolveStageKey, LEAD_SOURCES, type IndustryTemplate } from "../../src/domain/industryTemplates";
+import { resolveEffectiveIndustryTemplate, resolveStageKey, LEAD_SOURCES, type IndustryTemplate } from "../../src/domain/industryTemplates";
 import { assertBranchAccessible, resolveBranchAccess, type BranchAccess } from "../../src/application/branchAccess";
 import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 
@@ -130,7 +130,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(401).json({ error: "Account no longer exists." });
     return;
   }
-  const template = getIndustryTemplate(company.industryTemplate);
+  const template = resolveEffectiveIndustryTemplate(company.industryTemplate, company.customTemplateConfig);
   const classify = buildClassifier(template);
   const { rangeKey, start, end, prevStart, prevEnd, days } = getRangeBounds(req);
 

@@ -88,14 +88,18 @@ export interface RegisterInput {
   fullName: string;
   email: string;
   password: string;
-  // Which CRM template to provision the company with (real_estate | solar).
+  // Which CRM template to provision the company with (see
+  // src/domain/industryTemplates.ts's INDUSTRY_KEYS for the full catalog).
   // Registration no longer collects this from the user - public/register.html
-  // never sends it, so every new signup gets the default below. Kept
-  // optional (rather than removed) only for backward compatibility with any
-  // existing direct API caller that still sends it; a value here is still
-  // honored if present. Defaults to "real_estate" for any missing/
-  // unrecognized value rather than rejecting registration outright - see
-  // resolveIndustryKey().
+  // never sends it, so every new signup gets the default below: "general",
+  // i.e. plain Core CRM with no industry specialization at all, never a
+  // named industry picked on their behalf. Kept optional (rather than
+  // removed) only for backward compatibility with any existing direct API
+  // caller that still sends it; a value here is still honored if present -
+  // the company can always pick (or change) a real industry template later
+  // from Settings -> Business Configuration -> Industry/Template. Defaults
+  // to "general" for any missing/unrecognized value rather than rejecting
+  // registration outright - see resolveIndustryKey().
   industry?: string;
   // Whether this tenant is a single individual or an agency/team - see
   // src/domain/accountType.ts. Collected by public/register.html's second
@@ -116,7 +120,7 @@ export interface RegisterInput {
 }
 
 function resolveIndustryKey(industry: string | undefined): IndustryKey {
-  return INDUSTRY_KEYS.includes(industry as IndustryKey) ? (industry as IndustryKey) : "real_estate";
+  return INDUSTRY_KEYS.includes(industry as IndustryKey) ? (industry as IndustryKey) : "general";
 }
 
 /**

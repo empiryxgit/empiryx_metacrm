@@ -40,20 +40,37 @@ export const companies = crm.table("companies", {
   // structured CRM template below. Left untouched by the dynamic-pipeline
   // work.
   industry: text("industry"),
-  // The CRM template key (see src/domain/industryTemplates.ts for the
-  // fixed catalog - "real_estate" | "solar" today). Drives which pipeline
-  // stages, lead/customer fields and list columns the CRM renders for this
-  // tenant. Registration no longer asks a new user to pick one (see
-  // RegisterInput in src/application/auth.ts) - the NOT NULL default below
-  // is what every new company actually gets; the column stays a
-  // user-settable input only for any pre-existing account whose
-  // industryTemplate was chosen back when registration still asked (never
-  // touched or reset by that removal - see the migration notes). Deliberately
-  // a separate column from `industry` above - that one is a free-text
-  // description, this one is a controlled key the template system indexes
-  // by. Never branch on this value directly outside the template lookup -
-  // always go through getIndustryTemplate().
-  industryTemplate: text("industry_template").notNull().default("real_estate"),
+  // The CRM template key (see src/domain/industryTemplates.ts for the fixed
+  // catalog - real_estate | solar | healthcare | education | ecommerce |
+  // general | custom). Drives which pipeline stages, lead/customer fields
+  // and list columns the CRM renders for this tenant - but is deliberately
+  // OPTIONAL in spirit even though the column itself is NOT NULL: "general"
+  // (the default below) means "no industry specialization," i.e. the plain
+  // Core CRM (Leads/Contacts/Campaigns/Pipelines/Tasks/Users) with none of
+  // Fields/Pipeline/Workflows customized - a company must be able to run
+  // indefinitely on "general" and never be forced to pick a named industry.
+  // Settable any time via Settings -> Business Configuration -> Industry/
+  // Template (see api/onboarding/handler.ts's handleBusinessConfig), not
+  // just at registration. Deliberately a separate column from `industry`
+  // above - that one is a free-text description, this one is a controlled
+  // key the template system indexes by. Never branch on this value
+  // directly outside the template lookup - always go through
+  // resolveEffectiveIndustryTemplate() (or getIndustryTemplate() when no
+  // customTemplateConfig is available/relevant) in
+  // src/domain/industryTemplates.ts.
+  industryTemplate: text("industry_template").notNull().default("general"),
+  // Only meaningful when industryTemplate = "custom" - a company-authored
+  // IndustryTemplate shape (CustomTemplateConfig in
+  // src/domain/industryTemplates.ts: name, pipelineName, stages, fields,
+  // milestoneLabel), built through the Business Configuration screen's
+  // stage/field builder rather than picked from the fixed catalog. Nullable
+  // and independent of industryTemplate itself (switching to a built-in
+  // template and back to "custom" never loses a saved draft) - always
+  // re-validated via validateCustomTemplateConfig() before being trusted for
+  // anything, both on save and on every read (a hand-edited or
+  // since-invalidated row must never crash the CRM, just fall back to the
+  // plain generic template exactly like having none at all).
+  customTemplateConfig: jsonb("custom_template_config"),
   // Is this tenant a single individual, or an agency/team acting on behalf
   // of clients - see src/domain/accountType.ts for the fixed catalog
   // (AccountType/ACCOUNT_TYPE_KEYS), the same union-type-plus-array

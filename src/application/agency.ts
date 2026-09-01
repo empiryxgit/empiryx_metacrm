@@ -54,7 +54,7 @@ import { assignClientToUser } from "../infrastructure/db/repositories/agencyClie
 import { listCampaigns, listCampaignsForCompanies } from "../infrastructure/db/repositories/campaigns";
 import { getRelevantMetaConnectionView } from "../infrastructure/db/repositories/metaIntegration";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
-import { getIndustryTemplate, LEAD_SOURCES } from "../domain/industryTemplates";
+import { resolveEffectiveIndustryTemplate, LEAD_SOURCES } from "../domain/industryTemplates";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../domain/agencyClientStatus";
 import { canAccessClient, type AgencyClientAccess } from "./agencyClientAccess";
 
@@ -168,11 +168,11 @@ export interface AgencyLeadsReport {
  * to one option each; a template-specific stage like "site_visit" vs
  * "site_survey" correctly stays two distinct options). */
 function buildStatusOptions(
-  clients: Array<{ clientIndustryTemplate: string }>,
+  clients: Array<{ clientIndustryTemplate: string; clientCustomTemplateConfig?: unknown }>,
 ): Array<{ key: string; label: string }> {
   const seen = new Map<string, string>();
   for (const client of clients) {
-    const template = getIndustryTemplate(client.clientIndustryTemplate);
+    const template = resolveEffectiveIndustryTemplate(client.clientIndustryTemplate, client.clientCustomTemplateConfig);
     for (const stage of template.stages) {
       if (!seen.has(stage.key)) seen.set(stage.key, stage.label);
     }
@@ -367,10 +367,12 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
   const tempPassword = generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
-  // Every new company defaults to the "real_estate" CRM template, same as
-  // any other registration path - see RegisterInput.industry's own comment
-  // in ./auth.ts for why nothing here collects one.
-  const industryTemplate = "real_estate" as const;
+  // Every new company defaults to "general" - plain Core CRM, no industry
+  // specialization - same as any other registration path (see
+  // RegisterInput.industry's own comment in ./auth.ts for why nothing here
+  // collects one). The client can pick a real template any time afterward
+  // from Settings -> Business Configuration -> Industry/Template.
+  const industryTemplate = "general" as const;
   const company = await createCompany({ name: companyName, slug, industryTemplate, accountType: "individual" });
   // The four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles (see
   // src/domain/fixedRoles.ts), not the single generic Owner role - this
@@ -433,7 +435,7 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
     console.error("[agency/add-client] Failed to set company.createdBy:", err);
   }
   try {
-    await provisionDefaultForms(company.id, getIndustryTemplate(industryTemplate), owner.id);
+    await provisionDefaultForms(company.id, resolveEffectiveIndustryTemplate(industryTemplate, undefined), owner.id);
   } catch (err) {
     console.error("[agency/add-client] Failed to provision default forms:", err);
   }

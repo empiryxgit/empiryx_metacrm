@@ -51,6 +51,29 @@ export async function updateCompanyProfile(
   await db.update(companies).set({ ...input, updatedAt: new Date() }).where(eq(companies.id, companyId));
 }
 
+/**
+ * Settings -> Business Configuration -> Industry/Template - see
+ * api/onboarding/handler.ts's handleBusinessConfig, the only caller. Every
+ * value here has ALREADY been validated by that caller (industryTemplate
+ * against INDUSTRY_KEYS, customTemplateConfig - when present - via
+ * validateCustomTemplateConfig) before this ever runs; this function just
+ * writes what it's given. `customTemplateConfig` is deliberately OPTIONAL
+ * and independent of `industryTemplate`: omitting it here leaves whatever a
+ * company already saved untouched, so switching to a built-in template and
+ * back to "custom" later never loses a saved custom draft - only an
+ * explicit customTemplateConfig in the request ever overwrites it (passing
+ * `null` explicitly is how a caller would ever clear it, though today's
+ * handler never does). */
+export async function updateBusinessConfiguration(
+  companyId: string,
+  input: { industryTemplate: string; customTemplateConfig?: unknown },
+) {
+  const db = await getDb();
+  const set: Record<string, unknown> = { industryTemplate: input.industryTemplate, updatedAt: new Date() };
+  if ("customTemplateConfig" in input) set.customTemplateConfig = input.customTemplateConfig;
+  await db.update(companies).set(set).where(eq(companies.id, companyId));
+}
+
 export async function completeOnboarding(companyId: string) {
   const db = await getDb();
   await db

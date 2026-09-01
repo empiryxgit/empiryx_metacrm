@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Business Configuration — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .template-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; margin-top:14px; }
+  .template-card{ text-align:left; padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--surface); cursor:pointer; transition:border-color .15s ease; }
+  .template-card:hover{ border-color:var(--accent, #F47B32); }
+  .template-card.selected{ border-color:var(--accent, #F47B32); border-width:2px; }
+  .template-card h4{ margin:0 0 4px; font-size:14.5px; }
+  .template-card p{ margin:0; font-size:12.5px; color:var(--text-muted); }
+  .template-card .pill{ margin-top:8px; }
+  .stage-row, .field-row{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px; border:1px solid var(--border); border-radius:10px; margin-bottom:8px; }
+  .stage-row input[type="text"], .field-row input[type="text"]{ min-width:120px; }
+  .stage-row .key-input{ width:150px; }
+  .field-row .key-input{ width:140px; }
+  .flag-group{ display:flex; flex-wrap:wrap; gap:10px; font-size:12.5px; color:var(--text-muted); }
+  .flag-group label{ display:flex; align-items:center; gap:4px; margin:0; font-size:12.5px; font-weight:400; }
+  .row-actions{ display:flex; gap:4px; margin-left:auto; }
+  .stage-preview-chip{ display:inline-flex; align-items:center; gap:4px; padding:3px 9px; border-radius:999px; background:var(--bg-subtle, #f3f3f3); font-size:12px; margin:2px 4px 2px 0; }
+  .section-divider{ height:1px; background:var(--border); margin:20px 0; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap" style="max-width:960px">
+    <p style="margin:0 0 10px"><a href="/settings.html" style="font-size:12.5px; color:var(--text-muted)">← Settings</a></p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Business Configuration</h1>
+        <p class="page-sub">Choose an optional industry template for Leads, Pipeline and Forms — or run on the plain Core CRM. Nothing here is required.</p>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <div class="card" id="pickerCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">Industry / Template</h2>
+      <p class="hint" style="margin-top:-6px">This sets the default pipeline stages, fields and Add Customer form. Switching later never deletes your leads or their data.</p>
+      <div class="template-grid" id="templateGrid"></div>
+      <div id="templatePreview" style="margin-top:16px"></div>
+      <button class="btn" type="button" id="saveSelectionBtn" style="margin-top:16px">Save selection</button>
+    </div>
+
+    <div class="section-divider"></div>
+
+    <div class="card" id="customCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">Custom template builder</h2>
+      <p class="hint" style="margin-top:-6px">Define your own pipeline stages and fields. This draft is kept even if "Custom" isn't the active template right now — build it here, then select "Custom" above and save whenever you're ready.</p>
+
+      <div class="grid-2" style="margin-top:12px">
+        <div>
+          <label for="customName">Template name</label>
+          <input id="customName" placeholder="e.g. My Sales Process" maxlength="80" />
+        </div>
+        <div>
+          <label for="customPipelineName">Pipeline name</label>
+          <input id="customPipelineName" placeholder="e.g. Sales Pipeline" maxlength="80" />
+        </div>
+      </div>
+      <label for="customMilestoneLabel" style="margin-top:10px">Milestone label (optional)</label>
+      <input id="customMilestoneLabel" placeholder="e.g. Demos — shown as a dashboard KPI card" maxlength="60" />
+
+      <h3 class="section-title" style="margin-top:18px; font-size:14px">Pipeline stages</h3>
+      <p class="hint" style="margin-top:-6px">Exactly one stage must be the initial stage (where new leads land).</p>
+      <div id="stagesList"></div>
+      <button class="btn secondary" type="button" id="addStageBtn">+ Add stage</button>
+
+      <h3 class="section-title" style="margin-top:20px; font-size:14px">Custom fields (optional)</h3>
+      <p class="hint" style="margin-top:-6px">Stored on each lead/customer's custom fields, and offered in the Form Builder and Add Customer form.</p>
+      <div id="fieldsList"></div>
+      <button class="btn secondary" type="button" id="addFieldBtn">+ Add field</button>
+
+      <button class="btn" type="button" id="saveCustomBtn" style="margin-top:18px">Save custom template</button>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me, canManage;
+  let builtInTemplates = [];
+  let current = { industryTemplate: "general", customTemplateConfig: null };
+  let selectedKey = "general";
+  let customConfig = { name: "", pipelineName: "", stages: [], fields: [], milestoneLabel: "" };
+
+  const FIELD_TYPE_OPTIONS = ["text", "textarea", "currency", "number", "select"];
+
+  function showBanner(message, kind){
+    document.getElementById("banner").innerHTML = `<div class="banner ${kind === "success" ? "success" : "error"}">${App.escapeHtml(message)}</div>`;
+  }
+
+  function slugify(label, existingKeys){
+    let base = label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!base) base = "item";
+    if (!/^[a-z]/.test(base)) base = "s_" + base;
+    base = base.slice(0, 50);
+    let key = base, n = 1;
+    while (existingKeys.includes(key)) { key = `${base}_${n}`.slice(0, 50); n++; }
+    return key;
+  }
+
+  // ---- Built-in template picker ----
+
+  function templateCardHtml(t){
+    const isCustom = t.key === "custom";
+    return `<div class="template-card ${selectedKey === t.key ? "selected" : ""}" data-key="${t.key}">
+      <h4>${App.escapeHtml(t.name)}</h4>
+      <p>${App.escapeHtml(t.description || "")}</p>
+      ${isCustom ? "" : `<span class="pill">${t.stages.length} stage${t.stages.length === 1 ? "" : "s"} · ${t.fields.length} field${t.fields.length === 1 ? "" : "s"}</span>`}
+    </div>`;
+  }
+
+  function renderTemplateGrid(){
+    const grid = document.getElementById("templateGrid");
+    const cards = builtInTemplates.map(templateCardHtml).join("") +
+      `<div class="template-card ${selectedKey === "custom" ? "selected" : ""}" data-key="custom">
+        <h4>Custom</h4>
+        <p>Build your own stages and fields below.</p>
+      </div>`;
+    grid.innerHTML = cards;
+    grid.querySelectorAll(".template-card").forEach(card => {
+      card.addEventListener("click", () => {
+        selectedKey = card.dataset.key;
+        renderTemplateGrid();
+        renderTemplatePreview();
+      });
+    });
+  }
+
+  function renderTemplatePreview(){
+    const el = document.getElementById("templatePreview");
+    if (selectedKey === "custom") {
+      el.innerHTML = `<p class="hint">Define stages and fields in the Custom template builder below, then come back here and click "Save selection" (or just save from that section directly).</p>`;
+      return;
+    }
+    const t = builtInTemplates.find(x => x.key === selectedKey);
+    if (!t) { el.innerHTML = ""; return; }
+    el.innerHTML = `
+      <div><strong style="font-size:13px">Pipeline stages</strong><br/>${t.stages.map(s => `<span class="stage-preview-chip">${App.escapeHtml(s.label)}${s.isInitial ? " · initial" : ""}${s.isWon ? " · won" : ""}</span>`).join("")}</div>
+      ${t.fields.length ? `<div style="margin-top:10px"><strong style="font-size:13px">Fields</strong><br/>${t.fields.map(f => `<span class="stage-preview-chip">${App.escapeHtml(f.label)}</span>`).join("")}</div>` : ""}
+    `;
+  }
+
+  // ---- Custom template builder ----
+
+  function stageRowHtml(stage, i){
+    return `<div class="stage-row" data-idx="${i}">
+      <input type="text" class="key-input" data-stage-key value="${App.escapeHtml(stage.key)}" placeholder="stage_key" />
+      <input type="text" data-stage-label value="${App.escapeHtml(stage.label)}" placeholder="Label" style="flex:1; min-width:140px" />
+      <div class="flag-group">
+        <label><input type="radio" name="stageInitial" data-stage-initial ${stage.isInitial ? "checked" : ""}/> Initial</label>
+        <label><input type="checkbox" data-stage-closed ${stage.isClosed ? "checked" : ""}/> Closed</label>
+        <label><input type="checkbox" data-stage-won ${stage.isWon ? "checked" : ""}/> Won</label>
+        <label><input type="checkbox" data-stage-qualified ${stage.isQualified ? "checked" : ""}/> Qualified</label>
+        <label><input type="checkbox" data-stage-milestone ${stage.isMilestone ? "checked" : ""}/> Milestone</label>
+      </div>
+      <div class="row-actions">
+        <button type="button" class="icon-action" data-move-stage-up="${i}" title="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button type="button" class="icon-action" data-move-stage-down="${i}" title="Move down">↓</button>
+        <button type="button" class="icon-action" data-remove-stage="${i}" title="Remove" ${customConfig.stages.length <= 1 ? "disabled" : ""}>✕</button>
+      </div>
+    </div>`;
+  }
+
+  function fieldRowHtml(field, i){
+    const isSelect = field.type === "select";
+    return `<div class="field-row" data-idx="${i}">
+      <input type="text" class="key-input" data-field-key value="${App.escapeHtml(field.key)}" placeholder="field_key" />
+      <input type="text" data-field-label value="${App.escapeHtml(field.label)}" placeholder="Label" style="flex:1; min-width:140px" />
+      <select data-field-type>
+        ${FIELD_TYPE_OPTIONS.map(t => `<option value="${t}" ${field.type === t ? "selected" : ""}>${t === "select" ? "Dropdown" : t[0].toUpperCase() + t.slice(1)}</option>`).join("")}
+      </select>
+      ${isSelect ? `<input type="text" data-field-options value="${App.escapeHtml((field.options || []).join(", "))}" placeholder="Option A, Option B" style="flex:1; min-width:160px" />` : ""}
+      <input type="text" data-field-unit value="${App.escapeHtml(field.unit || "")}" placeholder="Unit (optional)" style="width:100px" />
+      <label style="display:flex; align-items:center; gap:4px; font-size:12.5px; font-weight:400; margin:0"><input type="checkbox" data-field-showoncard ${field.showOnCard ? "checked" : ""}/> Show on card</label>
+      <div class="row-actions">
+        <button type="button" class="icon-action" data-remove-field="${i}" title="Remove">✕</button>
+      </div>
+    </div>`;
+  }
+
+  function renderStages(){
+    const list = document.getElementById("stagesList");
+    list.innerHTML = customConfig.stages.map(stageRowHtml).join("") || `<p class="hint">No stages yet — add at least one.</p>`;
+
+    list.querySelectorAll("[data-stage-key]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].key = el.value.trim(); }));
+    list.querySelectorAll("[data-stage-label]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].label = el.value; }));
+    list.querySelectorAll("[data-stage-initial]").forEach((el, i) => el.addEventListener("change", () => {
+      customConfig.stages.forEach((s, j) => { s.isInitial = j === i ? el.checked : false; });
+    }));
+    list.querySelectorAll("[data-stage-closed]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].isClosed = el.checked; }));
+    list.querySelectorAll("[data-stage-won]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].isWon = el.checked; }));
+    list.querySelectorAll("[data-stage-qualified]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].isQualified = el.checked; }));
+    list.querySelectorAll("[data-stage-milestone]").forEach((el, i) => el.addEventListener("change", () => { customConfig.stages[i].isMilestone = el.checked; }));
+    list.querySelectorAll("[data-move-stage-up]").forEach(btn => btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.moveStageUp);
+      if (i <= 0) return;
+      [customConfig.stages[i - 1], customConfig.stages[i]] = [customConfig.stages[i], customConfig.stages[i - 1]];
+      renderStages();
+    }));
+    list.querySelectorAll("[data-move-stage-down]").forEach(btn => btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.moveStageDown);
+      if (i >= customConfig.stages.length - 1) return;
+      [customConfig.stages[i + 1], customConfig.stages[i]] = [customConfig.stages[i], customConfig.stages[i + 1]];
+      renderStages();
+    }));
+    list.querySelectorAll("[data-remove-stage]").forEach(btn => btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.removeStage);
+      if (customConfig.stages.length <= 1) return;
+      customConfig.stages.splice(i, 1);
+      renderStages();
+    }));
+  }
+
+  function renderFields(){
+    const list = document.getElementById("fieldsList");
+    list.innerHTML = customConfig.fields.map(fieldRowHtml).join("") || `<p class="hint">No custom fields — Name, Phone, Email and the standard CRM fields are always included.</p>`;
+
+    list.querySelectorAll("[data-field-key]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].key = el.value.trim(); }));
+    list.querySelectorAll("[data-field-label]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].label = el.value; }));
+    list.querySelectorAll("[data-field-type]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].type = el.value; renderFields(); }));
+    list.querySelectorAll("[data-field-options]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].options = el.value.split(",").map(s => s.trim()).filter(Boolean); }));
+    list.querySelectorAll("[data-field-unit]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].unit = el.value.trim(); }));
+    list.querySelectorAll("[data-field-showoncard]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].showOnCard = el.checked; }));
+    list.querySelectorAll("[data-remove-field]").forEach(btn => btn.addEventListener("click", () => {
+      const i = Number(btn.dataset.removeField);
+      customConfig.fields.splice(i, 1);
+      renderFields();
+    }));
+  }
+
+  document.getElementById("addStageBtn").addEventListener("click", () => {
+    const existingKeys = customConfig.stages.map(s => s.key);
+    const key = slugify(`stage ${customConfig.stages.length + 1}`, existingKeys);
+    customConfig.stages.push({ key, label: `Stage ${customConfig.stages.length + 1}`, isInitial: customConfig.stages.length === 0 });
+    renderStages();
+  });
+
+  document.getElementById("addFieldBtn").addEventListener("click", () => {
+    const existingKeys = customConfig.fields.map(f => f.key);
+    const key = slugify(`field ${customConfig.fields.length + 1}`, existingKeys);
+    customConfig.fields.push({ key, label: `Field ${customConfig.fields.length + 1}`, type: "text", options: [], unit: "", showOnCard: false });
+    renderFields();
+  });
+
+  function customConfigPayload(){
+    return {
+      name: document.getElementById("customName").value.trim(),
+      pipelineName: document.getElementById("customPipelineName").value.trim(),
+      milestoneLabel: document.getElementById("customMilestoneLabel").value.trim() || undefined,
+      stages: customConfig.stages.map(s => ({
+        key: s.key, label: s.label,
+        isInitial: Boolean(s.isInitial), isClosed: Boolean(s.isClosed), isWon: Boolean(s.isWon),
+        isQualified: Boolean(s.isQualified), isMilestone: Boolean(s.isMilestone),
+      })),
+      fields: customConfig.fields.map(f => ({
+        key: f.key, label: f.label, type: f.type,
+        options: f.type === "select" ? (f.options || []) : undefined,
+        unit: f.unit || undefined,
+        showOnCard: Boolean(f.showOnCard),
+      })),
+    };
+  }
+
+  async function saveSelection(){
+    showBanner("");
+    try {
+      const body = { industryTemplate: selectedKey };
+      const result = await App.apiJson("/api/settings/business-configuration", { method: "PUT", body });
+      showBanner("Saved.", "success");
+      current.industryTemplate = selectedKey;
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  }
+
+  async function saveCustom(){
+    showBanner("");
+    try {
+      const body = { industryTemplate: selectedKey, customTemplateConfig: customConfigPayload() };
+      await App.apiJson("/api/settings/business-configuration", { method: "PUT", body });
+      showBanner("Custom template saved.", "success");
+    } catch (err) {
+      showBanner(err.message, "error");
+    }
+  }
+
+  document.getElementById("saveSelectionBtn").addEventListener("click", saveSelection);
+  document.getElementById("saveCustomBtn").addEventListener("click", saveCustom);
+
+  async function load(){
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings.html");
+    canManage = App.hasPermission(me, "company.manage");
+    if (!canManage) {
+      document.querySelector(".page-sub").textContent = "You don't have permission to change this.";
+      return;
+    }
+
+    try {
+      const data = await App.apiJson("/api/settings/business-configuration");
+      builtInTemplates = data.builtInTemplates || [];
+      current = data.current || { industryTemplate: "general", customTemplateConfig: null };
+      selectedKey = current.industryTemplate;
+      if (current.customTemplateConfig) {
+        const c = current.customTemplateConfig;
+        customConfig = {
+          name: c.name || "", pipelineName: c.pipelineName || "",
+          stages: (c.stages || []).map(s => ({ ...s })),
+          fields: (c.fields || []).map(f => ({ ...f, options: f.options || [] })),
+          milestoneLabel: c.milestoneLabel || "",
+        };
+      } else {
+        customConfig = { name: "", pipelineName: "", stages: [{ key: "new", label: "New", isInitial: true }], fields: [], milestoneLabel: "" };
+      }
+    } catch (err) {
+      showBanner(err.message, "error");
+      return;
+    }
+
+    document.getElementById("pickerCard").style.display = "block";
+    document.getElementById("customCard").style.display = "block";
+    document.getElementById("customName").value = customConfig.name;
+    document.getElementById("customPipelineName").value = customConfig.pipelineName;
+    document.getElementById("customMilestoneLabel").value = customConfig.milestoneLabel || "";
+
+    renderTemplateGrid();
+    renderTemplatePreview();
+    renderStages();
+    renderFields();
+  }
+
+  load();
+</script>
+</body>
+</html>
