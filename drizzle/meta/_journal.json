@@ -176,6 +176,13 @@
       "when": 1788248595656,
       "tag": "0024_add_agency_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1788265276359,
+      "tag": "0025_add_individual_onboarding_state",
+      "breakpoints": true
     }
   ]
 }

@@ -114,6 +114,35 @@ export const companies = crm.table("companies", {
   createdBy: uuid("created_by").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
   companySize: text("company_size"),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
+  // --- Guided first-time onboarding (Individual users only - see
+  // src/domain/onboarding.ts) -------------------------------------------
+  // Same "plain text, validated at the application layer" convention as
+  // accountType/industryTemplate/status above - no DB-level CHECK
+  // constraint restricting the value, exactly like those sibling columns;
+  // resolveOnboardingStatus()/resolveOnboardingStep() in
+  // src/domain/onboarding.ts are the one place that ever trusts a raw
+  // value here. Defaults to "COMPLETED" - not "NOT_STARTED" - because this
+  // column is landing on a codebase where EVERY existing row already has
+  // onboardingCompletedAt set (agency registration, agency-onboarded
+  // clients, and today's individual registration all call
+  // completeOnboarding() unconditionally) - "COMPLETED" is the value that
+  // is actually already true for every pre-existing row, so this migration
+  // introduces the new column without creating a single row where
+  // onboarding_status and onboarding_completed_at disagree. Nothing yet
+  // sets this to "NOT_STARTED" - see this phase's own report for why that
+  // wiring is deliberately deferred to the phase that creates the
+  // /onboarding route itself.
+  onboardingStatus: text("onboarding_status").notNull().default("COMPLETED"),
+  // The wizard step an IN_PROGRESS company should resume at - one of
+  // ONBOARDING_STEPS in src/domain/onboarding.ts, or null whenever status
+  // is NOT_STARTED (no step chosen yet) or COMPLETED (nothing left to
+  // resume). This single field is deliberately both "where to resume" AND
+  // "how far the user is allowed to jump ahead" - see
+  // isOnboardingStepUnlocked()'s own comment: reviewing an earlier,
+  // already-completed step is a read-only navigation that never moves this
+  // pointer backward, so a second field to separately track "furthest step
+  // reached" is not needed.
+  onboardingStep: text("onboarding_step"),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),

@@ -13,10 +13,30 @@ import {
   type AgencyRoleName,
   type ClientRoleName,
 } from "../../../domain/fixedRoles";
+import {
+  FIRST_ONBOARDING_STEP,
+  resolveOnboardingStatus,
+  resolveOnboardingStep,
+  type OnboardingStatus,
+  type OnboardingStep,
+} from "../../../domain/onboarding";
 
 // ---- Companies --------------------------------------------------------
 
-export async function createCompany(input: { name: string; slug: string; industryTemplate: string; accountType: string }) {
+export async function createCompany(input: {
+  name: string;
+  slug: string;
+  industryTemplate: string;
+  accountType: string;
+  // Deliberately optional and omitted by every existing caller today -
+  // leaving it unset lets Postgres apply companies.onboardingStatus's own
+  // column default ("COMPLETED"), preserving every current registration
+  // path's behavior exactly as-is. Only a caller that has ALREADY decided
+  // this company should start the guided wizard (see this phase's own
+  // report on why that wiring is deferred to a later phase, not wired in
+  // here) would ever pass "NOT_STARTED".
+  onboardingStatus?: OnboardingStatus;
+}) {
   const db = await getDb();
   const rows = await db.insert(companies).values(input).returning();
   return firstOrThrow(rows);
@@ -74,11 +94,74 @@ export async function updateBusinessConfiguration(
   await db.update(companies).set(set).where(eq(companies.id, companyId));
 }
 
+/**
+ * The one place any onboarding flow - the legacy company-profile wizard,
+ * agency registration, agency-onboarded-client registration, and (once a
+ * later phase wires it in) the new Individual guided wizard - marks a
+ * company as fully set up. Extended (not replaced) to also clear the new
+ * onboarding_status/onboarding_step columns to COMPLETED/null: every
+ * existing caller of this function already means exactly that when it
+ * calls this, so this change is invisible to all of them - they get the
+ * new columns kept truthfully in sync for free, with no call-site changes
+ * required anywhere.
+ */
 export async function completeOnboarding(companyId: string) {
   const db = await getDb();
   await db
     .update(companies)
-    .set({ onboardingCompletedAt: new Date(), updatedAt: new Date() })
+    .set({ onboardingCompletedAt: new Date(), onboardingStatus: "COMPLETED" as OnboardingStatus, onboardingStep: null, updatedAt: new Date() })
+    .where(eq(companies.id, companyId));
+}
+
+// ---- Guided onboarding (Individual users only - see
+// src/domain/onboarding.ts's own header comment) ---------------------------
+
+export interface OnboardingState {
+  status: OnboardingStatus;
+  step: OnboardingStep | null;
+  completedAt: Date | null;
+}
+
+/** Raw read of a company's onboarding state, resolved through
+ * resolveOnboardingStatus()/resolveOnboardingStep() so a hand-edited or
+ * legacy row can never surface an invalid status/step to a caller - see
+ * those functions' own doc comments for their respective safe-default
+ * behavior. Returns null only when the company itself doesn't exist. */
+export async function getOnboardingState(companyId: string): Promise<OnboardingState | null> {
+  const company = await getCompanyById(companyId);
+  if (!company) return null;
+  return {
+    status: resolveOnboardingStatus(company.onboardingStatus),
+    step: resolveOnboardingStep(company.onboardingStep),
+    completedAt: company.onboardingCompletedAt,
+  };
+}
+
+/** NOT_STARTED -> IN_PROGRESS, landing on the first step. The Welcome
+ * screen's "Get Started" action (a later phase) is the only caller this is
+ * meant for - calling it on a company that is already IN_PROGRESS or
+ * COMPLETED is harmless (it unconditionally resets to step 1) but is not
+ * how any planned caller uses it, since resuming mid-wizard should always
+ * go through setOnboardingStep/getOnboardingState instead of restarting. */
+export async function startOnboarding(companyId: string) {
+  const db = await getDb();
+  await db
+    .update(companies)
+    .set({ onboardingStatus: "IN_PROGRESS" as OnboardingStatus, onboardingStep: FIRST_ONBOARDING_STEP, updatedAt: new Date() })
+    .where(eq(companies.id, companyId));
+}
+
+/** Records which step a company has reached. Always forces status to
+ * IN_PROGRESS (even if it already was) - callers are expected to have
+ * already checked isOnboardingStepUnlocked() against the CURRENT state
+ * (via getOnboardingState) before calling this with a new target step; this
+ * function itself performs no ordering check, so it must never be exposed
+ * directly to a request handler without that check happening first. */
+export async function setOnboardingStep(companyId: string, step: OnboardingStep) {
+  const db = await getDb();
+  await db
+    .update(companies)
+    .set({ onboardingStatus: "IN_PROGRESS" as OnboardingStatus, onboardingStep: step, updatedAt: new Date() })
     .where(eq(companies.id, companyId));
 }
 
