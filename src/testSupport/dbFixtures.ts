@@ -26,12 +26,14 @@ export interface TestTenant {
 /** One fresh company + system role + user, standing in for one real
  * tenant. Two calls in the same test always produce two genuinely
  * different tenants - the backbone of every cross-tenant assertion in
- * this suite. */
-export async function makeTenant(label = "tenant"): Promise<TestTenant> {
+ * this suite. `accountType` defaults to "individual" (the schema default,
+ * and every pre-existing call site's actual behavior) - pass "agency" to
+ * stand up an agency tenant instead (see agencyClientIsolation.test.ts). */
+export async function makeTenant(label = "tenant", accountType: "individual" | "agency" = "individual"): Promise<TestTenant> {
   const db = await getDb();
   const [company] = await db
     .insert(companies)
-    .values({ name: `Phase20 ${label}`, slug: unique(`phase20-${label}`) })
+    .values({ name: `Phase20 ${label}`, slug: unique(`phase20-${label}`), accountType })
     .returning();
   if (!company) throw new Error("makeTenant: company insert returned no row");
   const [role] = await db.insert(roles).values({ companyId: company.id, name: "Admin", permissions: [], isSystem: true }).returning();
