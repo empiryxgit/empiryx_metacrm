@@ -80,21 +80,14 @@ export interface AgencyDashboardSummary {
   clients: AgencyDashboardClientRow[];
 }
 
-/**
- * Everything the Agency Dashboard's KPI row and Clients table need, in one
- * call. Clients are sorted by lead volume (most leads first) - the same
- * "what needs my attention" ordering a busy agency wants, not alphabetical.
- *
- * `access` (resolveAgencyClientAccess(auth), from the caller) is what
- * actually implements "the user cannot see Client B": every claimed client
- * is filtered down to whichever ones the caller can access BEFORE the KPIs
- * are computed from them, so a Manager/User's KPI row also only reflects
- * their own assigned clients, not the whole agency's.
- */
-export async function getAgencyDashboardSummary(
-  agencyCompanyId: string,
-  access: AgencyClientAccess,
-): Promise<AgencyDashboardSummary> {
+// Shared by getAgencyDashboardSummary and listAgencyClients below - both
+// need exactly the same "claimed clients this caller can access, plus
+// their lead/campaign metrics" building block; factored out so the two
+// can never drift into computing the roster two different ways. Not
+// exported - `claimed`/`metrics` are internal shape, callers get either
+// the plain roster (listAgencyClients) or the roster plus a KPI rollup
+// (getAgencyDashboardSummary).
+async function buildAgencyClientRoster(agencyCompanyId: string, access: AgencyClientAccess) {
   const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
   const claimed = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
   const metrics = await getClientMetrics(claimed.map((c) => c.clientCompanyId));
@@ -111,6 +104,38 @@ export async function getAgencyDashboardSummary(
       };
     })
     .sort((a, b) => b.leads - a.leads);
+
+  return { claimed, metrics, clients };
+}
+
+/**
+ * Plain client roster (GET /api/agency/clients) - the Clients table's data
+ * with no KPI rollup attached, for a caller that only wants the list. Same
+ * underlying data/authorization as getAgencyDashboardSummary below, which
+ * calls this exact same builder internally so the two can never disagree
+ * about who's in the roster or what each row looks like.
+ */
+export async function listAgencyClients(agencyCompanyId: string, access: AgencyClientAccess): Promise<AgencyDashboardClientRow[]> {
+  const { clients } = await buildAgencyClientRoster(agencyCompanyId, access);
+  return clients;
+}
+
+/**
+ * Everything the Agency Dashboard's KPI row and Clients table need, in one
+ * call. Clients are sorted by lead volume (most leads first) - the same
+ * "what needs my attention" ordering a busy agency wants, not alphabetical.
+ *
+ * `access` (resolveAgencyClientAccess(auth), from the caller) is what
+ * actually implements "the user cannot see Client B": every claimed client
+ * is filtered down to whichever ones the caller can access BEFORE the KPIs
+ * are computed from them, so a Manager/User's KPI row also only reflects
+ * their own assigned clients, not the whole agency's.
+ */
+export async function getAgencyDashboardSummary(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+): Promise<AgencyDashboardSummary> {
+  const { claimed, metrics, clients } = await buildAgencyClientRoster(agencyCompanyId, access);
 
   const kpis = {
     clients: claimed.length,
@@ -310,6 +335,101 @@ export async function getAgencyLeadsReport(
       campaigns: campaignsAll.map((c) => ({ id: c.id, name: c.name, clientId: c.companyId })),
       statuses: statusOptions,
       assignedUsers: usersAll.map((u) => ({ id: u.id, name: u.fullName, clientId: u.companyId })),
+    },
+  };
+}
+
+// Fixed enums mirroring the DB check comments on campaigns.status /
+// campaigns.platform in schema.ts. Raw keys only, no display labels here -
+// the existing Campaigns page (public/campaigns.html) already has its own
+// statusLabel()-style formatting for these same keys; this report returns
+// exactly what that page already knows how to render, not a second
+// parallel label set that could drift from it.
+const CAMPAIGN_STATUSES = ["draft", "active", "paused", "archived"] as const;
+const CAMPAIGN_PLATFORMS = ["facebook", "instagram", "both"] as const;
+
+export interface AgencyCampaignsReportRawFilters {
+  clientId?: string;
+  status?: string;
+  platform?: string;
+}
+
+export interface AgencyCampaignRow {
+  id: string;
+  name: string;
+  platform: string;
+  status: string;
+  clientId: string;
+  clientName: string;
+}
+
+export interface AgencyCampaignsReport {
+  campaigns: AgencyCampaignRow[];
+  filters: {
+    clients: Array<{ id: string; name: string }>;
+    statuses: readonly string[];
+    platforms: readonly string[];
+  };
+}
+
+/**
+ * "Agency Campaigns" - every campaign across every client this caller can
+ * see, the campaign-centric sibling of getAgencyLeadsReport above (same
+ * authorization discipline: the client/status/platform filters are all
+ * independently re-checked, never trusted at face value). listCampaigns/
+ * listCampaignsForCompanies (src/infrastructure/db/repositories/
+ * campaigns.ts) never join out to `companies` - a single-tenant caller
+ * never needs a client name attached to its own campaigns, but a
+ * cross-client view does, so it's attached here.
+ */
+export async function getAgencyCampaignsReport(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+  raw: AgencyCampaignsReportRawFilters,
+): Promise<AgencyCampaignsReport> {
+  const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
+  const authorizedClients = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
+  const authorizedClientIds = authorizedClients.map((c) => c.clientCompanyId);
+  const clientNameById = new Map(authorizedClients.map((c) => [c.clientCompanyId, c.clientName]));
+
+  // "Client" filter - narrows to exactly one client, but only one already
+  // inside this caller's authorized set (same discipline as
+  // getAgencyLeadsReport's own clientId filter above).
+  let scopedClientIds = authorizedClientIds;
+  if (raw.clientId) {
+    if (!authorizedClientIds.includes(raw.clientId)) {
+      throw new AuthError("You don't have access to that client.", 403);
+    }
+    scopedClientIds = [raw.clientId];
+  }
+
+  if (raw.status && !CAMPAIGN_STATUSES.includes(raw.status as (typeof CAMPAIGN_STATUSES)[number])) {
+    throw new AuthError("Unknown status filter.", 400);
+  }
+  if (raw.platform && !CAMPAIGN_PLATFORMS.includes(raw.platform as (typeof CAMPAIGN_PLATFORMS)[number])) {
+    throw new AuthError("Unknown platform filter.", 400);
+  }
+
+  const campaignRows = await listCampaignsForCompanies(scopedClientIds);
+  const campaigns: AgencyCampaignRow[] = campaignRows
+    .filter((c) => !raw.status || c.status === raw.status)
+    .filter((c) => !raw.platform || c.platform === raw.platform)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      platform: c.platform,
+      status: c.status,
+      clientId: c.companyId,
+      clientName: clientNameById.get(c.companyId) ?? "—",
+    }))
+    .sort((a, b) => a.clientName.localeCompare(b.clientName) || a.name.localeCompare(b.name));
+
+  return {
+    campaigns,
+    filters: {
+      clients: authorizedClients.map((c) => ({ id: c.clientCompanyId, name: c.clientName })),
+      statuses: CAMPAIGN_STATUSES,
+      platforms: CAMPAIGN_PLATFORMS,
     },
   };
 }

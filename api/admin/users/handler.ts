@@ -45,11 +45,13 @@ import { setAuthCookies, CLIENT_CONTEXT_COOKIE_NAME, cookieOptions, clearCookieO
 import { checkAgencyCanManageClient } from "../../../src/application/agencyClientContext";
 import {
   addClientOrganization,
+  getAgencyCampaignsReport,
   getAgencyDashboardSummary,
   getAgencyLeadsReport,
   getClientDetail,
   getPendingInviteForCompany,
   inviteExistingClient,
+  listAgencyClients,
   respondToAgencyInvite,
   setClientRelationshipStatus,
 } from "../../../src/application/agency";
@@ -718,7 +720,8 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   const action = getQueryString(req, "action");
   if (action === "dashboard") return handleAgencyDashboard(req, res, auth);
   if (action === "leads-report") return handleAgencyLeadsReport(req, res, auth);
-  if (action === "add-client") return handleAgencyAddClient(req, res, auth.companyId, auth.userId);
+  if (action === "campaigns-report") return handleAgencyCampaignsReport(req, res, auth);
+  if (action === "clients") return handleAgencyClientsCollection(req, res, auth);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
   if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId);
@@ -808,32 +811,74 @@ async function handleAgencyLeadsReport(req: VercelRequest, res: VercelResponse, 
   }
 }
 
-async function handleAgencyAddClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
-  if (req.method !== "POST") {
+// "Agency Campaigns" - the campaign-centric sibling of
+// handleAgencyLeadsReport above. Same no-extra-permission-gate posture:
+// any authenticated member of an agency company can call this, narrowed
+// entirely by their own resolved client access.
+async function handleAgencyCampaignsReport(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const { companyName, ownerName, ownerEmail } = (req.body ?? {}) as {
-    companyName?: string;
-    ownerName?: string;
-    ownerEmail?: string;
-  };
-  if (!companyName || !ownerName || !ownerEmail) {
-    res.status(400).json({ error: "companyName, ownerName and ownerEmail are all required." });
-    return;
-  }
-
   try {
-    const result = await addClientOrganization({ agencyCompanyId, actingUserId, companyName, ownerName, ownerEmail });
-    res.status(201).json(result);
+    const report = await getAgencyCampaignsReport(auth.companyId, resolveAgencyClientAccess(auth), {
+      clientId: getQueryString(req, "clientId"),
+      status: getQueryString(req, "status"),
+      platform: getQueryString(req, "platform"),
+    });
+    res.status(200).json(report);
   } catch (err) {
     if (err instanceof AuthError) {
       res.status(err.status).json({ error: err.message });
       return;
     }
-    console.error("[agency/add-client] Failed:", err);
-    res.status(500).json({ error: "Failed to add client." });
+    console.error("[agency/campaigns-report] Failed:", err);
+    res.status(500).json({ error: "Failed to load campaigns." });
   }
+}
+
+// Collection endpoint at /api/agency/clients - GET lists the roster (same
+// data/authorization listAgencyClients shares with the dashboard's own
+// Clients table, just without the KPI rollup attached), POST creates a
+// brand-new client company the agency owns outright (addClientOrganization
+// - see that function's own doc comment for why no invite/accept step is
+// needed here, unlike handleAgencyInviteClient below). Same GET-list /
+// POST-create shape this file already uses for /api/admin/users
+// (handleCollection) and /api/branches (handleBranchCollection) - no
+// extra permission gate beyond handleAgencyResource's own accountType
+// check, same as every other agency action.
+async function handleAgencyClientsCollection(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  if (req.method === "GET") {
+    const clients = await listAgencyClients(auth.companyId, resolveAgencyClientAccess(auth));
+    res.status(200).json({ clients });
+    return;
+  }
+
+  if (req.method === "POST") {
+    const { companyName, ownerName, ownerEmail } = (req.body ?? {}) as {
+      companyName?: string;
+      ownerName?: string;
+      ownerEmail?: string;
+    };
+    if (!companyName || !ownerName || !ownerEmail) {
+      res.status(400).json({ error: "companyName, ownerName and ownerEmail are all required." });
+      return;
+    }
+    try {
+      const result = await addClientOrganization({ agencyCompanyId: auth.companyId, actingUserId: auth.userId, companyName, ownerName, ownerEmail });
+      res.status(201).json(result);
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[agency/clients] Failed to add client:", err);
+      res.status(500).json({ error: "Failed to add client." });
+    }
+    return;
+  }
+
+  res.status(405).json({ error: "Method not allowed" });
 }
 
 async function handleAgencyInviteClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
