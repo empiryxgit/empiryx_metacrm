@@ -42,6 +42,7 @@ import {
   setCompanyCreatedBy,
   completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
+import { listOnboardingLinks } from "./agencyOnboarding";
 import {
   getAgencyLeadCounts,
   getClaimingAgencyForClient,
@@ -63,19 +64,53 @@ export interface AgencyDashboardClientRow {
   name: string;
   leads: number;
   activeCampaigns: number;
+  // Every campaign this client has ever created, regardless of status -
+  // what the Clients table's own "Campaigns" column shows (the KPI row's
+  // "Active Campaigns" already covers the active-only rollup).
+  campaigns: number;
   // "invited" | "pending" | "active" | "suspended" - see
   // src/domain/agencyClientStatus.ts. "removed" never appears here;
   // listClaimedClientOrganizations already excludes it.
   status: string;
+  // Users belonging to the CLIENT's own company (not the agency's) - a
+  // plain headcount, not gated on any particular role.
+  users: number;
+  // Share of this client's own leads currently sitting in whichever stage
+  // its own effective industry template marks isWon (see StageDef.isWon in
+  // src/domain/industryTemplates.ts) - 0 for a client with no leads yet,
+  // never NaN. 0-100, not 0-1.
+  conversionRate: number;
+  // Most recent lead this client has received, ISO string, or null if it
+  // has none yet - see ClientMetrics.lastActivityAt in
+  // src/infrastructure/db/repositories/organizations.ts for exactly what
+  // this does and (deliberately) does not cover.
+  lastActivityAt: string | null;
 }
 
 export interface AgencyDashboardSummary {
   kpis: {
     clients: number;
     activeClients: number;
+    // Client relationships still awaiting a response, from EITHER
+    // invitation mechanism this codebase has: agencyClients rows sitting
+    // at status "invited" (inviteExistingClient - an existing registered
+    // company the agency invited) and organizationInvitations rows whose
+    // EFFECTIVE status (see effectiveInvitationStatus - a stored PENDING
+    // row past its expiresAt reads as EXPIRED, not PENDING) is still
+    // PENDING (generateOnboardingLink - a prospect with no account yet).
+    // One combined number since both answer the same question an agency
+    // owner actually has: "how many invitations are still waiting on
+    // someone else."
+    pendingInvitations: number;
     totalLeads: number;
     leadsToday: number;
+    leadsThisMonth: number;
     activeCampaigns: number;
+    // Agency-wide: total won leads / total leads across every authorized
+    // client, 0-100 (0 when there are no leads at all, never NaN) - NOT an
+    // average of each client's own conversionRate, which would silently
+    // weight a 1-lead client the same as a 10,000-lead one.
+    conversionRate: number;
   };
   clients: AgencyDashboardClientRow[];
 }
@@ -87,20 +122,51 @@ export interface AgencyDashboardSummary {
 // exported - `claimed`/`metrics` are internal shape, callers get either
 // the plain roster (listAgencyClients) or the roster plus a KPI rollup
 // (getAgencyDashboardSummary).
+/** This client's own won-lead count, per ITS OWN effective industry
+ * template (a custom template's win stage can use any key at all - see
+ * StageDef.isWon in src/domain/industryTemplates.ts) - never a single
+ * hard-coded pipelineStage === "won" check, which would silently
+ * undercount every custom-template client whose win stage happens to use
+ * a different key. Sums every isWon stage's count, in case a template
+ * ever marks more than one stage that way, though every fixed template
+ * today has exactly one. */
+function wonLeadsForClient(
+  client: { clientIndustryTemplate: string; clientCustomTemplateConfig?: unknown },
+  stageCounts: Map<string, number>,
+): number {
+  const template = resolveEffectiveIndustryTemplate(client.clientIndustryTemplate, client.clientCustomTemplateConfig);
+  return template.stages.filter((s) => s.isWon).reduce((sum, s) => sum + (stageCounts.get(s.key) ?? 0), 0);
+}
+
+function conversionRate(wonLeads: number, totalLeads: number): number {
+  return totalLeads === 0 ? 0 : Math.round((wonLeads / totalLeads) * 1000) / 10; // one decimal place
+}
+
 async function buildAgencyClientRoster(agencyCompanyId: string, access: AgencyClientAccess) {
   const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
   const claimed = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
-  const metrics = await getClientMetrics(claimed.map((c) => c.clientCompanyId));
+  const clientIds = claimed.map((c) => c.clientCompanyId);
+  const [metrics, userRows] = await Promise.all([getClientMetrics(clientIds), listUsersForCompanies(clientIds)]);
+
+  const userCountByClient = new Map<string, number>();
+  for (const u of userRows) {
+    userCountByClient.set(u.companyId, (userCountByClient.get(u.companyId) ?? 0) + 1);
+  }
 
   const clients: AgencyDashboardClientRow[] = claimed
     .map((c) => {
       const m = metrics.get(c.clientCompanyId)!;
+      const wonLeads = wonLeadsForClient(c, m.stageCounts);
       return {
         id: c.clientCompanyId,
         name: c.clientName,
         leads: m.totalLeads,
         activeCampaigns: m.activeCampaigns,
+        campaigns: m.totalCampaigns,
         status: c.relationshipStatus,
+        users: userCountByClient.get(c.clientCompanyId) ?? 0,
+        conversionRate: conversionRate(wonLeads, m.totalLeads),
+        lastActivityAt: m.lastActivityAt ? m.lastActivityAt.toISOString() : null,
       };
     })
     .sort((a, b) => b.leads - a.leads);
@@ -137,12 +203,32 @@ export async function getAgencyDashboardSummary(
 ): Promise<AgencyDashboardSummary> {
   const { claimed, metrics, clients } = await buildAgencyClientRoster(agencyCompanyId, access);
 
+  // Onboarding-link invitations are NOT scoped by `access` - see this
+  // function's own AgencyDashboardSummary.kpis.pendingInvitations doc
+  // comment: they aren't tied to any one existing claimed client (a
+  // prospect has no company yet), and handleAgencyListOnboardingLinks
+  // itself imposes no assignedClientIds restriction either, so this KPI
+  // matches what that same list already shows any signed-in agency user.
+  const onboardingLinks = await listOnboardingLinks(agencyCompanyId);
+  const pendingInvitations =
+    claimed.filter((c) => c.relationshipStatus === "invited").length +
+    onboardingLinks.filter((l) => l.status === "PENDING").length;
+
+  const totalLeads = clients.reduce((sum, c) => sum + c.leads, 0);
+  // Summed directly from each claimed client's own wonLeads/totalLeads
+  // (not averaged from clients[].conversionRate) - an average-of-averages
+  // would weight a 1-lead client the same as a 10,000-lead one.
+  const totalWonLeads = claimed.reduce((sum, c) => sum + wonLeadsForClient(c, metrics.get(c.clientCompanyId)!.stageCounts), 0);
+
   const kpis = {
     clients: claimed.length,
     activeClients: claimed.filter((c) => c.relationshipStatus === "active").length,
-    totalLeads: clients.reduce((sum, c) => sum + c.leads, 0),
+    pendingInvitations,
+    totalLeads,
     leadsToday: [...metrics.values()].reduce((sum, m) => sum + m.leadsToday, 0),
+    leadsThisMonth: [...metrics.values()].reduce((sum, m) => sum + m.leadsThisMonth, 0),
     activeCampaigns: clients.reduce((sum, c) => sum + c.activeCampaigns, 0),
+    conversionRate: conversionRate(totalWonLeads, totalLeads),
   };
 
   return { kpis, clients };

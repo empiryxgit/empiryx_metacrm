@@ -9,13 +9,15 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
 <style>
-  /* This page always shows exactly 5 KPI tiles (Clients, Active Clients,
-     Total Leads, Leads Today, Active Campaigns) - overriding just the
-     widest breakpoint's column count so they sit evenly in one row instead
-     of leaving a gap in app.css's default 6-column grid (sized for the
-     regular CRM dashboard's 6 KPIs). The narrower responsive breakpoints
-     (3-col, 2-col) are inherited unchanged from app.css. */
-  .kpi-grid{ grid-template-columns:repeat(5, 1fr); }
+  /* This page always shows exactly 8 KPI tiles (Total Clients, Active
+     Clients, Pending Invitations, Total Leads, Leads Today, Leads This
+     Month, Active Campaigns, Conversion Rate) - overriding just the
+     widest breakpoint's column count so they sit evenly in two rows of
+     four instead of app.css's default 6-column grid (sized for the
+     regular CRM dashboard's 6 KPIs) leaving a ragged last row. The
+     narrower responsive breakpoints (3-col, 2-col) are inherited
+     unchanged from app.css. */
+  .kpi-grid{ grid-template-columns:repeat(4, 1fr); }
 </style>
 </head>
 <body>
@@ -60,12 +62,15 @@
             <thead>
               <tr>
                 <th>Client</th>
-                <th>Leads</th>
-                <th>Active Campaigns</th>
                 <th>Status</th>
+                <th>Users</th>
+                <th>Leads</th>
+                <th>Campaigns</th>
+                <th>Last Activity</th>
+                <th></th>
               </tr>
             </thead>
-            <tbody id="clientsBody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+            <tbody id="clientsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -143,19 +148,27 @@
   function statusLabel(status) {
     return status.charAt(0).toUpperCase() + status.slice(1);
   }
+  function fmtPct(n) { return `${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`; }
+  function fmtLastActivity(iso) {
+    if (!iso) return "—";
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
 
   function renderKpis(kpis) {
     const cards = [
-      { label: "Clients", value: kpis.clients },
-      { label: "Active Clients", value: kpis.activeClients },
-      { label: "Total Leads", value: kpis.totalLeads },
-      { label: "Leads Today", value: kpis.leadsToday },
-      { label: "Active Campaigns", value: kpis.activeCampaigns },
+      { label: "Total Clients", value: fmt(kpis.clients) },
+      { label: "Active Clients", value: fmt(kpis.activeClients) },
+      { label: "Pending Invitations", value: fmt(kpis.pendingInvitations) },
+      { label: "Total Leads", value: fmt(kpis.totalLeads) },
+      { label: "Leads Today", value: fmt(kpis.leadsToday) },
+      { label: "Leads This Month", value: fmt(kpis.leadsThisMonth) },
+      { label: "Active Campaigns", value: fmt(kpis.activeCampaigns) },
+      { label: "Conversion Rate", value: fmtPct(kpis.conversionRate) },
     ];
     document.getElementById("kpiGrid").innerHTML = cards.map(c => `
       <div class="kpi-card">
         <div class="kpi-label">${App.escapeHtml(c.label)}</div>
-        <div class="kpi-value">${fmt(c.value)}</div>
+        <div class="kpi-value">${c.value}</div>
       </div>`).join("");
   }
 
@@ -164,16 +177,43 @@
       clients.length === 0 ? "No clients yet" : `${clients.length} client${clients.length === 1 ? "" : "s"}`;
     const body = document.getElementById("clientsBody");
     if (clients.length === 0) {
-      body.innerHTML = `<tr><td colspan="4" class="empty">No clients yet. Click “+ Add Client” to create one.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="7" class="empty">No clients yet. Click “+ Add Client” to create one.</td></tr>`;
       return;
     }
+    // "Open Client" - the same fast path into a client's own, completely
+    // unchanged CRM that clients.html's "Open CRM" button and
+    // client-detail.html's "Open CRM Dashboard" button already use (see
+    // App.enterClient's own doc comment in app.js) - only enabled once the
+    // relationship has actually moved to active/suspended, same gating
+    // clients.html already applies, since an "invited"/"pending"
+    // relationship has no CRM to open yet.
+    const canOpen = (status) => status === "active" || status === "suspended";
     body.innerHTML = clients.map(c => `
       <tr>
         <td>${App.escapeHtml(c.name)}</td>
-        <td>${fmt(c.leads)}</td>
-        <td>${fmt(c.activeCampaigns)}</td>
         <td><span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></td>
+        <td>${fmt(c.users)}</td>
+        <td>${fmt(c.leads)}</td>
+        <td>${fmt(c.campaigns)}</td>
+        <td>${fmtLastActivity(c.lastActivityAt)}</td>
+        <td><button class="btn secondary sm" type="button" data-enter="${c.id}"${canOpen(c.status) ? "" : " disabled title=\"Available once the client accepts\""}>Open Client</button></td>
       </tr>`).join("");
+
+    body.querySelectorAll("[data-enter]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        document.getElementById("banner").innerHTML = "";
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening…";
+        try {
+          await App.enterClient(btn.dataset.enter);
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's CRM.")}</div>`;
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    });
   }
 
   async function load() {

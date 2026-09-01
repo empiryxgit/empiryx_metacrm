@@ -157,22 +157,53 @@ export async function getClaimingAgencyForClient(clientCompanyId: string) {
  *
  * Returns a Map keyed by companyId, always containing an entry (zeroed)
  * for every id passed in - callers never need an `?? default` fallback. */
-export async function getClientMetrics(
-  clientCompanyIds: string[],
-): Promise<Map<string, { totalLeads: number; leadsToday: number; activeCampaigns: number }>> {
-  const metrics = new Map(clientCompanyIds.map((id) => [id, { totalLeads: 0, leadsToday: 0, activeCampaigns: 0 }]));
+export interface ClientMetrics {
+  totalLeads: number;
+  leadsToday: number;
+  leadsThisMonth: number;
+  activeCampaigns: number;
+  totalCampaigns: number;
+  // Most recent lead's createdAt for this client, or null for a client with
+  // no leads yet - the simplest defensible "activity" signal this table
+  // already has on hand (no extra query - the same leadRows fetch below
+  // already has to scan every lead for the counts above). Deliberately NOT
+  // widened to also consider campaign/user edits or logins - none of those
+  // are tracked with a timestamp anywhere in the schema today, and a
+  // partial "activity" signal that silently ignores whole categories of
+  // real activity would be more misleading than a narrower, accurate one.
+  lastActivityAt: Date | null;
+  // Raw pipelineStage -> count for this client, keyed by whatever stage
+  // keys its own leads actually use. Deliberately NOT collapsed to a
+  // single "won" count here - which stage key means "won" is a per-client,
+  // per-industry-template fact (see StageDef.isWon in
+  // src/domain/industryTemplates.ts; a custom template's win stage can use
+  // any key at all), which this repository layer has no business knowing
+  // about - see buildAgencyClientRoster in src/application/agency.ts,
+  // which resolves each client's own effective template and reduces this
+  // down to a conversion rate.
+  stageCounts: Map<string, number>;
+}
+
+export async function getClientMetrics(clientCompanyIds: string[]): Promise<Map<string, ClientMetrics>> {
+  const metrics = new Map<string, ClientMetrics>(
+    clientCompanyIds.map((id) => [
+      id,
+      { totalLeads: 0, leadsToday: 0, leadsThisMonth: 0, activeCampaigns: 0, totalCampaigns: 0, lastActivityAt: null, stageCounts: new Map() },
+    ]),
+  );
   if (clientCompanyIds.length === 0) return metrics;
 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
+  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
 
   const db = await getDb();
-  const [leadRows, activeCampaignRows] = await Promise.all([
-    db.select({ companyId: leads.companyId, createdAt: leads.createdAt }).from(leads).where(inArray(leads.companyId, clientCompanyIds)),
+  const [leadRows, campaignRows] = await Promise.all([
     db
-      .select({ companyId: campaigns.companyId })
-      .from(campaigns)
-      .where(and(inArray(campaigns.companyId, clientCompanyIds), eq(campaigns.status, "active"))),
+      .select({ companyId: leads.companyId, createdAt: leads.createdAt, pipelineStage: leads.pipelineStage })
+      .from(leads)
+      .where(inArray(leads.companyId, clientCompanyIds)),
+    db.select({ companyId: campaigns.companyId, status: campaigns.status }).from(campaigns).where(inArray(campaigns.companyId, clientCompanyIds)),
   ]);
 
   for (const row of leadRows) {
@@ -184,10 +215,15 @@ export async function getClientMetrics(
     if (!m) continue;
     m.totalLeads++;
     if (row.createdAt >= todayStart) m.leadsToday++;
+    if (row.createdAt >= monthStart) m.leadsThisMonth++;
+    if (!m.lastActivityAt || row.createdAt > m.lastActivityAt) m.lastActivityAt = row.createdAt;
+    m.stageCounts.set(row.pipelineStage, (m.stageCounts.get(row.pipelineStage) ?? 0) + 1);
   }
-  for (const row of activeCampaignRows) {
+  for (const row of campaignRows) {
     const m = metrics.get(row.companyId);
-    if (m) m.activeCampaigns++;
+    if (!m) continue;
+    m.totalCampaigns++;
+    if (row.status === "active") m.activeCampaigns++;
   }
   return metrics;
 }
