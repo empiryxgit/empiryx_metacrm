@@ -30,6 +30,15 @@
     { "source": "/api/onboarding/complete", "destination": "/api/onboarding/handler?action=complete" },
     { "source": "/api/settings/business-configuration", "destination": "/api/onboarding/handler?action=business-config" },
 
+    { "source": "/api/onboarding/wizard/status", "destination": "/api/onboarding/handler?action=status" },
+    { "source": "/api/onboarding/wizard/business-profile", "destination": "/api/onboarding/handler?action=business-profile" },
+    { "source": "/api/onboarding/wizard/crm-basics", "destination": "/api/onboarding/handler?action=crm-basics" },
+    { "source": "/api/onboarding/wizard/pipeline", "destination": "/api/onboarding/handler?action=pipeline" },
+    { "source": "/api/onboarding/wizard/lead-source", "destination": "/api/onboarding/handler?action=lead-source" },
+    { "source": "/api/onboarding/wizard/skip", "destination": "/api/onboarding/handler?action=skip" },
+    { "source": "/api/onboarding/wizard/complete", "destination": "/api/onboarding/handler?action=wizard-complete" },
+    { "source": "/api/onboarding/wizard/first-lead", "destination": "/api/onboarding/handler?action=first-lead" },
+
     { "source": "/api/internal/process-lead", "destination": "/api/internal/handler?action=process-lead" },
     { "source": "/api/internal/reconciliation", "destination": "/api/internal/handler?action=reconciliation" },
     { "source": "/api/internal/dead-letter", "destination": "/api/internal/handler?action=dead-letter" },

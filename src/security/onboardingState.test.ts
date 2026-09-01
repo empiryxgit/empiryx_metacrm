@@ -1,15 +1,14 @@
-// Real-Postgres integration tests for Phase 2 ("Define Onboarding State")
-// of the "Individual User — Guided First-Time Onboarding" review request.
-// Same real-Postgres, no-mocking convention as every other
-// src/security/*.test.ts file.
+// Real-Postgres integration tests for the guided onboarding state model
+// ("Individual User — Guided First-Time Onboarding" review request). Same
+// real-Postgres, no-mocking convention as every other src/security/*.test.ts
+// file.
 //
-// IMPORTANT scope note (see this phase's own report): registerCompanyAndOwner
-// is DELIBERATELY NOT changed in this phase - every existing registration
-// path (individual, agency) still marks onboarding complete immediately,
-// exactly as before. These tests prove the new state PRIMITIVES work
-// correctly in isolation, and prove that leaving every existing call site
-// untouched produces zero behavior change - not that any flow has started
-// using them yet.
+// Scope note: as of PHASE 3+, registerCompanyAndOwner DOES now start a real
+// Individual registration at NOT_STARTED (see its own comment for why) -
+// Agency registration (and, transitively, every agency-onboarded client -
+// src/application/agencyOnboarding.ts) remains completely unaffected, still
+// marking onboarding complete immediately exactly as before this feature
+// existed. The first two tests below prove exactly that split.
 
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
@@ -24,22 +23,28 @@ import {
 } from "../infrastructure/db/repositories/tenancy";
 import { uniqueId } from "../testSupport/dbFixtures";
 
-describe.skipIf(!process.env.DATABASE_URL)("Onboarding state: no regression to existing registration paths", () => {
-  it("a real Individual self-registration is still marked COMPLETED immediately - this phase changes no existing behavior", async () => {
+describe.skipIf(!process.env.DATABASE_URL)("Onboarding state: registerCompanyAndOwner's account-type split", () => {
+  it("a real Individual self-registration now starts the guided wizard at NOT_STARTED (PHASE 3+)", async () => {
     const result = await registerCompanyAndOwner({
-      companyName: "Onboarding Phase2 No-Regression Co",
-      fullName: "Regression Checker",
-      email: `${uniqueId("onb-p2-individual")}@example.com`,
-      password: "a-very-long-password-onb-p2-1",
+      companyName: "Onboarding Phase3 Individual Co",
+      fullName: "Wizard Starter",
+      email: `${uniqueId("onb-p3-individual")}@example.com`,
+      password: "a-very-long-password-onb-p3-1",
       accountType: "individual",
       phoneNumber: "+15558880001",
     });
     const state = await getOnboardingState(result.company.id);
-    expect(state).toMatchObject({ status: "COMPLETED", step: null });
-    expect(state?.completedAt).not.toBeNull();
+    expect(state).toMatchObject({ status: "NOT_STARTED", step: null });
+    expect(state?.completedAt).toBeNull();
+    // The pre-existing boolean flag every current frontend/API check reads
+    // (App.requireAuth, /api/auth/me) must also correctly reflect this - a
+    // fresh Individual signup must be routed into onboarding.html, not the
+    // dashboard.
+    const company = await getCompanyById(result.company.id);
+    expect(company?.onboardingCompletedAt).toBeNull();
   });
 
-  it("a real Agency self-registration is likewise still marked COMPLETED immediately - out of scope for this phase", async () => {
+  it("a real Agency self-registration is still marked COMPLETED immediately - completely unaffected by this feature", async () => {
     const result = await registerCompanyAndOwner({
       companyName: "Onboarding Phase2 Agency No-Regression Co",
       fullName: "Agency Regression Checker",

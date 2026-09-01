@@ -44,14 +44,19 @@ describe.skipIf(!process.env.DATABASE_URL)("Registration flow: Individual", () =
     expect(result.role.name).toBe("Owner"); // the single generic Owner role, not one of the four fixed agency roles
     expect(result.user.email).toBe(email);
 
-    // "-> Dashboard": register.html sends chosenAccountType === "agency" ?
-    // agency-dashboard.html : dashboard.html: for "individual" this resolves
-    // to /dashboard.html. That routing only makes sense post-registration if
-    // the account is immediately usable - i.e. onboarding is already marked
-    // complete (App.requireAuth() would otherwise bounce to onboarding.html
-    // before dashboard.html ever renders).
+    // "-> Onboarding -> Dashboard": as of the guided first-time onboarding
+    // wizard (see src/domain/onboarding.ts), register.html now sends a
+    // fresh Individual signup straight to /onboarding.html, not
+    // /dashboard.html directly - App.requireAuth() would bounce it there
+    // anyway (onboardingCompletedAt is still null), so the guided wizard IS
+    // the first thing this account sees, exactly per the review request's
+    // own "the individual user's first experience" goal: never straight to
+    // an empty dashboard. Dashboard access only resumes once that wizard's
+    // own completeWizard() runs (see src/application/onboardingWizard.test.ts
+    // for the full step-by-step lifecycle) - not asserted again here.
     const company = await getCompanyById(result.company.id);
-    expect(company?.onboardingCompletedAt).not.toBeNull();
+    expect(company?.onboardingCompletedAt).toBeNull();
+    expect(company?.onboardingStatus).toBe("NOT_STARTED");
   });
 });
 

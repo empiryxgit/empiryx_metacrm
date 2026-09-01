@@ -144,6 +144,37 @@ export const companies = crm.table("companies", {
   // reached" is not needed.
   onboardingStep: text("onboarding_step"),
   onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+  // --- Guided onboarding step data (Individual users only) --------------
+  // A company's public website - collected on the wizard's Business Profile
+  // step, Optional per that step's own spec ("Website (Optional)"). Never
+  // existed anywhere before this feature; nothing outside onboarding reads
+  // it today, but it belongs on the company profile itself (same tier as
+  // industry/companySize/timezone), not a one-off onboarding-only table.
+  website: text("website"),
+  // "What would you like to call your leads?" (CRM Basics step) - a
+  // display-label preference, NOT a data-model change: leads.pipelineStage/
+  // leads table columns are entirely unaffected, and only the NEW surfaces
+  // this feature introduces (the onboarding wizard's own later screens, the
+  // dashboard empty-state copy, the setup checklist) actually read this
+  // value - see PHASE 7's own scoping note in the onboarding wizard code for
+  // why this is intentionally NOT threaded through the rest of the
+  // application's existing "Lead" copy (settings/pipeline/dashboard tables,
+  // etc.) - that would be an unbounded, separate rename project, not
+  // something a first-run wizard should take on. Defaults to "Lead", the
+  // term already used everywhere else in the app.
+  leadTerminology: text("lead_terminology").notNull().default("Lead"),
+  // Which channels this company told the onboarding wizard it currently
+  // uses (Lead Source step) - a plain JSON array of LEAD_SOURCES keys (see
+  // src/domain/industryTemplates.ts), e.g. ["facebook","instagram","phone"].
+  // Purely informational/routing signal: it decides whether the wizard's
+  // Meta Connection step is shown at all (only when "facebook" or
+  // "instagram" is present) and powers the dashboard's "Connect Lead
+  // Source" empty-state CTA - it is NEVER used to gate or filter real lead
+  // records, which continue to carry their own independent `leads.source`
+  // value exactly as today. Null until the step is ever reached; an empty
+  // array is a valid, deliberate "none selected" answer (the step is
+  // skippable - see PHASE 9's "I'll Set This Up Later").
+  selectedLeadSources: jsonb("selected_lead_sources"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (t) => ({

@@ -65,10 +65,38 @@ export async function setCompanyCreatedBy(companyId: string, userId: string) {
 
 export async function updateCompanyProfile(
   companyId: string,
-  input: { industry?: string; companySize?: string; timezone?: string },
+  // `name` added for the onboarding wizard's Business Profile step (PHASE
+  // 6) - lets it correct/confirm the business name collected at
+  // registration without a separate rename endpoint. Every existing caller
+  // (the legacy api/onboarding/handler.ts handleCompany) is unaffected -
+  // `name` is simply never present in its input object.
+  input: { name?: string; industry?: string; companySize?: string; timezone?: string },
 ) {
   const db = await getDb();
   await db.update(companies).set({ ...input, updatedAt: new Date() }).where(eq(companies.id, companyId));
+}
+
+/**
+ * Persists the guided onboarding wizard's own new fields (PHASE 6/7/9) -
+ * website, leadTerminology, selectedLeadSources - deliberately kept
+ * separate from updateCompanyProfile above rather than folded into it: that
+ * function is also the legacy onboarding handler's company-profile save
+ * path (api/onboarding/handler.ts's handleCompany), and none of these three
+ * fields exist in that flow's own request shape. Every field here is
+ * optional and independent - a caller sets only whichever field(s) the
+ * current wizard step just collected, leaving the others (and any company
+ * row entirely predating this wizard) untouched.
+ */
+export async function updateOnboardingProfileFields(
+  companyId: string,
+  input: { website?: string; leadTerminology?: string; selectedLeadSources?: string[] },
+) {
+  const db = await getDb();
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if ("website" in input) set.website = input.website;
+  if ("leadTerminology" in input) set.leadTerminology = input.leadTerminology;
+  if ("selectedLeadSources" in input) set.selectedLeadSources = input.selectedLeadSources;
+  await db.update(companies).set(set).where(eq(companies.id, companyId));
 }
 
 /**
@@ -359,7 +387,13 @@ export async function listUsersForCompanies(companyIds: string[]) {
 export async function updateUser(
   companyId: string,
   userId: string,
-  input: { roleId?: string; status?: string; fullName?: string },
+  // phoneNumber added for the onboarding wizard's Business Profile step
+  // (PHASE 6) - lets it fill in a missing/changed mobile number for the
+  // CALLING user, the same column registration itself already writes to
+  // (see users.phoneNumber's own schema.ts comment). Every other existing
+  // caller of updateUser is unaffected - phoneNumber is simply never
+  // present in their input objects.
+  input: { roleId?: string; status?: string; fullName?: string; phoneNumber?: string },
 ) {
   const db = await getDb();
   await db

@@ -725,12 +725,15 @@
 
     if (!allCampaigns.length) {
       document.getElementById("crmPaginationBar").style.display = "none";
+      const canManage = App.hasPermission(me, "campaigns.manage");
       rows.innerHTML = `<tr><td colspan="6">
         <div class="state-block">
-          <p class="state-title">No CRM campaigns</p>
-          <p class="state-desc">${App.hasPermission(me, "campaigns.manage") ? "Create one, then map Meta campaigns to it above." : "Ask an admin to create one."}</p>
+          <p class="state-title">No campaigns yet</p>
+          <p class="state-desc">${canManage ? "Create your first campaign, then map Meta campaigns to it above." : "Ask an admin to create one."}</p>
+          ${canManage ? '<div class="state-actions"><button class="btn" type="button" id="emptyCreateCampaignBtn">+ Create Campaign</button></div>' : ""}
         </div>
       </td></tr>`;
+      document.getElementById("emptyCreateCampaignBtn")?.addEventListener("click", () => document.getElementById("ctaCreate").click());
       return;
     }
 

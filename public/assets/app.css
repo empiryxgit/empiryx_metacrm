@@ -712,6 +712,24 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
 .steps .step{ flex:1; height:4px; border-radius:2px; background:var(--border); }
 .steps .step.done, .steps .step.active{ background:var(--brand-primary); }
 
+/* Guided onboarding wizard (public/onboarding.html) - a wider variant of
+   .auth-card for a multi-field, multi-step flow. Deliberately max-width +
+   width:100% rather than a fixed px width (unlike .auth-card above) - see
+   PHASE 20's own "never overflow on a small screen" requirement - so it
+   never needs its own @media override the way .auth-card does at 480px. */
+.wizard-card{ width:100%; max-width:600px; }
+.wizard-step-label{ font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); margin-bottom:8px; }
+.wizard-actions{ display:flex; gap:10px; margin-top:20px; }
+.wizard-actions .btn{ margin-top:0; }
+.wizard-skip{ display:block; text-align:center; margin-top:14px; font-size:12.5px; color:var(--text-muted); background:none; border:none; cursor:pointer; padding:4px; width:100%; }
+.wizard-skip:hover{ color:var(--text-primary); text-decoration:underline; }
+.wizard-summary{ border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin:14px 0; }
+.wizard-summary-row{ display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; }
+.wizard-summary-row:last-child{ border-bottom:none; }
+.wizard-summary-row .label{ color:var(--text-muted); }
+.wizard-summary-row .value{ font-weight:600; color:var(--text-primary); text-align:right; }
+.wizard-complete-icon{ width:52px; height:52px; border-radius:50%; background:var(--success-soft); color:var(--success); display:flex; align-items:center; justify-content:center; margin:0 auto 16px; font-size:26px; }
+
 /* =============================================================================
    Choice cards — radio/checkbox groups presented as selectable cards
    (e.g. industry picker at registration).

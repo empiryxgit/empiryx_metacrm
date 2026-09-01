@@ -8,12 +8,16 @@ import {
   ONBOARDING_STATUSES,
   ONBOARDING_STEPS,
   FIRST_ONBOARDING_STEP,
+  ONBOARDING_LEAD_SOURCE_OPTIONS,
   isOnboardingStatus,
   isOnboardingStep,
   resolveOnboardingStatus,
   resolveOnboardingStep,
   isOnboardingStepUnlocked,
   nextOnboardingStep,
+  canSubmitOnboardingStep,
+  isValidOnboardingLeadSourceSelection,
+  isMetaConnectionApplicable,
 } from "./onboarding";
 
 describe("resolveOnboardingStatus", () => {
@@ -93,5 +97,68 @@ describe("isOnboardingStepUnlocked - 'allow back, never allow jumping ahead'", (
   it("any later step is locked - a request naming a step past the company's own furthest reach is rejected", () => {
     expect(isOnboardingStepUnlocked("BUSINESS_PROFILE", "PIPELINE")).toBe(false);
     expect(isOnboardingStepUnlocked("BUSINESS_PROFILE", "REVIEW")).toBe(false);
+  });
+});
+
+describe("canSubmitOnboardingStep - the full authorization check every wizard endpoint runs", () => {
+  it("COMPLETED accepts nothing - every onboarding endpoint is closed once done", () => {
+    for (const target of ONBOARDING_STEPS) {
+      expect(canSubmitOnboardingStep("COMPLETED", null, target)).toBe(false);
+      expect(canSubmitOnboardingStep("COMPLETED", "REVIEW", target)).toBe(false);
+    }
+  });
+
+  it("NOT_STARTED accepts only the very first step - this is how a company bootstraps into IN_PROGRESS", () => {
+    expect(canSubmitOnboardingStep("NOT_STARTED", null, FIRST_ONBOARDING_STEP)).toBe(true);
+    for (const target of ONBOARDING_STEPS) {
+      if (target === FIRST_ONBOARDING_STEP) continue;
+      expect(canSubmitOnboardingStep("NOT_STARTED", null, target)).toBe(false);
+    }
+  });
+
+  it("IN_PROGRESS delegates to isOnboardingStepUnlocked - current step and earlier are allowed, later is not", () => {
+    expect(canSubmitOnboardingStep("IN_PROGRESS", "PIPELINE", "PIPELINE")).toBe(true);
+    expect(canSubmitOnboardingStep("IN_PROGRESS", "PIPELINE", "BUSINESS_PROFILE")).toBe(true);
+    expect(canSubmitOnboardingStep("IN_PROGRESS", "PIPELINE", "REVIEW")).toBe(false);
+  });
+
+  it("REVIEW (the completion step) is only submittable once the company's own resume pointer has already reached it", () => {
+    expect(canSubmitOnboardingStep("IN_PROGRESS", "REVIEW", "REVIEW")).toBe(true);
+    expect(canSubmitOnboardingStep("IN_PROGRESS", "META_CONNECTION", "REVIEW")).toBe(false);
+  });
+});
+
+describe("ONBOARDING_LEAD_SOURCE_OPTIONS / isValidOnboardingLeadSourceSelection", () => {
+  it("excludes the two system-set-only sources (meta_lead_ads, public_form)", () => {
+    const keys = ONBOARDING_LEAD_SOURCE_OPTIONS.map((s) => s.key);
+    expect(keys).not.toContain("meta_lead_ads");
+    expect(keys).not.toContain("public_form");
+    expect(keys).toContain("facebook");
+    expect(keys).toContain("email");
+  });
+
+  it("accepts only arrays of known keys", () => {
+    expect(isValidOnboardingLeadSourceSelection(["facebook", "email"])).toBe(true);
+    expect(isValidOnboardingLeadSourceSelection([])).toBe(true);
+    expect(isValidOnboardingLeadSourceSelection(["facebook", "not-a-real-source"])).toBe(false);
+    expect(isValidOnboardingLeadSourceSelection("facebook")).toBe(false);
+    expect(isValidOnboardingLeadSourceSelection(null)).toBe(false);
+    expect(isValidOnboardingLeadSourceSelection(undefined)).toBe(false);
+  });
+});
+
+describe("isMetaConnectionApplicable", () => {
+  it("true only when facebook or instagram was selected", () => {
+    expect(isMetaConnectionApplicable(["facebook"])).toBe(true);
+    expect(isMetaConnectionApplicable(["instagram"])).toBe(true);
+    expect(isMetaConnectionApplicable(["facebook", "whatsapp"])).toBe(true);
+  });
+
+  it("false when neither was selected, or the value is missing/invalid - never crashes on a bad value", () => {
+    expect(isMetaConnectionApplicable(["whatsapp", "email"])).toBe(false);
+    expect(isMetaConnectionApplicable([])).toBe(false);
+    expect(isMetaConnectionApplicable(null)).toBe(false);
+    expect(isMetaConnectionApplicable(undefined)).toBe(false);
+    expect(isMetaConnectionApplicable("facebook")).toBe(false);
   });
 });

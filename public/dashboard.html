@@ -42,6 +42,7 @@
 
     <div id="banner"></div>
     <div id="inviteBanner"></div>
+    <div id="setupChecklist"></div>
     <div id="dashboardBody">
 
       <div class="kpi-grid" id="kpiGrid"></div>
@@ -419,7 +420,14 @@
   function renderLeadList(leadsList, total) {
     const body = document.getElementById("leadListBody");
     if (!leadsList.length) {
-      body.innerHTML = `<tr><td colspan="7" class="empty">No leads in this period yet.</td></tr>`;
+      // Rich empty-state CTA (PHASE 16) rather than a bare "no data" line -
+      // the same message either way (this section is always period-scoped,
+      // so there's no way to tell "brand-new account" from "quiet week"
+      // from here alone), but a brand-new account genuinely has nowhere
+      // else on this page to learn what to do next.
+      body.innerHTML = `<tr><td colspan="7" class="empty">
+        No leads in this period yet. <a href="/pipeline.html">+ Add a customer</a> to get started.
+      </td></tr>`;
       document.getElementById("leadListMore").style.display = "none";
       return;
     }
@@ -558,6 +566,7 @@
       document.getElementById("dashboardBody").style.display = "";
       renderAll(data);
       document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+      if (currentMe) renderSetupChecklist(currentMe, data);
     } catch (err) {
       document.getElementById("dashboardBody").style.display = "none";
       document.getElementById("banner").innerHTML = `
@@ -575,6 +584,104 @@
   }
 
   let branchFilterMounted = false;
+  let currentMe = null;
+
+  // ---------------------------------------------------------------------
+  // Setup checklist widget (PHASE 17) - a non-blocking, dismissible
+  // nudge shown on the dashboard for Individual accounts that just came
+  // through the guided onboarding wizard, until every item is real. Every
+  // checkmark is derived from ACTUAL account state (never a fabricated
+  // "getting started" progress bar) - see each item's own `done` check
+  // below. Dismissal is a per-browser localStorage preference, NOT server
+  // state - deliberately different from the wizard's own progress
+  // (src/domain/onboarding.ts), which must survive a browser switch/close;
+  // this widget only ever appears AFTER onboarding is already COMPLETED,
+  // so there is nothing here a lost dismissal preference could ever trap
+  // a user behind - worst case, it just reappears once on a new browser.
+  // ---------------------------------------------------------------------
+  function checklistDismissKey(companyId) {
+    return `ruta_setup_checklist_dismissed_${companyId}`;
+  }
+
+  async function renderSetupChecklist(me, dashboardData) {
+    const slot = document.getElementById("setupChecklist");
+    if (!slot) return;
+
+    // Agency and client companies never went through this wizard (see
+    // src/domain/onboarding.ts's own header comment) - this widget is
+    // Individual-only, same scope boundary as the wizard itself.
+    if (me.company.accountType !== "individual") {
+      slot.innerHTML = "";
+      return;
+    }
+
+    const dismissKey = checklistDismissKey(me.company.id);
+    try {
+      if (localStorage.getItem(dismissKey) === "1") {
+        slot.innerHTML = "";
+        return;
+      }
+    } catch {
+      // Storage unavailable (private browsing, blocked cookies) - just
+      // never persist the dismissal; showing the widget every load is a
+      // safe fallback, never a broken one.
+    }
+
+    let wizard = null;
+    let meta = null;
+    let userList = null;
+    try {
+      [wizard, meta, userList] = await Promise.all([
+        App.apiJson("/api/onboarding/wizard/status").catch(() => null),
+        App.apiJson("/api/integrations/meta/status").catch(() => null),
+        App.apiJson("/api/admin/users").catch(() => null),
+      ]);
+    } catch {
+      wizard = null;
+    }
+    if (!wizard) {
+      slot.innerHTML = "";
+      return;
+    }
+
+    const totalLeads = dashboardData?.kpis?.totalLeads?.value ?? dashboardData?.leadsTotal ?? 0;
+    const items = [
+      { label: "Business profile set up", done: true },
+      { label: "Sales pipeline ready", done: true },
+      { label: "Lead sources configured", done: Boolean(wizard.company.selectedLeadSources && wizard.company.selectedLeadSources.length) },
+      ...(wizard.isMetaConnectionApplicable
+        ? [{ label: "Facebook / Instagram connected", done: Boolean(meta?.connection && meta.connection.status === "active") }]
+        : []),
+      { label: `First ${(wizard.company.leadTerminology || "lead").toLowerCase()} added`, done: Number(totalLeads) > 0 },
+      { label: "Invite a team member", done: Boolean(userList?.users?.length > 1) },
+    ];
+
+    if (items.every((i) => i.done)) {
+      slot.innerHTML = "";
+      return;
+    }
+
+    slot.innerHTML = `
+      <div class="card" style="margin-bottom:16px; position:relative; padding-right:40px">
+        <button type="button" id="dismissChecklistBtn" aria-label="Dismiss setup checklist"
+          style="position:absolute; top:14px; right:14px; background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:18px; line-height:1; padding:2px">×</button>
+        <p class="dash-card-title" style="margin-bottom:12px">Finish setting up your CRM</p>
+        <div style="display:flex; flex-direction:column; gap:9px">
+          ${items.map((i) => `
+            <div style="display:flex; align-items:center; gap:9px; font-size:13px; color:${i.done ? "var(--text-muted)" : "var(--text-primary)"}">
+              <span style="width:18px; height:18px; border-radius:50%; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; font-size:11px;
+                ${i.done ? "background:var(--success-soft); color:var(--success)" : "border:1.5px solid var(--border-strong)"}">${i.done ? "✓" : ""}</span>
+              <span style="${i.done ? "text-decoration:line-through" : ""}">${App.escapeHtml(i.label)}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+    document.getElementById("dismissChecklistBtn")?.addEventListener("click", () => {
+      try { localStorage.setItem(dismissKey, "1"); } catch {}
+      slot.innerHTML = "";
+    });
+  }
 
   // A separate banner slot from #banner above (never cleared by
   // fetchAndRender's own refresh cycle) - "ABC Digital wants to manage your
@@ -642,9 +749,18 @@
     // A real, logged-in session - never fall back to sample data past this
     // point. A fetch failure here gets a real error state, not fabricated
     // numbers.
+    currentMe = me;
     document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/dashboard.html");
     checkPendingAgencyInvite();
+
+    // Real-data-only greeting (PHASE 16) - the user's own first name and
+    // company name, both straight from /api/auth/me. Never a fabricated
+    // "Great job this week!" type line - just a plain, accurate hello.
+    const firstName = (me.user.fullName || "").trim().split(/\s+/)[0];
+    document.querySelector(".page-sub").textContent = firstName
+      ? `Welcome back, ${firstName} — here's what's happening with your customers and sales.`
+      : "Here's what's happening with your customers and sales.";
 
     if (!branchFilterMounted) {
       branchFilterMounted = true;

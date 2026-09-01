@@ -20,6 +20,17 @@ import {
   type IndustryKey,
 } from "../../src/domain/industryTemplates";
 import { listForms, provisionDefaultForms } from "../../src/infrastructure/db/repositories/forms";
+import {
+  OnboardingWizardError,
+  addFirstLead,
+  completeWizard,
+  getOnboardingContext,
+  saveBusinessProfile,
+  saveCrmBasics,
+  saveLeadSources,
+  savePipelineChoice,
+  skipCurrentStep,
+} from "../../src/application/onboardingWizard";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -35,6 +46,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return handleComplete(req, res);
     case "business-config":
       return handleBusinessConfig(req, res);
+    // --- Guided first-time onboarding wizard (Individual users only - see
+    // src/domain/onboarding.ts's own header comment) ----------------------
+    case "status":
+      return handleWizardStatus(req, res);
+    case "business-profile":
+      return handleWizardStep(req, res, (companyId, userId, body) => saveBusinessProfile(companyId, userId, body));
+    case "crm-basics":
+      return handleWizardStep(req, res, (companyId, _userId, body) => saveCrmBasics(companyId, body));
+    case "pipeline":
+      return handleWizardStep(req, res, (companyId, _userId, body) => savePipelineChoice(companyId, body?.choice));
+    case "lead-source":
+      return handleWizardStep(req, res, (companyId, _userId, body) => saveLeadSources(companyId, body?.selectedLeadSources));
+    case "skip":
+      return handleWizardStep(req, res, (companyId, _userId, body) => skipCurrentStep(companyId, body?.step));
+    case "wizard-complete":
+      return handleWizardStep(req, res, (companyId) => completeWizard(companyId));
+    case "first-lead":
+      return handleFirstLead(req, res);
     default:
       res.status(404).json({ error: "Not found" });
   }
@@ -191,4 +220,112 @@ async function handleBusinessConfig(req: VercelRequest, res: VercelResponse) {
   }
 
   res.status(405).json({ error: "Method not allowed" });
+}
+
+// ---------------------------------------------------------------------------
+// Guided first-time onboarding wizard (Individual users only) - PHASE 6-13.
+// Every action below is gated on COMPANY_MANAGE, same permission the legacy
+// handleCompany/handleComplete above use - the auto-created Owner role every
+// individual registration gets always holds it, and this data (business
+// profile, CRM basics, pipeline choice, lead sources) is exactly the kind of
+// company-wide setting COMPANY_MANAGE already governs elsewhere in this
+// file. companyId/userId are ALWAYS taken from the authenticated session
+// (auth.companyId / auth.userId), never from the request body - see
+// src/application/onboardingWizard.ts's header comment for why that's the
+// one non-negotiable rule every function it exports depends on its callers
+// upholding.
+// ---------------------------------------------------------------------------
+
+/** GET /api/onboarding/wizard/status - full onboarding context for
+ * resuming/prefilling the wizard UI and rendering the Review step's
+ * summary. Read-only - safe to call on every wizard page load. */
+async function handleWizardStatus(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  if (!auth) return;
+
+  const context = await getOnboardingContext(auth.companyId);
+  if (!context) {
+    res.status(404).json({ error: "Company not found" });
+    return;
+  }
+  res.status(200).json(context);
+}
+
+/** Shared POST handler for every step-submission action (business-profile,
+ * crm-basics, pipeline, lead-source, skip, wizard-complete) - each just
+ * supplies the one application-layer function that knows how to validate
+ * and persist its own step's body. Any OnboardingWizardError thrown by that
+ * function (wrong step, already completed, bad input) is translated into
+ * the exact HTTP status it carries; anything else is a genuine 500. */
+async function handleWizardStep(
+  req: VercelRequest,
+  res: VercelResponse,
+  run: (companyId: string, userId: string, body: Record<string, unknown>) => Promise<unknown>,
+) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  if (!auth) return;
+
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const context = await run(auth.companyId, auth.userId, body);
+    res.status(200).json(context);
+  } catch (err) {
+    if (err instanceof OnboardingWizardError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[onboarding/wizard] Step submission failed:", err);
+    res.status(500).json({ error: "Something went wrong saving this step. Your previous setup is safe." });
+  }
+}
+
+/** POST /api/onboarding/wizard/first-lead - the Review screen's optional
+ * "add your first lead" shortcut. Gated on LEADS_MANAGE (the same
+ * permission the existing Add Customer flow requires - see
+ * PERMISSIONS.LEADS_MANAGE's own comment) rather than COMPANY_MANAGE, since
+ * creating a lead is what this action actually does; the auto-created Owner
+ * role holds both, so this is invisible to a fresh individual signup. */
+async function handleFirstLead(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = await requirePermission(req, res, PERMISSIONS.LEADS_MANAGE);
+  if (!auth) return;
+
+  try {
+    const body = (req.body ?? {}) as {
+      fullName?: string;
+      phoneNumber?: string;
+      email?: string;
+      source?: string;
+      notes?: string;
+    };
+    const lead = await addFirstLead(auth.companyId, {
+      fullName: body.fullName ?? "",
+      phoneNumber: body.phoneNumber,
+      email: body.email,
+      source: body.source,
+      notes: body.notes,
+    });
+    res.status(201).json({ lead });
+  } catch (err) {
+    if (err instanceof OnboardingWizardError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[onboarding/wizard] First-lead creation failed:", err);
+    res.status(500).json({ error: "Something went wrong adding this lead." });
+  }
 }

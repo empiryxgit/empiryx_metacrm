@@ -197,10 +197,15 @@ export const LEAD_SOURCES: Array<{ key: string; label: string }> = [
   { key: "whatsapp", label: "WhatsApp" },
   { key: "website", label: "Website" },
   { key: "manual", label: "Manual" },
+  // Added for the guided onboarding wizard's Lead Source step ("How do you
+  // get your leads?"), which lists Email as one of its checkboxes - a
+  // small, backward-compatible addition (nothing existing changes meaning),
+  // also usable as an ordinary manual-entry source going forward.
+  { key: "email", label: "Email" },
   { key: "other", label: "Other" },
 ];
 
-export const MANUAL_LEAD_SOURCE_KEYS = ["referral", "phone", "walk_in", "whatsapp", "website", "other"];
+export const MANUAL_LEAD_SOURCE_KEYS = ["referral", "phone", "walk_in", "whatsapp", "website", "email", "other"];
 
 export const MANUAL_LEAD_SOURCES = LEAD_SOURCES.filter((s) => MANUAL_LEAD_SOURCE_KEYS.includes(s.key));
 

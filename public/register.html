@@ -135,10 +135,13 @@
     step1.style.display = "block";
   });
 
-  // Step 2 - the actual registration call. Neither account type goes
-  // through the old company-profile + first-campaign onboarding wizard
-  // anymore (see registerCompanyAndOwner's own comment on why) - both go
-  // straight from "Account Created" to their own dashboard.
+  // Step 2 - the actual registration call. Agency accounts skip onboarding
+  // entirely and go straight from "Account Created" to their own dashboard
+  // (see registerCompanyAndOwner's own comment on why). Individual accounts
+  // now start the guided first-time onboarding wizard (PHASE 3+) - redirecting
+  // straight to /onboarding.html here (rather than /dashboard.html, which
+  // would immediately bounce them there anyway via App.requireAuth()) avoids
+  // an unnecessary extra redirect hop for every brand-new individual signup.
   step2.addEventListener("submit", async (e) => {
     e.preventDefault();
     banner.innerHTML = "";
@@ -156,7 +159,7 @@
           phoneNumber: mobileInput.value.trim(),
         },
       });
-      window.location.href = chosenAccountType === "agency" ? "/agency-dashboard.html" : "/dashboard.html";
+      window.location.href = chosenAccountType === "agency" ? "/agency-dashboard.html" : "/onboarding.html";
     } catch (err) {
       banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       submitBtn.disabled = false;

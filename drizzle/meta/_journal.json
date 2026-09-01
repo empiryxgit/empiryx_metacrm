@@ -183,6 +183,13 @@
       "when": 1788265276359,
       "tag": "0025_add_individual_onboarding_state",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788266002117,
+      "tag": "0026_add_onboarding_wizard_fields",
+      "breakpoints": true
     }
   ]
 }

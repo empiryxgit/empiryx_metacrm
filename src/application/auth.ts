@@ -160,7 +160,19 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   // step is individually idempotent-safe to retry, and a partial failure
   // here (company created, user creation fails) is recoverable manually
   // since it's a rare, low-volume, admin-visible path (see README).
-  const company = await createCompany({ name: input.companyName, slug, industryTemplate, accountType });
+  // Individual accounts start the guided wizard (NOT_STARTED); agency
+  // accounts get no explicit value here at all, so createCompany() falls
+  // back to companies.onboardingStatus's own column default ("COMPLETED") -
+  // completeOnboarding() below still runs for them regardless, since that's
+  // also what stamps onboardingCompletedAt (the actual field App.requireAuth()
+  // gates on - see completeOnboarding's own comment).
+  const company = await createCompany({
+    name: input.companyName,
+    slug,
+    industryTemplate,
+    accountType,
+    ...(accountType === "agency" ? {} : { onboardingStatus: "NOT_STARTED" as const }),
+  });
   // Agency companies get the four fixed AGENCY_OWNER/ADMIN/MANAGER/USER
   // roles (src/domain/fixedRoles.ts) instead of the single generic Owner
   // role every other company gets - the registering user becomes
@@ -178,24 +190,29 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     phoneNumber: input.phoneNumber?.trim() || undefined,
   });
 
-  // Every new account skips the onboarding wizard (POST /api/onboarding/
-  // company + /complete - company size/timezone, then a guided "create
-  // your first campaign" step) and lands straight on its dashboard: Agency
-  // Account Created -> Agency Dashboard, Account Created -> Individual CRM
-  // Dashboard. Marking onboarding complete immediately here is what makes
-  // that true - App.requireAuth() on dashboard.html/agency-dashboard.html
-  // (and every other protected page) redirects into onboarding.html only
-  // when onboardingCompletedAt is still null, so without this a fresh
-  // Individual signup would still get funneled into that wizard first.
-  // A new Individual company gets no campaign created on their behalf as
-  // a result - they create their first one themselves from the Campaigns
-  // page, same as any company created via any other path. Best-effort,
-  // same posture as every other post-creation step here - a failure must
-  // never block account creation itself.
-  try {
-    await completeOnboarding(company.id);
-  } catch (err) {
-    console.error("[auth/register] Failed to mark onboarding complete:", err);
+  // Agency accounts (and, transitively, every agency-onboarded client -
+  // see agencyOnboarding.ts's completeAgencyOnboarding) still skip the
+  // wizard entirely and land straight on their dashboard, exactly as
+  // before this feature existed: Agency Account Created -> Agency
+  // Dashboard. This is what actually stamps onboardingCompletedAt (the
+  // field App.requireAuth() gates navigation on) - createCompany()'s own
+  // column default only covers onboardingStatus, never this timestamp.
+  //
+  // Individual accounts do NOT call completeOnboarding here - they were
+  // already inserted above with onboardingStatus "NOT_STARTED" (step null),
+  // which is exactly what starts the guided first-time onboarding wizard
+  // (src/domain/onboarding.ts / src/application/onboardingWizard.ts) the
+  // next time they load a protected page. See this project's own audit for
+  // why an empty dashboard is the wrong first experience for a brand-new
+  // individual user.
+  if (accountType === "agency") {
+    // Best-effort, same posture as every other post-creation step here - a
+    // failure must never block account creation itself.
+    try {
+      await completeOnboarding(company.id);
+    } catch (err) {
+      console.error("[auth/register] Failed to mark onboarding complete:", err);
+    }
   }
 
   // Best-effort backfill of companies.createdBy - the owner user didn't
