@@ -38,10 +38,12 @@ import {
   getCompanyById,
   getUserByEmail,
   listUsers,
+  listUsersForCompanies,
   setCompanyCreatedBy,
   completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
 import {
+  getAgencyLeadCounts,
   getClaimingAgencyForClient,
   getClientMetrics,
   linkOrReactivateClientOrganization,
@@ -49,10 +51,10 @@ import {
   setAgencyClientStatus,
 } from "../infrastructure/db/repositories/organizations";
 import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
-import { listCampaigns } from "../infrastructure/db/repositories/campaigns";
+import { listCampaigns, listCampaignsForCompanies } from "../infrastructure/db/repositories/campaigns";
 import { getRelevantMetaConnectionView } from "../infrastructure/db/repositories/metaIntegration";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
-import { getIndustryTemplate } from "../domain/industryTemplates";
+import { getIndustryTemplate, LEAD_SOURCES } from "../domain/industryTemplates";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../domain/agencyClientStatus";
 import { canAccessClient, type AgencyClientAccess } from "./agencyClientAccess";
 
@@ -119,6 +121,197 @@ export async function getAgencyDashboardSummary(
   };
 
   return { kpis, clients };
+}
+
+export interface AgencyLeadsReportRawFilters {
+  // All optional, all raw/untrusted strings straight off the query string -
+  // see getAgencyLeadsReport's own comment for how each one is validated
+  // before use. "status" here means leads.pipelineStage (the CRM funnel
+  // stage a client's own industry template defines), not the internal
+  // ingestion leads.status column - the business-facing concept an agency
+  // owner actually means by "Status" in a leads report.
+  clientId?: string;
+  from?: string;
+  to?: string;
+  source?: string;
+  campaignId?: string;
+  status?: string;
+  assignedUserId?: string;
+}
+
+export interface AgencyLeadsReportClientRow {
+  id: string;
+  name: string;
+  leads: number;
+}
+
+export interface AgencyLeadsReportFilterOptions {
+  clients: Array<{ id: string; name: string }>;
+  sources: Array<{ key: string; label: string }>;
+  campaigns: Array<{ id: string; name: string; clientId: string }>;
+  statuses: Array<{ key: string; label: string }>;
+  assignedUsers: Array<{ id: string; name: string; clientId: string }>;
+}
+
+export interface AgencyLeadsReport {
+  totalLeads: number;
+  clients: AgencyLeadsReportClientRow[];
+  filters: AgencyLeadsReportFilterOptions;
+}
+
+/** Union of every stage key/label across the given clients' OWN industry
+ * templates - agencies routinely mix templates across their roster (a
+ * Real Estate client and a Solar client both appear in this feature's own
+ * UI mockup), so "Status" can't be a single fixed enum the way Source is.
+ * Deduped by key (every template shares "new"/"contacted"/"qualified"/
+ * "won"/"lost" - see src/domain/industryTemplates.ts - so those collapse
+ * to one option each; a template-specific stage like "site_visit" vs
+ * "site_survey" correctly stays two distinct options). */
+function buildStatusOptions(
+  clients: Array<{ clientIndustryTemplate: string }>,
+): Array<{ key: string; label: string }> {
+  const seen = new Map<string, string>();
+  for (const client of clients) {
+    const template = getIndustryTemplate(client.clientIndustryTemplate);
+    for (const stage of template.stages) {
+      if (!seen.has(stage.key)) seen.set(stage.key, stage.label);
+    }
+  }
+  return [...seen.entries()].map(([key, label]) => ({ key, label }));
+}
+
+/** "to" is meant as an inclusive whole day (the UI's Date filter is a plain
+ * date, not a timestamp) but getAgencyLeadCounts filters with an
+ * exclusive `lt(createdAt, to)` - shifting to the START of the NEXT day
+ * makes an inclusive day-picker behave correctly without every caller
+ * needing to know that. "from" needs no such shift - `gte` is already
+ * inclusive of the day itself at midnight. Returns undefined for a
+ * missing/unparseable value rather than throwing - an invalid date filter
+ * degrades to "no date filter" instead of a hard 400, same forgiving
+ * posture the CRM dashboard's own date parsing already takes. */
+function parseFilterDate(value: string | undefined, opts: { endOfDay?: boolean } = {}): Date | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  date.setHours(0, 0, 0, 0);
+  if (opts.endOfDay) date.setDate(date.getDate() + 1);
+  return date;
+}
+
+/**
+ * Aggregate lead reporting across every client this agency manages -
+ * "Total Leads" plus a per-client breakdown, filterable by Client/Date/
+ * Source/Campaign/Status/Assigned User (see the UI mockup this was built
+ * from). THE hard requirement this function exists to satisfy: every one
+ * of those filters is independently re-checked against the caller's own
+ * resolved access (`access`, from resolveAgencyClientAccess) before it
+ * ever reaches a query - a clientId/campaignId/assignedUserId naming
+ * something outside that access is REJECTED (AuthError), never silently
+ * ignored or silently widened to "all". This mirrors getClientDetail's own
+ * "404 rather than fall back" posture for exactly the same reason: a
+ * filter parameter is still a caller-supplied input, and this report's
+ * whole point is that Client A's numbers can never leak into a report
+ * that also happens to cover Client B.
+ */
+export async function getAgencyLeadsReport(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+  raw: AgencyLeadsReportRawFilters,
+): Promise<AgencyLeadsReport> {
+  const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
+  const authorizedClients = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
+  const authorizedClientIds = authorizedClients.map((c) => c.clientCompanyId);
+
+  // Filter OPTIONS (for building the dropdowns) are always drawn from the
+  // FULL authorized set, regardless of any client/campaign/user filter
+  // already applied - so choosing one filter never makes another filter's
+  // own option list appear to shrink out from under the user. The actual
+  // aggregate query below is what narrows, not this list.
+  const [campaignsAll, usersAll] = await Promise.all([
+    listCampaignsForCompanies(authorizedClientIds),
+    listUsersForCompanies(authorizedClientIds),
+  ]);
+  const statusOptions = buildStatusOptions(authorizedClients);
+
+  // "Client" filter - narrows the aggregate to exactly one client, but
+  // only one already inside this caller's authorized set.
+  let scopedClientIds = authorizedClientIds;
+  if (raw.clientId) {
+    if (!authorizedClientIds.includes(raw.clientId)) {
+      throw new AuthError("You don't have access to that client.", 403);
+    }
+    scopedClientIds = [raw.clientId];
+  }
+
+  // "Campaign" filter - must be one of the authorized clients' own
+  // campaigns, never trusted as a bare id.
+  let crmCampaignId: string | undefined;
+  if (raw.campaignId) {
+    if (!campaignsAll.some((c) => c.id === raw.campaignId)) {
+      throw new AuthError("You don't have access to that campaign.", 403);
+    }
+    crmCampaignId = raw.campaignId;
+  }
+
+  // "Assigned User" filter - same discipline, against the authorized
+  // clients' own users.
+  let ownerId: string | undefined;
+  if (raw.assignedUserId) {
+    if (!usersAll.some((u) => u.id === raw.assignedUserId)) {
+      throw new AuthError("You don't have access to that user.", 403);
+    }
+    ownerId = raw.assignedUserId;
+  }
+
+  // "Source" filter - not a tenant-scoped id (LEAD_SOURCES is a fixed,
+  // global catalog), so this is input validation rather than
+  // authorization, but still rejected outright rather than silently
+  // ignored if it names something that doesn't exist.
+  let source: string | undefined;
+  if (raw.source) {
+    if (!LEAD_SOURCES.some((s) => s.key === raw.source)) {
+      throw new AuthError("Unknown source filter.", 400);
+    }
+    source = raw.source;
+  }
+
+  // "Status" filter - validated against the cross-client union computed
+  // above, not a single fixed enum (see buildStatusOptions' own comment).
+  let pipelineStage: string | undefined;
+  if (raw.status) {
+    if (!statusOptions.some((s) => s.key === raw.status)) {
+      throw new AuthError("Unknown status filter.", 400);
+    }
+    pipelineStage = raw.status;
+  }
+
+  const { totalLeads, byClient } = await getAgencyLeadCounts({
+    clientCompanyIds: scopedClientIds,
+    from: parseFilterDate(raw.from),
+    to: parseFilterDate(raw.to, { endOfDay: true }),
+    source,
+    crmCampaignId,
+    pipelineStage,
+    ownerId,
+  });
+
+  const scopedClientSet = new Set(scopedClientIds);
+  const clients: AgencyLeadsReportClientRow[] = authorizedClients
+    .filter((c) => scopedClientSet.has(c.clientCompanyId))
+    .map((c) => ({ id: c.clientCompanyId, name: c.clientName, leads: byClient.get(c.clientCompanyId) ?? 0 }))
+    .sort((a, b) => b.leads - a.leads);
+
+  return {
+    totalLeads,
+    clients,
+    filters: {
+      clients: authorizedClients.map((c) => ({ id: c.clientCompanyId, name: c.clientName })),
+      sources: LEAD_SOURCES,
+      campaigns: campaignsAll.map((c) => ({ id: c.id, name: c.name, clientId: c.companyId })),
+      statuses: statusOptions,
+      assignedUsers: usersAll.map((u) => ({ id: u.id, name: u.fullName, clientId: u.companyId })),
+    },
+  };
 }
 
 export interface AddClientOrganizationInput {

@@ -63,6 +63,7 @@
     { "source": "/api/branches", "destination": "/api/admin/users/handler?resource=branches" },
 
     { "source": "/api/agency/dashboard", "destination": "/api/admin/users/handler?resource=agency&action=dashboard" },
+    { "source": "/api/agency/leads-report", "destination": "/api/admin/users/handler?resource=agency&action=leads-report" },
     { "source": "/api/agency/clients/invite", "destination": "/api/admin/users/handler?resource=agency&action=invite-client" },
     { "source": "/api/agency/clients/:clientId/status", "destination": "/api/admin/users/handler?resource=agency&action=set-client-status&clientId=:clientId" },
     { "source": "/api/agency/clients/:clientId", "destination": "/api/admin/users/handler?resource=agency&action=client-detail&clientId=:clientId" },

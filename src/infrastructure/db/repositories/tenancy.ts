@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { getDb } from "../client";
 import { companies, roles, sessions, users } from "../schema";
 import { firstOrThrow } from "../util";
@@ -230,6 +230,24 @@ export async function listUsers(companyId: string) {
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(eq(users.companyId, companyId));
+}
+
+/** Users across MULTIPLE companies in one query - the cross-client
+ * "Assigned User" filter option list for the Agency Leads report (see
+ * getAgencyLeadsReport in src/application/agency.ts), where `companyIds`
+ * is always the caller's already-authorized client set. Includes
+ * companyId (unlike listUsers, which omits it since that function is
+ * already scoped to one known company) so the caller can label which
+ * client each user belongs to. Same "repository trusts its caller, no
+ * auth of its own" convention as every other repository; empty input
+ * short-circuits to `[]`. */
+export async function listUsersForCompanies(companyIds: string[]) {
+  if (companyIds.length === 0) return [];
+  const db = await getDb();
+  return db
+    .select({ id: users.id, companyId: users.companyId, fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(inArray(users.companyId, companyIds));
 }
 
 export async function updateUser(

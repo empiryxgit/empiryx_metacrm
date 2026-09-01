@@ -41,6 +41,20 @@ export async function listCampaigns(companyId: string, access?: BranchAccess) {
   return db.select().from(campaigns).where(and(...conditions));
 }
 
+/** Campaigns across MULTIPLE companies in one query - unlike listCampaigns
+ * above (one tenant, optionally branch-scoped), this is for the Agency
+ * Leads report's cross-client "Campaign" filter (see getAgencyLeadsReport
+ * in src/application/agency.ts), where `companyIds` is always the caller's
+ * already-authorized client set - this function does no authorization of
+ * its own, same "repository trusts its caller" convention as every other
+ * repository. Empty input short-circuits to `[]` without a query, same
+ * contract as getClientMetrics/getAgencyLeadCounts. */
+export async function listCampaignsForCompanies(companyIds: string[]) {
+  if (companyIds.length === 0) return [];
+  const db = await getDb();
+  return db.select().from(campaigns).where(inArray(campaigns.companyId, companyIds));
+}
+
 export async function getCampaign(companyId: string, campaignId: string) {
   const db = await getDb();
   const [row] = await db

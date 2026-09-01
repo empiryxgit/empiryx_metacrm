@@ -14,7 +14,7 @@
 // belongs to the calling agency, same tenant-isolation discipline every
 // other repository in this codebase already follows.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { agencyClients, campaigns, companies, leads } from "../schema";
 import { firstOrThrow } from "../util";
@@ -87,7 +87,11 @@ export async function setAgencyClientStatus(agencyCompanyId: string, clientCompa
 
 /** Every client organization CURRENTLY CLAIMED (invited/pending/active/
  * suspended - i.e. not "removed") by this agency, joined with the client's
- * own name/status for display. */
+ * own name/status for display. `clientIndustryTemplate` was added for the
+ * Agency Leads report (src/application/agency.ts's getAgencyLeadsReport) -
+ * it needs each authorized client's own template to build a cross-client
+ * "Status" (pipeline stage) filter option list without a second query per
+ * client. */
 export async function listClaimedClientOrganizations(agencyCompanyId: string) {
   const db = await getDb();
   return db
@@ -96,6 +100,7 @@ export async function listClaimedClientOrganizations(agencyCompanyId: string) {
       clientCompanyId: agencyClients.clientCompanyId,
       clientName: companies.name,
       clientStatus: companies.status,
+      clientIndustryTemplate: companies.industryTemplate,
       relationshipStatus: agencyClients.status,
       linkedAt: agencyClients.createdAt,
     })
@@ -180,4 +185,67 @@ export async function getClientMetrics(
     if (m) m.activeCampaigns++;
   }
   return metrics;
+}
+
+export interface AgencyLeadCountFilters {
+  // The caller-authorized universe (or a single further-narrowed client
+  // within it) - see getAgencyLeadsReport in src/application/agency.ts for
+  // where this list comes from. This function does zero authorization of
+  // its own (same "repository trusts its caller" split as everything else
+  // in this file) - it is a pure GROUP BY aggregate over EXACTLY the ids
+  // it's given, nothing more.
+  clientCompanyIds: string[];
+  from?: Date;
+  to?: Date;
+  source?: string;
+  crmCampaignId?: string;
+  pipelineStage?: string;
+  ownerId?: string;
+}
+
+/** Real SQL-side `GROUP BY company_id` count (unlike getClientMetrics
+ * above, which aggregates in JS over fetched rows) - the Agency Leads
+ * report is explicitly meant to scale to an agency's full lead history
+ * across every client (the totals in the UI mockup this was built from run
+ * into the tens of thousands), so pulling every matching row into memory
+ * just to count them would be wasteful in a way getClientMetrics' smaller,
+ * simpler "total ever + today" shape never was.
+ *
+ * Returns { totalLeads, byClient } where byClient is a Map keyed by
+ * companyId, containing an entry ONLY for ids that actually matched at
+ * least one lead under these filters (unlike getClientMetrics, no
+ * zero-filled entries - callers already have the full authorized client
+ * list separately and can default a missing id to 0 themselves). Empty
+ * clientCompanyIds short-circuits to an empty result without a query, same
+ * "authorization already resolved to nothing, so there is nothing left to
+ * ask the database" contract as getClientMetrics. */
+export async function getAgencyLeadCounts(filters: AgencyLeadCountFilters): Promise<{ totalLeads: number; byClient: Map<string, number> }> {
+  if (filters.clientCompanyIds.length === 0) return { totalLeads: 0, byClient: new Map() };
+
+  const conditions = [inArray(leads.companyId, filters.clientCompanyIds)];
+  if (filters.from) conditions.push(gte(leads.createdAt, filters.from));
+  if (filters.to) conditions.push(lt(leads.createdAt, filters.to));
+  if (filters.source) conditions.push(eq(leads.source, filters.source));
+  if (filters.crmCampaignId) conditions.push(eq(leads.crmCampaignId, filters.crmCampaignId));
+  if (filters.pipelineStage) conditions.push(eq(leads.pipelineStage, filters.pipelineStage));
+  if (filters.ownerId) conditions.push(eq(leads.ownerId, filters.ownerId));
+
+  const db = await getDb();
+  const rows = await db
+    .select({ companyId: leads.companyId, count: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(...conditions))
+    .groupBy(leads.companyId);
+
+  const byClient = new Map<string, number>();
+  let totalLeads = 0;
+  for (const row of rows) {
+    // leads.companyId is nullable in the schema - see getClientMetrics'
+    // own comment above for why this can never match a real filter id
+    // anyway, so it's simply excluded from the per-client breakdown.
+    if (!row.companyId) continue;
+    byClient.set(row.companyId, row.count);
+    totalLeads += row.count;
+  }
+  return { totalLeads, byClient };
 }

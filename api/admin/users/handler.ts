@@ -46,6 +46,7 @@ import { checkAgencyCanManageClient } from "../../../src/application/agencyClien
 import {
   addClientOrganization,
   getAgencyDashboardSummary,
+  getAgencyLeadsReport,
   getClientDetail,
   getPendingInviteForCompany,
   inviteExistingClient,
@@ -716,6 +717,7 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
 
   const action = getQueryString(req, "action");
   if (action === "dashboard") return handleAgencyDashboard(req, res, auth);
+  if (action === "leads-report") return handleAgencyLeadsReport(req, res, auth);
   if (action === "add-client") return handleAgencyAddClient(req, res, auth.companyId, auth.userId);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
@@ -771,6 +773,39 @@ async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, au
   }
   const summary = await getAgencyDashboardSummary(auth.companyId, resolveAgencyClientAccess(auth));
   res.status(200).json(summary);
+}
+
+// "Agency Leads" - aggregate lead reporting across every client this
+// caller can see (see getAgencyLeadsReport's own doc comment for the full
+// authorization discipline: every filter is independently re-checked
+// against resolveAgencyClientAccess, never trusted at face value). Same
+// no-extra-permission-gate posture as handleAgencyDashboard above - any
+// authenticated member of an agency company can call this, narrowed
+// entirely by their own resolved client access.
+async function handleAgencyLeadsReport(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  try {
+    const report = await getAgencyLeadsReport(auth.companyId, resolveAgencyClientAccess(auth), {
+      clientId: getQueryString(req, "clientId"),
+      from: getQueryString(req, "from"),
+      to: getQueryString(req, "to"),
+      source: getQueryString(req, "source"),
+      campaignId: getQueryString(req, "campaignId"),
+      status: getQueryString(req, "status"),
+      assignedUserId: getQueryString(req, "assignedUserId"),
+    });
+    res.status(200).json(report);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/leads-report] Failed:", err);
+    res.status(500).json({ error: "Failed to load the leads report." });
+  }
 }
 
 async function handleAgencyAddClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
