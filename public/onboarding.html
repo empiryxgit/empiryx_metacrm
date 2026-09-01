@@ -16,34 +16,32 @@
 <script src="/assets/app.js"></script>
 <script>
 // ---------------------------------------------------------------------------
-// Guided first-time onboarding wizard - INDIVIDUAL USERS ONLY (an agency or
-// agency-onboarded-client company's onboarding is always already COMPLETED
-// by the time it could ever reach this page - see src/domain/onboarding.ts's
-// own header comment - so the only way here is either a fresh Individual
-// signup, or a direct visit while one is IN_PROGRESS).
+// First-time setup - INDIVIDUAL USERS ONLY (an agency or agency-onboarded-
+// client company's onboarding is always already COMPLETED by the time it
+// could ever reach this page - see src/domain/onboarding.ts's own header
+// comment - so the only way here is either a fresh Individual signup, or a
+// direct visit while setup is still in progress).
 //
-// This entire page is state-driven off ONE source of truth: GET
-// /api/onboarding/wizard/status (src/application/onboardingWizard.ts's
-// getOnboardingContext). Every step submission re-fetches/re-renders from
-// whatever that endpoint returns next - the page never assumes what step
-// comes after the one it just submitted beyond what the server actually
-// says, so a failed save (network blip, validation error) can never corrupt
-// the wizard's displayed position.
+// Deliberately a SINGLE screen: Business Name + Mobile Number, then straight
+// to the Dashboard - "make it simple" per the explicit request that trimmed
+// this down from the original 6-screen wizard (CRM Basics, Pipeline, Lead
+// Source, and Meta Connection all used to be separate screens here). Those
+// steps still exist server-side (src/domain/onboarding.ts's ONBOARDING_STEPS
+// - left untouched, together with every one of its 218 passing tests, so
+// this simplification is a pure front-end change) - finishRemainingSteps()
+// below silently walks the company through them with safe defaults (Lead
+// terminology, the recommended pipeline, no pre-selected lead sources) the
+// user is never shown, rather than asking them anything. Facebook/Instagram
+// connection is no longer decided here either - it always shows up as a
+// pending item on the Dashboard's own setup checklist instead (see
+// dashboard.html's renderSetupChecklist), which is exactly where "remaining
+// steps" are meant to be finished from now on.
+//
+// This page is still state-driven off GET /api/onboarding/wizard/status
+// (src/application/onboardingWizard.ts's getOnboardingContext) - a save
+// failure mid-chain can never corrupt or lose what the user already
+// submitted, it just resumes silently from wherever the server says next.
 // ---------------------------------------------------------------------------
-
-const STEPS = ["BUSINESS_PROFILE", "CRM_BASICS", "PIPELINE", "LEAD_SOURCE", "META_CONNECTION", "REVIEW"];
-const STEP_NUMBER = { BUSINESS_PROFILE: 1, CRM_BASICS: 2, PIPELINE: 3, LEAD_SOURCE: 4, META_CONNECTION: 5 };
-
-const LEAD_SOURCE_OPTIONS = [
-  { key: "facebook", label: "Facebook" },
-  { key: "instagram", label: "Instagram" },
-  { key: "website", label: "Website" },
-  { key: "whatsapp", label: "WhatsApp" },
-  { key: "phone", label: "Phone" },
-  { key: "email", label: "Email" },
-  { key: "manual", label: "Manual / Walk-in" },
-  { key: "other", label: "Other" },
-];
 
 const card = document.getElementById("wizardCard");
 let ctx = null; // last-known OnboardingContext from the server
@@ -52,12 +50,8 @@ function esc(s) {
   return App.escapeHtml(s);
 }
 
-function wizardShell(innerHtml, { stepKey } = {}) {
-  const progress = stepKey && STEP_NUMBER[stepKey]
-    ? `<div class="wizard-step-label">Step ${STEP_NUMBER[stepKey]} of 5</div>
-       <div class="steps">${[1, 2, 3, 4, 5].map((n) => `<div class="step ${n < STEP_NUMBER[stepKey] ? "done" : ""} ${n === STEP_NUMBER[stepKey] ? "active" : ""}"></div>`).join("")}</div>`
-    : "";
-  card.innerHTML = `${progress}<div id="banner"></div>${innerHtml}`;
+function wizardShell(innerHtml) {
+  card.innerHTML = `<div id="banner"></div>${innerHtml}`;
 }
 
 function showError(message) {
@@ -67,8 +61,8 @@ function showError(message) {
 
 /** Calls a wizard step-submission endpoint, re-renders from the fresh
  * context it returns on success, or shows an inline error WITHOUT losing
- * whatever the user already typed - see PHASE 21's "We couldn't save this
- * step. Your previous setup is safe." requirement. */
+ * whatever the user already typed - a failed save must never look like
+ * lost work. */
 async function submitStep(path, body, submitBtn, onSuccess) {
   showError("");
   if (submitBtn) {
@@ -80,7 +74,7 @@ async function submitStep(path, body, submitBtn, onSuccess) {
     ctx = await App.apiJson(path, { method: "POST", body });
     (onSuccess || render)();
   } catch (err) {
-    showError(err.message || "We couldn't save this step. Your previous setup is safe - please try again.");
+    showError(err.message || "We couldn't save this - your details are safe, please try again.");
     if (submitBtn) {
       submitBtn.disabled = false;
       submitBtn.textContent = submitBtn.dataset.originalText;
@@ -89,279 +83,91 @@ async function submitStep(path, body, submitBtn, onSuccess) {
 }
 
 // ---------------------------------------------------------------------------
-// Screens
+// The one screen the user actually sees.
 // ---------------------------------------------------------------------------
 
-function renderWelcome() {
+function renderBusinessProfile() {
+  const c = ctx.company;
   const resuming = ctx.status === "IN_PROGRESS";
   wizardShell(`
     <h1>${resuming ? "Welcome back!" : "Welcome to RUTA 👋"}</h1>
     <p class="sub">${resuming
-      ? "Let's continue where you left off - it only takes a couple of minutes."
-      : "Let's get your CRM set up. It only takes a couple of minutes, and you can skip anything you're not ready for yet."}</p>
-    <button class="btn full" id="startBtn">${resuming ? "Continue Setup" : "Get Started"}</button>
-  `);
-  document.getElementById("startBtn").addEventListener("click", () => {
-    renderStep(ctx.step || "BUSINESS_PROFILE");
-  });
-}
-
-function renderBusinessProfile() {
-  const c = ctx.company;
-  wizardShell(`
-    <h1>Tell us about your business</h1>
-    <p class="sub">This helps personalize your CRM. You can change any of this later in Settings.</p>
+      ? "Let's finish getting your account ready - just a couple of details."
+      : "Just a couple of details and you're on your way to your dashboard."}</p>
     <form id="stepForm">
       <label for="businessName">Business name</label>
       <input id="businessName" value="${esc(c.name)}" required />
-
-      <label for="industry">What kind of business is this? <span style="font-weight:400; color:var(--text-muted)">(optional)</span></label>
-      <input id="industry" placeholder="e.g. Real Estate Broker" value="${esc(c.industry || "")}" />
-
-      <label for="website">Website <span style="font-weight:400; color:var(--text-muted)">(optional)</span></label>
-      <input id="website" type="text" placeholder="e.g. www.example.com" value="${esc(c.website || "")}" />
 
       <label for="phoneNumber">Mobile number</label>
       <input id="phoneNumber" type="tel" placeholder="Your mobile number" />
       <div class="hint">Already on file - only fill this in if it's changed.</div>
 
       <div class="wizard-actions">
-        <button class="btn full" type="submit">Continue</button>
+        <button class="btn full" type="submit">Continue to Dashboard</button>
       </div>
     </form>
-  `, { stepKey: "BUSINESS_PROFILE" });
+  `);
 
   document.getElementById("stepForm").addEventListener("submit", (e) => {
     e.preventDefault();
     submitStep("/api/onboarding/wizard/business-profile", {
       businessName: document.getElementById("businessName").value.trim(),
-      industry: document.getElementById("industry").value.trim(),
-      website: document.getElementById("website").value.trim(),
       phoneNumber: document.getElementById("phoneNumber").value.trim(),
-    }, e.submitter);
+    }, e.submitter, () => finishRemainingSteps(ctx.step));
   });
 }
 
-function renderCrmBasics() {
-  wizardShell(`
-    <h1>A couple of CRM basics</h1>
-    <p class="sub">What do you call the people you're tracking? This changes the wording used across your setup.</p>
-    <form id="stepForm">
-      <label for="leadTerminology">What do you call your leads?</label>
-      <select id="leadTerminology">
-        <option value="Lead">Lead</option>
-        <option value="Prospect">Prospect</option>
-        <option value="Customer">Customer</option>
-        <option value="Enquiry">Enquiry</option>
-        <option value="Client">Client</option>
-      </select>
-      <div class="hint">You can change this anytime.</div>
-      <div class="wizard-actions">
-        <button class="btn full" type="submit">Continue</button>
-      </div>
-    </form>
-    <button class="wizard-skip" id="skipBtn" type="button">Skip for now</button>
-  `, { stepKey: "CRM_BASICS" });
-
-  document.getElementById("leadTerminology").value = ctx.company.leadTerminology || "Lead";
-  document.getElementById("stepForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    submitStep("/api/onboarding/wizard/crm-basics", { leadTerminology: document.getElementById("leadTerminology").value }, e.submitter);
-  });
-  document.getElementById("skipBtn").addEventListener("click", () => submitStep("/api/onboarding/wizard/skip", { step: "CRM_BASICS" }));
+function showFinishing(message) {
+  wizardShell(`<div style="text-align:center; padding:30px 0; color:var(--text-muted); font-size:13px">${esc(message)}</div>`);
 }
 
-function renderPipeline() {
+function showFinishingError(message) {
   wizardShell(`
-    <h1>Your sales pipeline</h1>
-    <p class="sub">We've already set up a working pipeline for you based on your CRM. You don't need to configure anything now.</p>
-    <div class="choice-group" style="grid-template-columns:1fr" role="radiogroup" aria-label="Pipeline setup">
-      <label class="choice-card">
-        <input type="radio" name="pipelineChoice" value="recommended" checked />
-        <span class="choice-card-title">Use Recommended Pipeline</span>
-        <span class="choice-card-desc">Get started right away with a pipeline already matched to your business.</span>
-      </label>
-      <label class="choice-card">
-        <input type="radio" name="pipelineChoice" value="customize" />
-        <span class="choice-card-title">Customize Pipeline Later</span>
-        <span class="choice-card-desc">Keep the recommended pipeline for now - you can fully customize stages anytime from Settings → Business Configuration.</span>
-      </label>
-    </div>
+    <div class="banner error">${esc(message)}</div>
     <div class="wizard-actions">
-      <button class="btn full" id="continueBtn">Continue</button>
+      <button class="btn full" id="retryBtn">Try Again</button>
     </div>
-  `, { stepKey: "PIPELINE" });
-
-  document.getElementById("continueBtn").addEventListener("click", (e) => {
-    const choice = document.querySelector('input[name="pipelineChoice"]:checked').value;
-    submitStep("/api/onboarding/wizard/pipeline", { choice }, e.target);
-  });
+  `);
+  document.getElementById("retryBtn").addEventListener("click", () => finishRemainingSteps(ctx.step));
 }
 
-function renderLeadSource() {
-  const selected = new Set(ctx.company.selectedLeadSources || []);
-  wizardShell(`
-    <h1>How do you get your leads?</h1>
-    <p class="sub">Select all that apply. This just helps us tailor your CRM - you can always add more sources later.</p>
-    <div class="choice-group" role="group" aria-label="Lead sources">
-      ${LEAD_SOURCE_OPTIONS.map((opt) => `
-        <label class="choice-card">
-          <input type="checkbox" name="leadSource" value="${opt.key}" ${selected.has(opt.key) ? "checked" : ""} />
-          <span class="choice-card-title">${esc(opt.label)}</span>
-        </label>
-      `).join("")}
-    </div>
-    <div id="leadSourceError"></div>
-    <div class="wizard-actions">
-      <button class="btn full" id="continueBtn">Continue</button>
-    </div>
-    <button class="wizard-skip" id="skipBtn" type="button">Skip for now</button>
-  `, { stepKey: "LEAD_SOURCE" });
-
-  document.getElementById("continueBtn").addEventListener("click", (e) => {
-    const selectedKeys = Array.from(document.querySelectorAll('input[name="leadSource"]:checked')).map((el) => el.value);
-    if (selectedKeys.length === 0) {
-      document.getElementById("leadSourceError").innerHTML = `<div class="field-error">Select at least one, or use Skip for now.</div>`;
-      return;
+/** Silently walks the company through every step this simplified flow no
+ * longer shows the user - CRM Basics (defaults to "Lead"), Pipeline (the
+ * recommended one), Lead Source and Meta Connection (both skipped, since
+ * neither is asked here anymore), then Review's own completeWizard() - and
+ * lands on the Dashboard. `fromStep` is wherever the company's stored resume
+ * pointer already is (normally CRM_BASICS, right after Business Profile was
+ * just submitted; only ever something later than that if a previous visit
+ * was interrupted partway through this exact chain). Each call re-derives
+ * the next step from what the server actually returns, never assumes it, so
+ * an interruption anywhere just resumes cleanly on the next visit. */
+async function finishRemainingSteps(fromStep) {
+  showFinishing("Setting up your account…");
+  try {
+    let step = fromStep;
+    if (step === "CRM_BASICS") {
+      ctx = await App.apiJson("/api/onboarding/wizard/crm-basics", { method: "POST", body: {} });
+      step = ctx.step;
     }
-    submitStep("/api/onboarding/wizard/lead-source", { selectedLeadSources: selectedKeys }, e.target);
-  });
-  document.getElementById("skipBtn").addEventListener("click", () => submitStep("/api/onboarding/wizard/skip", { step: "LEAD_SOURCE" }));
-}
-
-function renderMetaConnection() {
-  wizardShell(`
-    <h1>Connect Facebook &amp; Instagram</h1>
-    <p class="sub">Since you get leads from Facebook or Instagram, connect your account to bring those leads straight into your CRM automatically. This is optional - you can always connect later from Settings.</p>
-    <div id="metaStatus" style="text-align:center; padding:10px 0; color:var(--text-muted); font-size:13px">Checking connection status…</div>
-    <div class="wizard-actions">
-      <a class="btn full" href="/settings/integrations/meta-status.html" target="_blank" rel="noopener" style="text-decoration:none; text-align:center">Connect Facebook / Instagram</a>
-    </div>
-    <div class="wizard-actions">
-      <button class="btn secondary full" id="continueBtn">Continue</button>
-    </div>
-    <button class="wizard-skip" id="skipBtn" type="button">Continue Without Meta</button>
-  `, { stepKey: "META_CONNECTION" });
-
-  (async () => {
-    const el = document.getElementById("metaStatus");
-    try {
-      const { connection } = await App.apiJson("/api/integrations/meta/status");
-      if (connection && connection.status === "active") {
-        el.innerHTML = `<span class="pill active">Connected</span>`;
-      } else if (connection && connection.status === "error") {
-        el.innerHTML = `<span class="pill error">Needs attention</span> - <a href="/settings/integrations/meta-status.html" target="_blank" rel="noopener">Try Again</a>`;
-      } else {
-        el.innerHTML = `<span class="pill">Not connected yet</span>`;
-      }
-    } catch {
-      el.innerHTML = `<span class="pill">Meta couldn't be checked right now</span>`;
+    if (step === "PIPELINE") {
+      ctx = await App.apiJson("/api/onboarding/wizard/pipeline", { method: "POST", body: { choice: "recommended" } });
+      step = ctx.step;
     }
-  })();
-
-  const advance = (e) => submitStep("/api/onboarding/wizard/skip", { step: "META_CONNECTION" }, e.target);
-  document.getElementById("continueBtn").addEventListener("click", advance);
-  document.getElementById("skipBtn").addEventListener("click", advance);
-}
-
-function renderReview() {
-  const c = ctx.company;
-  wizardShell(`
-    <h1>Review your setup</h1>
-    <p class="sub">Here's what we've got. You can change any of this later from Settings.</p>
-    <div class="wizard-summary">
-      <div class="wizard-summary-row"><span class="label">Business name</span><span class="value">${esc(c.name)}</span></div>
-      ${c.website ? `<div class="wizard-summary-row"><span class="label">Website</span><span class="value">${esc(c.website)}</span></div>` : ""}
-      <div class="wizard-summary-row"><span class="label">You call leads</span><span class="value">${esc(c.leadTerminology)}s</span></div>
-      <div class="wizard-summary-row"><span class="label">Lead sources</span><span class="value">${
-        c.selectedLeadSources && c.selectedLeadSources.length ? esc(c.selectedLeadSources.join(", ")) : "Skipped"
-      }</span></div>
-      ${ctx.isMetaConnectionApplicable ? `<div class="wizard-summary-row"><span class="label">Meta connection</span><span class="value" id="metaReviewStatus">Checking…</span></div>` : ""}
-    </div>
-
-    <h1 style="font-size:15px; margin-top:22px">Add your first lead <span style="font-weight:400; color:var(--text-muted); font-size:12px">(optional)</span></h1>
-    <form id="firstLeadForm">
-      <label for="leadName">Name</label>
-      <input id="leadName" placeholder="Customer's full name" />
-      <label for="leadPhone">Phone</label>
-      <input id="leadPhone" type="tel" placeholder="Phone number" />
-      <button class="btn secondary full" type="submit">Add Lead</button>
-    </form>
-    <div id="leadAddedBanner"></div>
-
-    <div class="wizard-actions">
-      <button class="btn full" id="finishBtn">Finish &amp; Go to Dashboard</button>
-    </div>
-  `, { stepKey: null });
-
-  if (ctx.isMetaConnectionApplicable) {
-    App.apiJson("/api/integrations/meta/status").then(({ connection }) => {
-      const el = document.getElementById("metaReviewStatus");
-      if (el) el.textContent = connection && connection.status === "active" ? "Connected" : "Not connected";
-    }).catch(() => {});
+    if (step === "LEAD_SOURCE") {
+      ctx = await App.apiJson("/api/onboarding/wizard/skip", { method: "POST", body: { step: "LEAD_SOURCE" } });
+      step = ctx.step;
+    }
+    if (step === "META_CONNECTION") {
+      ctx = await App.apiJson("/api/onboarding/wizard/skip", { method: "POST", body: { step: "META_CONNECTION" } });
+      step = ctx.step;
+    }
+    if (step === "REVIEW") {
+      ctx = await App.apiJson("/api/onboarding/wizard/complete", { method: "POST", body: {} });
+    }
+    window.location.href = "/dashboard.html";
+  } catch (err) {
+    showFinishingError(err.message || "We couldn't finish setting up your account - please try again.");
   }
-
-  document.getElementById("firstLeadForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const banner = document.getElementById("leadAddedBanner");
-    const name = document.getElementById("leadName").value.trim();
-    if (!name) {
-      banner.innerHTML = `<div class="banner error">Name is required to add a lead.</div>`;
-      return;
-    }
-    try {
-      await App.apiJson("/api/onboarding/wizard/first-lead", {
-        method: "POST",
-        body: { fullName: name, phoneNumber: document.getElementById("leadPhone").value.trim() },
-      });
-      banner.innerHTML = `<div class="banner success">Lead added!</div>`;
-      document.getElementById("firstLeadForm").reset();
-    } catch (err) {
-      banner.innerHTML = `<div class="banner error">${esc(err.message)}</div>`;
-    }
-  });
-
-  document.getElementById("finishBtn").addEventListener("click", (e) => {
-    // Deliberately renders the "Setup Complete" screen directly rather than
-    // going through the generic render() dispatcher above - that dispatcher
-    // treats status === "COMPLETED" as "redirect straight to the dashboard,"
-    // which is correct for someone LANDING on this page already complete,
-    // but would skip the "Setup Complete" screen entirely for the person
-    // who just clicked Finish - see the TARGET EXPERIENCE diagram's own
-    // Review -> Setup Complete -> Dashboard order.
-    submitStep("/api/onboarding/wizard/complete", {}, e.target, renderComplete);
-  });
-}
-
-function renderComplete() {
-  wizardShell(`
-    <div class="wizard-complete-icon">✓</div>
-    <h1 style="text-align:center">You're all set!</h1>
-    <p class="sub" style="text-align:center">Your CRM is ready to go.</p>
-    <a class="btn full" href="/dashboard.html" style="text-decoration:none; text-align:center">Go to Dashboard</a>
-  `, { stepKey: null });
-}
-
-/** Submits the wizard step named `step` in "just view it" mode - used ONLY
- * to auto-skip META_CONNECTION when it doesn't apply (PHASE 10's "if the
- * user selected Facebook/Instagram, show this step" rule) - the user never
- * sees this happen, it's not a real navigation action. */
-async function autoSkip(step) {
-  ctx = await App.apiJson(`/api/onboarding/wizard/skip`, { method: "POST", body: { step } });
-  render();
-}
-
-function renderStep(step) {
-  if (step === "BUSINESS_PROFILE") return renderBusinessProfile();
-  if (step === "CRM_BASICS") return renderCrmBasics();
-  if (step === "PIPELINE") return renderPipeline();
-  if (step === "LEAD_SOURCE") return renderLeadSource();
-  if (step === "META_CONNECTION") {
-    if (!ctx.isMetaConnectionApplicable) return autoSkip("META_CONNECTION");
-    return renderMetaConnection();
-  }
-  if (step === "REVIEW") return renderReview();
-  return renderWelcome();
 }
 
 function render() {
@@ -370,11 +176,13 @@ function render() {
     window.location.href = "/dashboard.html";
     return;
   }
-  if (ctx.status === "NOT_STARTED") {
-    renderWelcome();
+  if (ctx.status === "NOT_STARTED" || ctx.step === "BUSINESS_PROFILE") {
+    renderBusinessProfile();
     return;
   }
-  renderStep(ctx.step);
+  // Business Profile is already submitted (the only screen this flow shows)
+  // - nothing left to ask, just finish the rest with defaults.
+  finishRemainingSteps(ctx.step);
 }
 
 (async () => {

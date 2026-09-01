@@ -659,26 +659,25 @@
     // complete it directly from here, per the reported request ("any
     // pending steps will have url... where user will click on it").
     // Always-done items (business profile, pipeline) never render as
-    // pending so their `href` is irrelevant and left null. "Lead sources
-    // configured" links to Business Configuration - it's the general
-    // settings hub the onboarding flow itself points back to for anything
-    // set during setup (see docs/individual-user-manual.md section 8);
-    // there's no dedicated lead-source editor page today.
+    // pending so their `href` is irrelevant and left null.
+    //
+    // No "Lead sources configured" item - the simplified onboarding flow
+    // (onboarding.html) no longer asks about lead sources at all, and there
+    // is no editor page anywhere in the app to complete it from, so it would
+    // sit pending forever. Facebook/Instagram connection is no longer gated
+    // on isMetaConnectionApplicable either, for the same reason - that used
+    // to mean "the user said they get leads from Facebook/Instagram," but
+    // the onboarding flow doesn't ask that anymore, so this now always shows
+    // for an Individual account, exactly where "remaining steps" (like
+    // connecting Meta) belong now that onboarding itself is a single step.
     const items = [
       { label: "Business profile set up", done: true, href: null },
       { label: "Sales pipeline ready", done: true, href: null },
       {
-        label: "Lead sources configured",
-        done: Boolean(wizard.company.selectedLeadSources && wizard.company.selectedLeadSources.length),
-        href: "/settings/business-configuration.html",
+        label: "Facebook / Instagram connected",
+        done: Boolean(meta?.connection && meta.connection.status === "active"),
+        href: "/settings/integrations/meta-status.html",
       },
-      ...(wizard.isMetaConnectionApplicable
-        ? [{
-            label: "Facebook / Instagram connected",
-            done: Boolean(meta?.connection && meta.connection.status === "active"),
-            href: "/settings/integrations/meta-status.html",
-          }]
-        : []),
       {
         label: `First ${(wizard.company.leadTerminology || "lead").toLowerCase()} added`,
         done: Number(totalLeads) > 0,
@@ -696,7 +695,7 @@
       <div class="card" style="margin-bottom:16px; position:relative; padding-right:40px">
         <button type="button" id="dismissChecklistBtn" aria-label="Dismiss setup checklist"
           style="position:absolute; top:14px; right:14px; background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:18px; line-height:1; padding:2px">×</button>
-        <p class="dash-card-title" style="margin-bottom:12px">Finish setting up your CRM</p>
+        <p class="dash-card-title" style="margin-bottom:12px">Finish setting up your account</p>
         <div style="display:flex; flex-direction:column; gap:9px">
           ${items.map((i) => {
             const clickable = !i.done && i.href;
