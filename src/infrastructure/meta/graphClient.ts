@@ -750,6 +750,54 @@ export async function subscribePageToLeadgen(pageId: string, pageAccessToken: st
   }
 }
 
+// ---------------------------------------------------------------------
+// WhatsApp Lead Capture - webhook subscription. Same two-part shape as the
+// Page/leadgen pair directly above (see that block's own comment for the
+// APP-level vs asset-level distinction) - discovering a WhatsApp Business
+// Account (whatsappDiscoveryService.ts) only READS Meta's data; it does
+// NOT, by itself, make Meta start sending this app any inbound-message
+// webhook events. That requires these two calls too, exactly as it does
+// for a Page's leadgen events. See metaWhatsappWebhookService.ts.
+// ---------------------------------------------------------------------
+
+/** Ensures the App's webhook product is subscribed to
+ * `whatsapp_business_account`/`messages` events at the given callback URL -
+ * idempotent, same as ensureAppLeadgenSubscription. Both object types share
+ * one App-level webhook product and can point at the same callback URL
+ * (Meta delivers every subscribed product to that one URL; this app
+ * branches on the payload's own `object` field - see
+ * api/webhooks/meta/handler.ts). */
+export async function ensureAppWhatsappMessagesSubscription(
+  appId: string,
+  appSecret: string,
+  callbackUrl: string,
+  verifyToken: string,
+): Promise<void> {
+  const url =
+    `${getBaseUrl()}/${appId}/subscriptions?object=whatsapp_business_account&fields=messages` +
+    `&callback_url=${encodeURIComponent(callbackUrl)}&verify_token=${encodeURIComponent(verifyToken)}` +
+    `&access_token=${encodeURIComponent(`${appId}|${appSecret}`)}`;
+  const response = await fetchWithRetry(url, 3, "POST");
+  if (!response.ok) {
+    throw await buildMetaApiError(response, "Failed to configure the app's WhatsApp messages webhook");
+  }
+}
+
+/** Step "subscribe": opts one WhatsApp Business Account in to sending its
+ * `messages` events to whatever this App's webhook is configured for (see
+ * ensureAppWhatsappMessagesSubscription above). Unlike a Page (which has
+ * its own stored per-asset access token), a WABA subscription is made with
+ * the connection's own user access token - the same token
+ * whatsappDiscoveryService.ts already used to discover this WABA, which is
+ * why meta_whatsapp_accounts has no access-token column of its own. */
+export async function subscribeWabaToApp(wabaId: string, userAccessToken: string): Promise<void> {
+  const url = `${getBaseUrl()}/${wabaId}/subscribed_apps?access_token=${encodeURIComponent(userAccessToken)}`;
+  const response = await fetchWithRetry(url, 3, "POST");
+  if (!response.ok) {
+    throw await buildMetaApiError(response, `Failed to subscribe WhatsApp Business Account ${wabaId}`);
+  }
+}
+
 export interface MetaLeadFormQuestion {
   key: string;
   label: string;

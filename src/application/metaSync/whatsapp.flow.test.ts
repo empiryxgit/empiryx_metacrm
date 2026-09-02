@@ -46,6 +46,11 @@ vi.mock("../../infrastructure/meta/graphClient", async (importOriginal) => {
     getUserBusinesses: vi.fn(),
     getOwnedWhatsAppBusinessAccounts: vi.fn(),
     getWhatsAppPhoneNumbers: vi.fn(),
+    // Webhook-subscribe fix (the "leads not showing" bug) - discovery now
+    // calls these on every run for whichever account is selected, mirroring
+    // ensureAppLeadgenSubscription/subscribePageToLeadgen's own mocks above.
+    ensureAppWhatsappMessagesSubscription: vi.fn(),
+    subscribeWabaToApp: vi.fn(),
   };
 });
 
@@ -172,6 +177,37 @@ describe.skipIf(!process.env.DATABASE_URL)("WhatsApp webhook flow", () => {
     await connectWithOneWhatsappNumber("wa-discovery");
     // assertion already made inside the helper - this test exists mainly to
     // document the behavior under its own name in the test report.
+  });
+
+  it("Webhook subscribe (the 'leads not showing' fix): auto-selecting a number on connect also subscribes it to receive Meta's webhook events", async () => {
+    vi.mocked(graphClient.ensureAppWhatsappMessagesSubscription).mockResolvedValue(undefined);
+    vi.mocked(graphClient.subscribeWabaToApp).mockResolvedValue(undefined);
+
+    const { tenantId } = await connectWithOneWhatsappNumber("wa-webhook-subscribe");
+
+    // Both Graph API calls the two-step subscribe pattern requires actually
+    // happened - not just discovery/read calls.
+    expect(graphClient.ensureAppWhatsappMessagesSubscription).toHaveBeenCalledTimes(1);
+    expect(graphClient.subscribeWabaToApp).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(graphClient.subscribeWabaToApp).mock.calls[0]![0]).toBe(`waba-wa-webhook-subscribe`);
+
+    // ...and the outcome is recorded on the account row itself, not just
+    // implied by the calls having happened.
+    const selected = await getSelectedMetaWhatsappAccount(tenantId);
+    expect(selected).toMatchObject({ webhookSubscribed: true, webhookStatus: "active", webhookLastError: null });
+  });
+
+  it("Webhook subscribe failure: never fails the Meta connection or un-selects the number - recorded on the row instead", async () => {
+    vi.mocked(graphClient.ensureAppWhatsappMessagesSubscription).mockResolvedValue(undefined);
+    vi.mocked(graphClient.subscribeWabaToApp).mockRejectedValue(new Error("simulated Graph API failure"));
+
+    // connectWithOneWhatsappNumber itself asserts auto-selection succeeded -
+    // if a subscribe failure threw out of discovery, this line would fail.
+    const { tenantId } = await connectWithOneWhatsappNumber("wa-webhook-subscribe-fail");
+
+    const selected = await getSelectedMetaWhatsappAccount(tenantId);
+    expect(selected).toMatchObject({ isSelected: true, webhookSubscribed: false, webhookStatus: "failed" });
+    expect(selected?.webhookLastError).toContain("simulated Graph API failure");
   });
 
   it("Valid webhook: a WhatsApp message is captured and durably stored", async () => {

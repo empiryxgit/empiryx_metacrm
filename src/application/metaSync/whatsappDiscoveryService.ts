@@ -22,11 +22,13 @@ import {
   getWhatsAppPhoneNumbers,
 } from "../../infrastructure/meta/graphClient";
 import {
+  getSelectedMetaWhatsappAccount,
   listMetaWhatsappAccounts,
   replaceMetaWhatsappAccounts,
   selectMetaWhatsappAccount,
   type ReplaceMetaWhatsappAccountInput,
 } from "../../infrastructure/db/repositories/whatsapp";
+import { subscribeWhatsappWebhook } from "./metaWhatsappWebhookService";
 
 export interface DiscoverWhatsappAssetsResult {
   businessesFound: number;
@@ -119,6 +121,28 @@ export async function discoverWhatsappAssets(
       await selectMetaWhatsappAccount(tenantId, rows[0]!.id);
       autoSelected = true;
     }
+  }
+
+  // Discovering (and even selecting) a number only ever READS Meta's data -
+  // it does not, by itself, make Meta start delivering that WABA's inbound
+  // messages to this app's webhook. Whichever account ends up selected
+  // (just now, or already selected from an earlier connect) gets its
+  // webhook subscription (re)confirmed on every discovery run - idempotent,
+  // same "safe to call before every subscribe" posture
+  // subscribePageWebhook already has, and specifically what makes this
+  // self-healing for a tenant who selected a number before this subscribe
+  // step existed: their very next reconnect/resync subscribes them
+  // retroactively, with no separate manual step required. Best-effort, like
+  // every other step in this function - a subscribe failure must never fail
+  // the whole Meta connection (it's recorded on the account row instead;
+  // see metaWhatsappWebhookService.ts).
+  try {
+    const selectedAccount = await getSelectedMetaWhatsappAccount(tenantId);
+    if (selectedAccount) {
+      await subscribeWhatsappWebhook(tenantId, selectedAccount.id, userAccessToken);
+    }
+  } catch (err) {
+    console.warn(`[whatsapp-discovery] Failed to subscribe WhatsApp webhook for tenant ${tenantId}:`, err);
   }
 
   return { businessesFound: businesses.length, wabasFound, phoneNumbersFound: phoneNumberInputs.length, autoSelected };

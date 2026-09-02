@@ -44,7 +44,10 @@ function getLeadgenWebhookCallbackUrl(): string {
   return `${base.replace(/\/$/, "")}/api/webhooks/meta/leadgen`;
 }
 
-function getWebhookVerifyToken(): string {
+// Exported so metaWhatsappWebhookService.ts can reuse the exact same env
+// var / error type - one Meta App, one verify token, shared by both the
+// leadgen and WhatsApp-messages webhook subscriptions.
+export function getWebhookVerifyToken(): string {
   const value = process.env.META_WEBHOOK_VERIFY_TOKEN;
   if (!value) throw new MetaWebhookConfigError("META_WEBHOOK_VERIFY_TOKEN is not set. See .env.example.");
   return value;

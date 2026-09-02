@@ -1227,6 +1227,19 @@ export const metaWhatsappAccounts = crm.table(
     displayPhoneNumber: text("display_phone_number"),
     verifiedName: text("verified_name"),
     isSelected: boolean("is_selected").notNull().default(false),
+    // Mirrors meta_pages' webhook_subscribed/webhook_status/webhook_last_error
+    // columns exactly (see metaPages below) - whether THIS specific WABA has
+    // actually been subscribed to send its `messages` events to this app's
+    // webhook. Discovering/selecting a number is necessary but NOT
+    // sufficient for inbound messages to ever arrive - Meta only delivers
+    // webhook events for a WABA that was explicitly subscribed via
+    // POST /{waba-id}/subscribed_apps (see metaWhatsappWebhookService.ts) -
+    // so this column exists to make that second, easy-to-miss step visible
+    // and self-healing rather than a silent gap.
+    webhookSubscribed: boolean("webhook_subscribed").notNull().default(false),
+    webhookStatus: text("webhook_status"), // "active" | "failed" | null (never attempted)
+    webhookLastError: text("webhook_last_error"),
+    webhookLastVerifiedAt: timestamp("webhook_last_verified_at", { withTimezone: true }),
     lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),

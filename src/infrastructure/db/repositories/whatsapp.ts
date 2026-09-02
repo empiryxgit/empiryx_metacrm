@@ -105,6 +105,43 @@ export async function selectMetaWhatsappAccount(tenantId: string, whatsappAccoun
   return firstOrThrow(rows);
 }
 
+/** Internal lookup for the webhook-subscribe pipeline - tenant-scoped, same
+ * "ensure all records belong to the current tenant" posture as
+ * getMetaPageInternal (metaIntegration.ts). Returns the row as-is (unlike
+ * getMetaPageInternal, there's no per-account access token to decrypt - see
+ * subscribeWabaToApp's own comment on graphClient.ts for why). */
+export async function getMetaWhatsappAccountInternal(tenantId: string, whatsappAccountDbId: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select()
+    .from(metaWhatsappAccounts)
+    .where(and(eq(metaWhatsappAccounts.tenantId, tenantId), eq(metaWhatsappAccounts.id, whatsappAccountDbId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Records a successful WhatsApp webhook subscribe - mirrors
+ * markPageWebhookActive (metaIntegration.ts) exactly. */
+export async function markWhatsappAccountWebhookActive(id: string) {
+  const db = await getDb();
+  await db
+    .update(metaWhatsappAccounts)
+    .set({ webhookSubscribed: true, webhookStatus: "active", webhookLastVerifiedAt: new Date(), webhookLastError: null, updatedAt: new Date() })
+    .where(eq(metaWhatsappAccounts.id, id));
+}
+
+/** Records a failed WhatsApp webhook subscribe attempt - mirrors
+ * markPageWebhookFailed (metaIntegration.ts) exactly. Never thrown further -
+ * a subscribe failure is recorded and surfaced (Settings, Retry), never
+ * left silent, but also never breaks the Meta connection itself. */
+export async function markWhatsappAccountWebhookFailed(id: string, error: string) {
+  const db = await getDb();
+  await db
+    .update(metaWhatsappAccounts)
+    .set({ webhookSubscribed: false, webhookStatus: "failed", webhookLastError: error, updatedAt: new Date() })
+    .where(eq(metaWhatsappAccounts.id, id));
+}
+
 /** Resolves an inbound webhook's `metadata.phone_number_id` back to the
  * owning tenant - the SAME "never trust the payload's own claim of who it
  * belongs to, always look up what this system recorded" posture

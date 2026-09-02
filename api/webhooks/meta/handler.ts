@@ -131,6 +131,7 @@ import {
   listMetaPages,
 } from "../../../src/infrastructure/db/repositories/metaIntegration";
 import { selectPage, selectInstagramAccount, retryPageWebhook } from "../../../src/application/metaSync/metaPageService";
+import { selectWhatsappAccount } from "../../../src/application/metaSync/metaWhatsappWebhookService";
 import { selectAdAccount } from "../../../src/application/metaSync/metaAdAccountService";
 import { runMetaSync } from "../../../src/application/metaSync/runMetaSync";
 import { getMetaSyncProgress } from "../../../src/infrastructure/cache/redis";
@@ -145,7 +146,7 @@ import {
 } from "../../../src/infrastructure/db/repositories/metaFormMappings";
 import { listMetaCampaignsWithMappingForAdAccount } from "../../../src/infrastructure/db/repositories/metaSync";
 import { getLastMetaLeadReceivedAt } from "../../../src/infrastructure/db/repositories";
-import { countMetaLeadRoutesByApproach, listMetaWhatsappAccounts, selectMetaWhatsappAccount } from "../../../src/infrastructure/db/repositories/whatsapp";
+import { countMetaLeadRoutesByApproach, listMetaWhatsappAccounts } from "../../../src/infrastructure/db/repositories/whatsapp";
 import { LEAD_APPROACHES } from "../../../src/domain/leadApproach";
 
 export const config = {
@@ -414,6 +415,14 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
         displayPhoneNumber: w.displayPhoneNumber,
         verifiedName: w.verifiedName,
         isSelected: w.isSelected,
+        // Same "make the webhook-subscribe step visible, never silent" the
+        // Page pipeline already gives meta_pages.webhookSubscribed - see
+        // metaWhatsappWebhookService.ts's own comment on why this step is
+        // easy to miss and genuinely necessary for inbound messages to
+        // ever arrive at all.
+        webhookSubscribed: w.webhookSubscribed,
+        webhookStatus: w.webhookStatus,
+        webhookLastError: w.webhookLastError,
       })),
       // "Action required" surfacing (Phase 14/19): the Settings screen can
       // render this straight into "12 Instant Form ads, 5 WhatsApp ads, 2
@@ -506,9 +515,29 @@ async function handleSelectAsset(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
+    if (type === "whatsapp") {
+      // Same treatment as "page" above - selecting a WhatsApp number also
+      // (synchronously) attempts the automatic webhook subscribe, so the
+      // response reflects both outcomes immediately. See
+      // metaWhatsappWebhookService.ts's selectWhatsappAccount for why this
+      // step exists at all: without it, a "connected" number never
+      // actually receives any inbound messages.
+      const result = await selectWhatsappAccount(auth.companyId, id);
+      if (!result.account) {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      res.status(200).json({
+        selected: true,
+        id: result.account.id,
+        webhookStatus: result.webhook?.status ?? "failed",
+        webhookLastError: result.webhook?.lastError ?? null,
+      });
+      return;
+    }
+
     let selected;
     if (type === "instagram") selected = await selectInstagramAccount(auth.companyId, id);
-    else if (type === "whatsapp") selected = await selectMetaWhatsappAccount(auth.companyId, id);
     else selected = await selectAdAccount(auth.companyId, id);
     if (!selected) {
       // Either the id doesn't exist, or it belongs to a different tenant -
