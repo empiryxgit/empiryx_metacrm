@@ -317,6 +317,21 @@ button.btn.danger:hover{ background:#9A3333; }
 button.btn.full{ width:100%; justify-content:center; margin-top:18px; }
 button.btn.sm{ padding:6px 11px; font-size:12.5px; }
 
+/* -- Button row — a "Back" (or other secondary) button beside a primary
+   full-width action, e.g. register.html step 2. Without this, a bare
+   .btn.full sibling fights the secondary button for space (its width:100%
+   flex-basis forces flexbox to squeeze both unevenly) instead of the two
+   sitting as a clean, evenly-proportioned pair. */
+.btn-row{ display:flex; gap:10px; margin-top:14px; }
+.btn-row .btn{ margin-top:0; }
+.btn-row .btn.secondary{ flex:0 0 auto; }
+.btn-row .btn.full{ flex:1 1 auto; width:auto; }
+
+@media (max-width:480px){
+  .btn-row{ flex-direction:column-reverse; }
+  .btn-row .btn.secondary{ flex:1 1 auto; }
+}
+
 /* =============================================================================
    Cards
 ============================================================================= */
@@ -735,6 +750,11 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
 ============================================================================= */
 .auth-shell{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--page-bg); }
 .auth-card{ width:380px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:30px 28px; box-shadow:var(--shadow-sm); }
+/* Wider variant for multi-field steps (register, onboarding-agency) - a
+   class instead of an inline style so the 480px breakpoint below can still
+   override it to width:100% (an inline style would always win over any
+   class, breakpoint or not, and overflow small screens). */
+.auth-card.wide{ width:440px; }
 .auth-card h1{ font-size:18px; margin:0 0 4px; font-weight:700; letter-spacing:-0.01em; }
 .auth-card p.sub{ margin:0 0 20px; color:var(--text-muted); font-size:13px; }
 .auth-card .switch{ margin-top:16px; text-align:center; font-size:12.5px; color:var(--text-muted); }
@@ -913,6 +933,7 @@ code.token{ display:block; background:var(--surface-alt); border:1px solid var(-
   .shell-inner{ padding:0 var(--space-4); }
   .brand-by{ display:none; }
   .auth-card{ width:100%; padding:26px 20px; }
+  .auth-card.wide{ width:100%; }
 }
 
 @media (prefers-reduced-motion: reduce){
