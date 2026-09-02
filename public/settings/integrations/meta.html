@@ -274,7 +274,15 @@
 
       ${renderWebhookStatusCard(selectedPage)}
 
+      <!-- Report - once Page/Instagram/Ad Account selection is done, the
+           natural next step (map each synced Meta campaign to a CRM
+           campaign) was never pointed to from anywhere in Meta setup - a
+           tenant only found it by accident on the Campaigns page. Shown
+           the moment hasAnySelection is true, same gate the sync/forms
+           section already use, so it's there on every later visit to this
+           page too, not just right after the first sync. -->
       <div class="meta-actions">
+        ${hasAnySelection ? `<a class="btn" href="/campaigns.html" style="text-decoration:none; text-align:center">Go to Campaigns →</a>` : ""}
         <button class="btn secondary" type="button" id="configureBtn">Configure Meta</button>
         <button class="btn danger" type="button" id="disconnectBtn">Disconnect</button>
       </div>
@@ -568,7 +576,7 @@
     return "○";
   }
 
-  function renderSyncProgress(steps) {
+  function renderSyncProgress(steps, opts = {}) {
     document.getElementById("wizardCard").innerHTML = `
       <h2 class="section-title" style="margin-top:0">Syncing Meta Assets</h2>
       <ul class="meta-sync-checklist">
@@ -584,6 +592,11 @@
           )
           .join("")}
       </ul>
+      ${opts.showCampaignsCta ? `
+        <div class="meta-actions" style="margin-top:16px">
+          <a class="btn" href="/campaigns.html" style="text-decoration:none; text-align:center">Go to Campaigns →</a>
+        </div>
+      ` : ""}
     `;
   }
 
@@ -616,7 +629,12 @@
       return;
     }
     clearInterval(pollTimer);
-    renderSyncProgress(result.steps);
+    // The Go to Campaigns CTA rides along on the same checklist card the
+    // instant sync finishes cleanly - the moment the user is most clearly
+    // "done" and looking at this exact screen, rather than waiting for
+    // them to notice the equivalent button that also now lives in the
+    // main card's action row (see renderConnected) on a later visit.
+    renderSyncProgress(result.steps, { showCampaignsCta: result.ok });
     showBanner(result.ok ? "success" : "error", result.ok ? "Meta assets synced successfully." : "Meta sync finished with errors - see the checklist below.");
 
     // Refresh the main card's counts/selection state; the completed
