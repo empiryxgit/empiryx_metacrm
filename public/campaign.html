@@ -259,13 +259,17 @@
       rows.innerHTML = `<tr><td colspan="3">
         <div class="state-block">
           <p class="state-title">No Meta campaigns mapped yet</p>
-          <p class="state-desc">Go to <a href="/campaigns.html">Campaigns</a>, open a synced Meta campaign, and map it here.</p>
+          <p class="state-desc">New Meta campaigns are mapped here automatically the next time Meta assets sync - see <a href="/campaigns.html">Campaigns</a>.</p>
         </div>
       </td></tr>`;
       return;
     }
+    // Report - the manual mapping screen (meta-campaign.html) is disabled;
+    // sync already auto-maps every new Meta campaign to a CRM campaign, so
+    // this row is no longer a link into it - see campaigns.html's own
+    // Meta Campaigns table for the same change.
     rows.innerHTML = mapped.map((c) => `
-      <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
+      <tr>
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>

@@ -61,7 +61,16 @@
 
     <div id="metaSection"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading Meta status…</div></div>
 
-    <div class="manual-campaigns-section">
+    <!-- Report - hidden for now: every Meta campaign already gets its own
+         matching CRM campaign auto-created and mapped during sync (see the
+         "auto-mapped to CRM" step in meta.html's sync checklist), so this
+         manual "create your own CRM campaign and map Meta campaigns to it"
+         section is redundant for the Meta-driven flow this app is actually
+         used for right now. The section, its JS (loadCrmCampaigns et al.),
+         and its API calls are all left completely intact - only display is
+         toggled - so this is a one-line revert if a non-Meta lead source
+         ever needs manual CRM campaigns again. -->
+    <div class="manual-campaigns-section" style="display:none">
       <div class="page-head" style="margin-bottom:14px">
         <div class="page-head-text">
           <h2 class="section-title" style="margin:0">CRM campaigns</h2>
@@ -383,13 +392,19 @@
     metaPage = page;
     const pageItems = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+    // Report - the manual "click a row to map it to a CRM campaign" screen
+    // (meta-campaign.html) is disabled here: sync already auto-creates and
+    // maps a matching CRM campaign for every new Meta campaign (see the
+    // "auto-mapped to CRM" step in meta.html's sync checklist), so the row
+    // is no longer a link - just data, plus the one action (Performance)
+    // that's still a real manual step.
     metaRows.innerHTML = pageItems.map((c) => `
-      <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
+      <tr>
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>
-        <td>${c.crmCampaignName ? App.escapeHtml(c.crmCampaignName) : '<span style="color:var(--text-muted)">Unmapped — Map to CRM →</span>'}</td>
-        <td onclick="event.stopPropagation()">
+        <td>${c.crmCampaignName ? App.escapeHtml(c.crmCampaignName) : '<span style="color:var(--text-muted)">Unmapped</span>'}</td>
+        <td>
           <button type="button" class="btn secondary sm" onclick="openInsightsModal('${c.id}')">📊 Performance</button>
         </td>
       </tr>
