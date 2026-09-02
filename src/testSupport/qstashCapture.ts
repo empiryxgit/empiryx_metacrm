@@ -25,7 +25,16 @@ export interface CapturedTenantPublish {
   tenantId: string;
 }
 
-export type CapturedPublish = CapturedLegacyPublish | CapturedTenantPublish;
+// WhatsApp Lead Capture feature (Phase 6/7) - mirrors CapturedTenantPublish
+// for src/infrastructure/queue/qstash.ts's publishWhatsappMessageReceived.
+export interface CapturedWhatsappPublish {
+  kind: "whatsapp";
+  messageEventId: string;
+  waMessageId: string;
+  tenantId: string;
+}
+
+export type CapturedPublish = CapturedLegacyPublish | CapturedTenantPublish | CapturedWhatsappPublish;
 
 export const publishedMessages: CapturedPublish[] = [];
 

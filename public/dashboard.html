@@ -109,6 +109,20 @@
           </div>
           <div class="donut-row" id="sourceBody"></div>
         </div>
+
+        <!-- WhatsApp Lead Capture feature (Phase 21) - minimal "Leads by
+             Approach" breakdown (Instant Form / WhatsApp / ...), the same
+             cohort/shape as "Where your customers come from" above, reusing
+             its own donut renderer. -->
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">How leads reach you</p>
+              <p class="dash-card-sub" id="leadApproachRangeLabel"></p>
+            </div>
+          </div>
+          <div class="donut-row" id="leadApproachBody"></div>
+        </div>
       </div>
 
       <div class="dash-section">
@@ -387,8 +401,12 @@
 
   // ---- Lead source donut ------------------------------------------------
   const DONUT_COLORS = ["var(--brand-primary)", "var(--brand-dark)", "var(--success)", "var(--warning)", "#8B6F47", "var(--text-muted)"];
-  function renderSources(sources) {
-    const body = document.getElementById("sourceBody");
+  // containerId defaults to the original "Where your customers come from"
+  // card so every pre-existing call site keeps working unchanged; the new
+  // "How leads reach you" card (Phase 21) passes its own id to reuse this
+  // same donut+legend rendering rather than duplicating it.
+  function renderSources(sources, containerId = "sourceBody") {
+    const body = document.getElementById(containerId);
     if (!sources.length) {
       body.innerHTML = `<div class="chart-empty">No leads in this period yet.</div>`;
       return;
@@ -546,6 +564,7 @@
     renderChart(data.chart);
     renderFunnel(data.funnel);
     renderSources(data.sources);
+    renderSources(data.leadApproaches || [], "leadApproachBody");
     campaignRows = data.campaigns;
     renderCampaigns();
     renderActivity(data.activity);
@@ -554,6 +573,7 @@
     document.getElementById("leadListRangeLabel").textContent = "Leads captured " + rangeLabel;
     document.getElementById("chartRangeLabel").textContent = "New, qualified and won leads over " + rangeLabel;
     document.getElementById("sourceRangeLabel").textContent = "New leads and customers, " + rangeLabel;
+    document.getElementById("leadApproachRangeLabel").textContent = "How leads were captured, " + rangeLabel;
     document.getElementById("campaignRangeLabel").textContent = "Leads generated " + rangeLabel;
   }
 

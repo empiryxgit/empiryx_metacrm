@@ -1186,6 +1186,177 @@ export const metaAds = crm.table(
   }),
 );
 
+// ---------------------------------------------------------------------------
+// WhatsApp Lead Capture feature - discovered WhatsApp assets, resolved
+// lead-approach routing, and inbound message durability. All three follow
+// the exact same shape/conventions as their Meta-Instant-Form counterparts
+// above (meta_pages / meta_lead_events) - see each table's own comment for
+// what it mirrors and why.
+// ---------------------------------------------------------------------------
+
+/**
+ * A WhatsApp Business phone number the tenant's connected Meta Business
+ * Manager account owns, discovered automatically through the SAME Meta
+ * connection used for Pages/ad accounts (Phase 5: "the customer does not
+ * manually enter a WhatsApp Business Account ID, Phone Number ID, or
+ * webhook URL") - never typed in by the tenant, only ever selected from
+ * what discovery finds. Mirrors meta_pages' shape/selection pattern
+ * exactly: isSelected is single-select-per-tenant (a tenant sends/receives
+ * through exactly one WhatsApp number in this CRM at a time), enforced the
+ * same way (a partial unique index), because that's the number
+ * processWhatsAppMessageEvent.ts resolves inbound webhook events against.
+ */
+export const metaWhatsappAccounts = crm.table(
+  "meta_whatsapp_accounts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    metaConnectionId: uuid("meta_connection_id").notNull().references(() => metaConnections.id, { onDelete: "cascade" }),
+    // Meta's own WhatsApp Business Account id (the Graph API node this
+    // phone number hangs off) - plain text, same "Meta's id, not ours"
+    // convention as meta_pages.pageId.
+    wabaId: text("waba_id").notNull(),
+    wabaName: text("waba_name"),
+    // Meta's own phone_number_id (the id used on every Cloud API call and
+    // the id the inbound webhook's metadata.phone_number_id carries -
+    // THIS is how an inbound message is resolved back to a tenant, see
+    // processWhatsAppMessageEvent.ts).
+    phoneNumberId: text("phone_number_id").notNull(),
+    // Meta's own display_phone_number ("+91 XXXXX XXXXX") - shown to the
+    // tenant as-is; the CRM never formats or validates this itself.
+    displayPhoneNumber: text("display_phone_number"),
+    verifiedName: text("verified_name"),
+    isSelected: boolean("is_selected").notNull().default(false),
+    lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantIdx: index("ix_meta_whatsapp_accounts_tenant_id").on(t.tenantId),
+    connectionIdx: index("ix_meta_whatsapp_accounts_meta_connection_id").on(t.metaConnectionId),
+    tenantPhoneNumberIdx: uniqueIndex("ux_meta_whatsapp_accounts_tenant_phone_number").on(t.tenantId, t.phoneNumberId),
+    oneSelectedPerTenantIdx: uniqueIndex("ux_meta_whatsapp_accounts_one_selected_per_tenant")
+      .on(t.tenantId)
+      .where(sql`is_selected = true`),
+  }),
+);
+
+/**
+ * Persistent Meta-ad -> lead-approach routing (Phase 4). Remembers, per
+ * synced ad, whether it was resolved as META_INSTANT_FORM or WHATSAPP (or
+ * left UNKNOWN) so the webhook processors never have to re-derive this from
+ * the Graph API on every incoming event - resolved once by
+ * metaLeadApproachResolver.ts right after each campaign sync
+ * (metaCampaignService.ts), refreshed on every re-sync. Keyed on the ad
+ * (metaAdId), the finest-grained level Meta's own data actually
+ * distinguishes at (destination_type lives on the ad SET; the linked lead
+ * form lives on the individual AD's creative - see the resolver's own
+ * comment) - metaAdSetId is denormalized alongside for lookups that don't
+ * need the join. ON DELETE CASCADE on metaAdId: a route is meaningless
+ * without the ad it describes; deleting the ad's own catalog row (never
+ * done by this app today, but a legitimate future admin action) should
+ * simply remove its route too, not orphan it - existing LEAD rows already
+ * carry their own attribution snapshot (leads.adId/campaignId/etc.) and are
+ * never touched by this table either way.
+ */
+export const metaLeadRoutes = crm.table(
+  "meta_lead_routes",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    metaConnectionId: uuid("meta_connection_id").references(() => metaConnections.id, { onDelete: "set null" }),
+    metaAdAccountId: uuid("meta_ad_account_id").references(() => metaAdAccounts.id, { onDelete: "set null" }),
+    metaCampaignId: uuid("meta_campaign_id").references(() => metaCampaigns.id, { onDelete: "set null" }),
+    metaAdSetId: uuid("meta_ad_set_id").references(() => metaAdSets.id, { onDelete: "set null" }),
+    metaAdId: uuid("meta_ad_id").notNull().references(() => metaAds.id, { onDelete: "cascade" }),
+    // src/domain/leadApproach.ts LEAD_APPROACHES key - "meta_instant_form" |
+    // "whatsapp" | "unknown" (only these three are ever WRITTEN by the
+    // resolver today; the catalog's other entries are reserved for future
+    // ingestion pipelines this table's shape already supports).
+    approach: text("approach").notNull().default("unknown"),
+    // src/domain/leadApproach.ts LEAD_APPROACH_CONFIDENCE - "DETERMINED"
+    // (resolved from real Meta configuration data) | "UNDETERMINED" (Meta's
+    // data did not reliably indicate an approach - approach is "unknown" in
+    // this case, never guessed).
+    confidence: text("confidence").notNull().default("UNDETERMINED"),
+    // Set only when approach = "meta_instant_form" - Meta's own form id
+    // (matches meta_forms.formId), resolved from the ad creative's
+    // object_story_spec.link_data.call_to_action.value.lead_gen_form_id.
+    formId: text("form_id"),
+    // Set only when approach = "whatsapp" - the meta_whatsapp_accounts row
+    // this ad's Click-to-WhatsApp destination resolves to, when the ad's
+    // destination phone number could be matched against a discovered
+    // WhatsApp asset for this tenant (nullable even for a WHATSAPP-approach
+    // route: Meta's ad-set-level destination_type does not itself name
+    // WHICH phone number, so this is best-effort attribution, not a hard
+    // requirement for the WHATSAPP classification itself).
+    whatsappAccountId: uuid("whatsapp_account_id").references(() => metaWhatsappAccounts.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("active"), // active | stale (ad no longer exists/is deleted, see reconciliation)
+    // Free-form diagnostic detail (e.g. "no destination_type or
+    // lead_gen_form_id present on this ad/ad set") - never a raw API error,
+    // never a secret; purely for the Settings screen's "Action required"
+    // surfacing and internal logs (Phase 14).
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantIdx: index("ix_meta_lead_routes_tenant_id").on(t.tenantId),
+    approachIdx: index("ix_meta_lead_routes_approach").on(t.approach),
+    // One route per ad, re-resolved (not re-inserted) on every sync.
+    tenantAdIdx: uniqueIndex("ux_meta_lead_routes_tenant_ad").on(t.tenantId, t.metaAdId),
+  }),
+);
+
+/**
+ * WhatsApp inbound-message durability + idempotency (Phase 6/7) - mirrors
+ * meta_lead_events exactly: persist BEFORE acking the webhook, unique on
+ * (tenantId, waMessageId) so a redelivered WhatsApp webhook (Meta retries
+ * on anything but a fast 200) can never create a duplicate Lead, same
+ * "durability row is the idempotency backstop, not the Lead insert itself"
+ * pattern used throughout this codebase.
+ */
+export const whatsappMessageEvents = crm.table(
+  "whatsapp_message_events",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // Meta's own WhatsApp message id ("wamid...") - THE idempotency key.
+    waMessageId: text("wa_message_id").notNull(),
+    wabaId: text("waba_id"),
+    phoneNumberId: text("phone_number_id"),
+    fromPhoneNumber: text("from_phone_number"),
+    contactName: text("contact_name"),
+    messageType: text("message_type"), // Meta's own messages[].type ("text", "image", ...)
+    messageText: text("message_text"),
+    // Click-to-WhatsApp ad attribution, when Meta's webhook includes a
+    // messages[].referral object - {source_id, source_type, source_url,
+    // headline, body, media_type, ctwa_clid}, exactly as Meta documents it
+    // (no invented fields). Null for an ordinary organic WhatsApp message
+    // with no ad behind it.
+    referral: jsonb("referral"),
+    rawPayload: jsonb("raw_payload").notNull(),
+    // Same status vocabulary as meta_lead_events - "received" | "enqueued" |
+    // "processing" | "completed" | "duplicate" | "retrying" | "failed".
+    status: text("status").notNull().default("received"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    retryCount: integer("retry_count").notNull().default(0),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantIdx: index("ix_whatsapp_message_events_tenant_id").on(t.tenantId),
+    statusReceivedIdx: index("ix_whatsapp_message_events_status_received_at").on(t.status, t.receivedAt),
+    phoneNumberIdx: index("ix_whatsapp_message_events_phone_number_id").on(t.phoneNumberId),
+    // Mandatory - prevents a duplicate/redelivered WhatsApp webhook event
+    // from ever creating duplicate leads.
+    tenantMessageIdx: uniqueIndex("ux_whatsapp_message_events_tenant_message").on(t.tenantId, t.waMessageId),
+  }),
+);
+
 /**
  * LEGACY per-campaign Meta connection model, kept as-is and fully
  * functional - Phase 2 moves Meta AUTHENTICATION to the tenant level (see
@@ -1300,6 +1471,20 @@ export const leads = crm.table(
     // ("meta_lead_ads" | "facebook" | "instagram" | "website" | "referral" |
     // "phone" | "walk_in" | "whatsapp" | "manual" | "other").
     source: text("source").notNull().default("meta_lead_ads"),
+    // WhatsApp Lead Capture feature (Phase 1) - the HOW, orthogonal to
+    // `source`'s WHERE. Nullable and additive: every lead captured before
+    // this feature existed is simply null here, treated by the UI exactly
+    // like the explicit "unknown" catalog entry (see
+    // src/domain/leadApproach.ts leadApproachLabel) - no backfill
+    // migration reclassifies historical rows. Not a DB enum, same
+    // convention as every other status/source column in this schema; see
+    // src/domain/leadApproach.ts LEAD_APPROACHES for the fixed catalog
+    // ("meta_instant_form" | "whatsapp" | "website" | "messenger" |
+    // "instagram" | "phone" | "manual" | "unknown"). Stamped going forward
+    // by processMetaLeadEvent.ts ("meta_instant_form") and the new
+    // processWhatsAppMessageEvent.ts ("whatsapp") - never guessed from a
+    // campaign/ad name.
+    leadApproach: text("lead_approach"),
     // DIGITAL_LEAD - arrived automatically via a connected campaign.
     // MANUAL_CUSTOMER - entered directly by a salesperson (see "Add
     // customer" / "Not interested -> add customer to CRM"). Distinguishes
@@ -1359,6 +1544,10 @@ export const leads = crm.table(
     crmCampaignIdx: index("ix_leads_crm_campaign_id").on(t.crmCampaignId),
     pipelineStageIdx: index("ix_leads_pipeline_stage").on(t.pipelineStage),
     leadTypeIdx: index("ix_leads_lead_type").on(t.leadType),
+    // Justified by the new Leads UI's "Lead Approach" filter (Phase 10) -
+    // same "filter column gets an index" convention as pipelineStageIdx/
+    // leadTypeIdx above.
+    leadApproachIdx: index("ix_leads_lead_approach").on(t.leadApproach),
     ownerIdx: index("ix_leads_owner_id").on(t.ownerId),
     branchIdx: index("ix_leads_branch_id").on(t.branchId),
     companyBranchIdx: index("ix_leads_company_id_branch_id").on(t.companyId, t.branchId),

@@ -89,6 +89,11 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   const limit = Math.min(Number(req.query.limit ?? 50), 200);
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const campaignId = typeof req.query.campaignId === "string" ? req.query.campaignId : undefined;
+  // WhatsApp Lead Capture feature (Phase 10) - the Pipeline/Leads UI's
+  // "Lead Approach" filter (Instant Form / WhatsApp / ... / Unknown).
+  // WhatsApp and Instant Form leads already render side by side in this
+  // same list with no query param needed at all - this only narrows it.
+  const leadApproach = typeof req.query.leadApproach === "string" ? req.query.leadApproach : undefined;
   const requestedBranchId = typeof req.query.branchId === "string" ? req.query.branchId : undefined;
 
   // An explicit ?branchId= narrows to that one branch, still combined with
@@ -117,6 +122,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     const conditions = [eq(leads.companyId, auth.companyId)];
     if (status) conditions.push(eq(leads.status, status));
     if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
+    if (leadApproach) conditions.push(eq(leads.leadApproach, leadApproach));
     if (branchCondition) conditions.push(branchCondition);
 
     const rows = await db

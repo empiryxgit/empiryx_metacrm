@@ -127,3 +127,10 @@ losing any data or lead-capture capability.
 5. Leave the legacy config in place. It is historical/deprecated, not
    harmful - there is no need to remove it, and no UI action exists to do
    so.
+
+## WhatsApp leads
+
+WhatsApp Lead Capture (Click-to-WhatsApp ads and direct WhatsApp messages)
+is not a migration concern - it's a new capability layered onto the SAME
+Meta connection this document describes, with no separate connect step of
+its own. See `docs/whatsapp-lead-capture.md` for the full design.

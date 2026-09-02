@@ -85,6 +85,37 @@ export async function publishTenantLeadReceived(input: PublishTenantLeadReceived
   return result.messageId;
 }
 
+export interface PublishWhatsappMessageReceivedInput {
+  messageEventId: string; // crm.whatsapp_message_events.id - this pipeline's durability record
+  waMessageId: string;
+  tenantId: string;
+}
+
+/**
+ * WhatsApp Lead Capture feature (Phase 6/7) - "go process this inbound
+ * WhatsApp message" for an event captured by
+ * metaWhatsappEventService.ts's captureWhatsappEvents. Deliberately posts
+ * to the SAME /api/internal/process-lead endpoint as publishLeadReceived
+ * and publishTenantLeadReceived above (not a new one - the Vercel Hobby
+ * 12-Function cap reasoning throughout this codebase applies here too); the
+ * `kind: "whatsapp_message_received"` discriminator on the body is what
+ * api/internal/handler.ts uses to route to processWhatsAppMessageEvent
+ * instead of either existing lead-processing path.
+ */
+export async function publishWhatsappMessageReceived(input: PublishWhatsappMessageReceivedInput): Promise<string> {
+  const client = getClient();
+  const result = await client.publishJSON({
+    url: `${getBaseUrl()}/api/internal/process-lead`,
+    body: { kind: "whatsapp_message_received", ...input },
+    retries: 5,
+    failureCallback: `${getBaseUrl()}/api/internal/dead-letter`,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return result.messageId;
+}
+
 export interface ScheduleReconciliationInput {
   cron: string; // e.g. "*/15 * * * *" - every 15 minutes, unlike Vercel Hobby's 1x/day cron cap
 }

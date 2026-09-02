@@ -40,6 +40,25 @@
         <select id="filterSource"><option value="">All sources</option></select>
       </div>
       <div class="field-inline">
+        <!-- WhatsApp Lead Capture feature (Phase 10) - "how" a lead was
+             captured (Instant Form / WhatsApp / ...), orthogonal to Source
+             above. A fixed, small catalog (src/domain/leadApproach.ts) -
+             never tenant-configurable, so its options are static here
+             rather than fetched, same as Customer type/Date above. -->
+        <label for="filterLeadApproach">Lead approach</label>
+        <select id="filterLeadApproach">
+          <option value="">All approaches</option>
+          <option value="meta_instant_form">Instant Form</option>
+          <option value="whatsapp">WhatsApp</option>
+          <option value="website">Website</option>
+          <option value="messenger">Messenger</option>
+          <option value="instagram">Instagram</option>
+          <option value="phone">Phone</option>
+          <option value="manual">Manual</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </div>
+      <div class="field-inline">
         <label for="campaignSelect">Campaign</label>
         <select id="campaignSelect"></select>
       </div>
@@ -140,6 +159,23 @@
     { key: "other", label: "Other" },
   ];
 
+  // WhatsApp Lead Capture feature (Phase 10/11) - mirrors
+  // src/domain/leadApproach.ts's LEAD_APPROACHES/leadApproachLabel exactly.
+  // Kept as a small hardcoded catalog here (same treatment as
+  // MANUAL_SOURCES above) rather than fetched - it's a fixed, non-tenant-
+  // configurable domain vocabulary, not per-company data.
+  const LEAD_APPROACHES = [
+    { key: "meta_instant_form", label: "Instant Form" },
+    { key: "whatsapp", label: "WhatsApp" },
+    { key: "website", label: "Website" },
+    { key: "messenger", label: "Messenger" },
+    { key: "instagram", label: "Instagram" },
+    { key: "phone", label: "Phone" },
+    { key: "manual", label: "Manual" },
+    { key: "unknown", label: "Unknown" },
+  ];
+  const leadApproachLabel = (key) => LEAD_APPROACHES.find(a => a.key === key)?.label || "Unknown";
+
   const ownerById = () => Object.fromEntries(owners.map(o => [o.id, o.fullName]));
   const sourceLabel = (key) => sources.find(s => s.key === key)?.label || key || "—";
   const stageLabel = (key) => stages.find(s => s.key === key)?.label || key;
@@ -195,6 +231,14 @@
 
     const sourceFilter = document.getElementById("filterSource").value;
     if (sourceFilter) out = out.filter(r => r.source === sourceFilter);
+
+    // WhatsApp Lead Capture feature (Phase 10) - "unknown" also matches a
+    // lead with no leadApproach at all (leads created before this feature
+    // shipped, or any future ingestion path that hasn't set it), same
+    // fallback leadApproachLabel/leadApproachLabel above already treats as
+    // "Unknown" - never a separate, confusing "blank" filter bucket.
+    const leadApproachFilter = document.getElementById("filterLeadApproach").value;
+    if (leadApproachFilter) out = out.filter(r => (r.leadApproach || "unknown") === leadApproachFilter);
 
     const ownerFilter = document.getElementById("filterOwner").value;
     if (ownerFilter === "__unassigned__") out = out.filter(r => !r.ownerId);
@@ -368,7 +412,7 @@
   function renderList(rows){
     const industryFields = template.fields;
     document.getElementById("listHead").innerHTML = `<tr>
-      <th>Lead</th><th>Phone</th><th>Source</th><th>Campaign</th>
+      <th>Lead</th><th>Phone</th><th>Source</th><th>Lead approach</th><th>Campaign</th>
       ${industryFields.map(f => `<th>${App.escapeHtml(f.label)}</th>`).join("")}
       <th>Stage</th><th>Owner</th><th>Next follow-up</th><th>Created</th>
     </tr>`;
@@ -379,6 +423,7 @@
         <td><div class="lead-identity"><div class="lead-name">${App.escapeHtml(r.fullName || "Unnamed lead")}</div>${r.email ? `<div class="lead-meta-id">${App.escapeHtml(r.email)}</div>` : ""}</div></td>
         <td>${App.escapeHtml(r.phoneNumber || "—")}</td>
         <td>${App.escapeHtml(sourceLabel(r.source))}</td>
+        <td>${App.escapeHtml(leadApproachLabel(r.leadApproach))}</td>
         <td>${App.escapeHtml(r.campaignName || "—")}</td>
         ${industryFields.map(f => `<td>${fmtFieldValue(f, r.customFields && r.customFields[f.key])}</td>`).join("")}
         <td><span class="pill ${resolvedStage(r) === "won" ? "processed" : resolvedStage(r) === "lost" ? "failed" : "pending"}">${App.escapeHtml(stageLabel(resolvedStage(r)))}</span></td>
@@ -386,7 +431,7 @@
         <td>${r.nextFollowUpAt ? fmtDate(r.nextFollowUpAt) : "—"}</td>
         <td>${fmtDateTime(r.createdAt)}</td>
       </tr>
-    `).join("") : `<tr><td colspan="${8 + industryFields.length}" class="empty">No leads match your search.</td></tr>`;
+    `).join("") : `<tr><td colspan="${9 + industryFields.length}" class="empty">No leads match your search.</td></tr>`;
   }
 
   function renderView(){
@@ -448,6 +493,7 @@
     renderView();
   });
   document.getElementById("filterSource").addEventListener("change", () => renderView());
+  document.getElementById("filterLeadApproach").addEventListener("change", () => renderView());
   document.getElementById("filterOwner").addEventListener("change", () => renderView());
   document.getElementById("filterCustomerType").addEventListener("change", () => renderView());
   document.getElementById("filterDateRange").addEventListener("change", (e) => {
@@ -905,6 +951,33 @@
     return `<div class="detail-row"><span class="detail-label">${App.escapeHtml(label)}</span><span class="detail-value">${value}</span></div>`;
   }
 
+  // WhatsApp Lead Capture feature (Phase 11) - the WhatsApp-specific detail
+  // rows: Ad/Ad set name when Phase 9 attribution recovered one, or an
+  // explicit "Unknown / Organic WhatsApp" row when it didn't (never left
+  // silently blank - a person looking at this lead should always be able
+  // to tell "this came from an ad we tracked" apart from "this arrived with
+  // no ad attribution at all", never guessed either way).
+  function leadApproachAttributionRowsHtml(lead){
+    if (!lead.adId && !lead.adSetName) {
+      return detailRow("Ad attribution", `<span class="hint" style="margin:0">Unknown / Organic WhatsApp — no Click-to-WhatsApp ad could be matched</span>`);
+    }
+    return `
+      ${detailRow("Ad", App.escapeHtml(lead.adName || lead.adId || "—"))}
+      ${detailRow("Ad set", App.escapeHtml(lead.adSetName || "—"))}
+    `;
+  }
+
+  // Instant Form's own attribution rows - which form the lead came from,
+  // and the ad (if any) that drove it. Unchanged behavior, just pulled out
+  // to its own function so leadDetailsBodyHtml reads the same way for both
+  // lead approaches.
+  function formAttributionRowsHtml(lead){
+    return `
+      ${detailRow("Form", App.escapeHtml(lead.formName || lead.formId || "—"))}
+      ${lead.adName || lead.adId ? detailRow("Ad", App.escapeHtml(lead.adName || lead.adId)) : ""}
+    `;
+  }
+
   function leadDetailsBodyHtml(lead){
     const owners_ = ownerById();
     const stagePillClass = resolvedStage(lead) === "won" ? "processed" : resolvedStage(lead) === "lost" ? "failed" : "pending";
@@ -919,7 +992,10 @@
       ${detailRow("Phone", App.escapeHtml(lead.phoneNumber || "—"))}
       ${detailRow("Email", App.escapeHtml(lead.email || "—"))}
       ${detailRow("Source", App.escapeHtml(sourceLabel(lead.source)))}
+      ${detailRow("Lead approach", App.escapeHtml(leadApproachLabel(lead.leadApproach)))}
       ${detailRow("Campaign", App.escapeHtml(lead.campaignName || "—"))}
+      ${lead.leadApproach === "whatsapp" ? leadApproachAttributionRowsHtml(lead) : ""}
+      ${lead.leadApproach === "meta_instant_form" ? formAttributionRowsHtml(lead) : ""}
       ${detailRow("Stage", `<span class="pill ${stagePillClass}">${App.escapeHtml(stageLabel(resolvedStage(lead)))}</span>`)}
       ${detailRow("Owner", lead.ownerId && owners_[lead.ownerId] ? App.escapeHtml(owners_[lead.ownerId]) : "—")}
       ${detailRow("Next follow-up", `<span id="detailNextFollowUp">${lead.nextFollowUpAt ? App.escapeHtml(fmtDate(lead.nextFollowUpAt)) : "—"}</span>`)}

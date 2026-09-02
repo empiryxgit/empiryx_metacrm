@@ -18,6 +18,7 @@ import { markMetaConnectionError, replaceMetaAdAccounts, upsertMetaConnection } 
 import { syncPagesAndInstagram, validateAndResubscribeSelectedPage } from "./metaSync/metaPageService";
 import { syncCampaignsForSelectedAdAccount } from "./metaSync/metaCampaignService";
 import { syncFormsForSelectedPage } from "./metaSync/metaFormService";
+import { discoverWhatsappAssets } from "./metaSync/whatsappDiscoveryService";
 
 // Minimum scope set for what this integration actually does: list/read the
 // tenant's Pages and their lead-retrieval data, list ad accounts, and read
@@ -47,6 +48,17 @@ const OAUTH_SCOPES = [
   "ads_read",
   "business_management",
   "instagram_basic",
+  // WhatsApp Lead Capture feature - OPTIONAL, deliberately NOT added to
+  // REQUIRED_OAUTH_SCOPES below (same treatment instagram_basic already
+  // gets, for the same reason: "existing Meta Instant Form functionality
+  // must remain backward compatible" - a tenant/App that hasn't been
+  // through Meta's separate App Review for this permission, or simply
+  // declines it in the consent dialog, must still get a fully working
+  // Meta connection). Read-only, requested purely so
+  // whatsappDiscoveryService.ts can list the tenant's own WhatsApp Business
+  // Account(s) and phone number(s) - RUTA never sends/manages WhatsApp
+  // messages or templates with it.
+  "whatsapp_business_management",
 ].join(",");
 
 // Phase 16 - "Validate permissions" step of the reconnect pipeline: the
@@ -156,7 +168,7 @@ export interface CompleteConnectionResult {
   // touch this signature again.
   pageValidation: "not_applicable" | "still_accessible" | "access_removed";
   webhookResubscribed: "not_applicable" | "active" | "failed";
-  assetsSynced: { adAccounts: number; campaigns: number; adSets: number; ads: number; forms: number };
+  assetsSynced: { adAccounts: number; campaigns: number; adSets: number; ads: number; forms: number; whatsappPhoneNumbers: number };
 }
 
 /**
@@ -278,6 +290,19 @@ export async function completeMetaConnection(
       }
     }
 
+    // ---- WhatsApp Lead Capture feature (Phase 2/5) -----------------------
+    // Best-effort, same posture as Campaigns/Forms above: whatsapp_business_
+    // management is an OPTIONAL scope (see OAUTH_SCOPES), so a tenant/App
+    // without it granted - or simply with no WhatsApp Business Platform set
+    // up at all - must still get a fully successful, otherwise-unaffected
+    // Meta connection. Never blocks or fails the connection itself.
+    let whatsappResult: Awaited<ReturnType<typeof discoverWhatsappAssets>> | null = null;
+    try {
+      whatsappResult = await discoverWhatsappAssets(tenantId, connection.id, accessToken);
+    } catch (err) {
+      console.error(`[meta-oauth] Reconnect: WhatsApp asset discovery failed for tenant ${tenantId}:`, err);
+    }
+
     return {
       connectionId: connection.id,
       metaUserId: metaUser.id,
@@ -291,6 +316,7 @@ export async function completeMetaConnection(
         adSets: campaignsResult && !campaignsResult.skipped ? campaignsResult.adSetsCount : 0,
         ads: campaignsResult && !campaignsResult.skipped ? campaignsResult.adsCount : 0,
         forms: formsResult && !formsResult.skipped ? formsResult.formsCount : 0,
+        whatsappPhoneNumbers: whatsappResult?.phoneNumbersFound ?? 0,
       },
     };
   } catch (err) {

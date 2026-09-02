@@ -112,6 +112,14 @@ Once connected, new leads from your Lead Ads forms appear in your Pipeline autom
 
 Connecting Meta is entirely optional — everything else in RUTA works whether or not you ever connect it, and you can connect or disconnect at any time.
 
+### WhatsApp leads (same connection, no extra setup)
+
+If any of your ad campaigns are set up to send people to WhatsApp instead of a lead form ("Click to WhatsApp" ads), RUTA picks those up automatically too — through the exact same Facebook/Instagram connection above. There is nothing separate to connect, no phone number to type in, and no extra permission screen to click through: once Meta is connected, RUTA quietly checks whether you have a WhatsApp Business number set up under the same Meta account, and if it finds exactly one, it starts using it right away.
+
+When someone messages your WhatsApp number after clicking one of those ads, a new lead appears in your Pipeline exactly like a Facebook form lead does — same table, same list, no separate "WhatsApp Leads" page to check. Open the lead and you'll see **Lead Approach: WhatsApp**, along with which ad and campaign it came from (when Meta tells us) and their first message. If the message didn't come from a trackable ad — someone messaged your number directly — the lead is still captured, just labeled **Unknown / Organic WhatsApp** instead of being left out.
+
+If your Meta account has more than one WhatsApp number connected, RUTA will ask you to pick one from the Meta Integration status screen; this only happens when a choice is genuinely needed.
+
 ---
 
 ## 8. Settings
@@ -150,6 +158,9 @@ No. Every account starts on RUTA's general-purpose template. You can pick a spec
 
 **Is connecting Facebook/Instagram required?**
 No — it's entirely optional, at signup and forever after. You can add leads manually or from other sources without ever connecting Meta.
+
+**Do I need to set up WhatsApp separately from Facebook/Instagram?**
+No. WhatsApp leads use the exact same Meta connection — there's no separate WhatsApp setup step, phone number entry, or extra login. If you have a WhatsApp Business number linked to your Meta account, RUTA finds and uses it automatically once Meta is connected.
 
 **How long does first-time setup take?**
 Under a minute — it's just your business name and, if it's changed, your mobile number. Everything else (pipeline, Facebook/Instagram) is either set up for you automatically or waiting as an optional item on your Dashboard checklist.

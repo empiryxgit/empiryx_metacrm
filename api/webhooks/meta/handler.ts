@@ -135,6 +135,7 @@ import { selectAdAccount } from "../../../src/application/metaSync/metaAdAccount
 import { runMetaSync } from "../../../src/application/metaSync/runMetaSync";
 import { getMetaSyncProgress } from "../../../src/infrastructure/cache/redis";
 import { captureLeadgenEvents, enqueueCapturedLeadgenEvents } from "../../../src/application/metaSync/metaLeadEventService";
+import { captureWhatsappEvents, enqueueCapturedWhatsappEvents } from "../../../src/application/metaSync/metaWhatsappEventService";
 import {
   getMetaFormById,
   listFieldMappingsForForm,
@@ -144,6 +145,8 @@ import {
 } from "../../../src/infrastructure/db/repositories/metaFormMappings";
 import { listMetaCampaignsWithMappingForAdAccount } from "../../../src/infrastructure/db/repositories/metaSync";
 import { getLastMetaLeadReceivedAt } from "../../../src/infrastructure/db/repositories";
+import { countMetaLeadRoutesByApproach, listMetaWhatsappAccounts, selectMetaWhatsappAccount } from "../../../src/infrastructure/db/repositories/whatsapp";
+import { LEAD_APPROACHES } from "../../../src/domain/leadApproach";
 
 export const config = {
   api: { bodyParser: false },
@@ -333,12 +336,22 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
     // Promise.all rather than a second request - this endpoint already
     // backs the full config screen's main card, and the status screen is
     // just a leaner rendering of the same underlying state.
-    const [connection, pages, instagramAccounts, adAccounts, lastLeadAt] = await Promise.all([
+    const [connection, pages, instagramAccounts, adAccounts, lastLeadAt, whatsappAccounts, leadApproachCounts] = await Promise.all([
       getRelevantMetaConnectionView(auth.companyId),
       listMetaPages(auth.companyId),
       listMetaInstagramAccounts(auth.companyId),
       listMetaAdAccounts(auth.companyId),
       getLastMetaLeadReceivedAt(auth.companyId),
+      // WhatsApp Lead Capture feature (Phase 19/20) - discovered WhatsApp
+      // numbers (Phase 5's picker, only ever shown when more than one was
+      // found - see whatsappDiscoveryService.ts's auto-select) and the
+      // "Lead approaches detected" breakdown ("12 Instant Form ads, 5
+      // WhatsApp ads") the Settings screen surfaces. Both empty/zero for a
+      // tenant that never granted whatsapp_business_management - same
+      // best-effort, additive-only posture as everything else this feature
+      // touches.
+      listMetaWhatsappAccounts(auth.companyId),
+      countMetaLeadRoutesByApproach(auth.companyId),
     ]);
     // campaignsCount/leadFormsCount are scoped to the CURRENTLY SELECTED ad
     // account / Page only (found from the adAccounts/pages lists already
@@ -390,6 +403,27 @@ async function handleOAuthStatus(req: VercelRequest, res: VercelResponse) {
       campaignsCount: campaigns.length,
       leadFormsCount: forms.length,
       lastLeadAt,
+      // WhatsApp Lead Capture feature (Phase 19/20). No access token, no
+      // webhook URL, no phone-number-id ever exposed here beyond what
+      // discovery itself surfaces (Meta's own display_phone_number) -
+      // consistent with this endpoint's existing pages/adAccounts shape,
+      // which likewise never returns a token.
+      whatsappAccounts: whatsappAccounts.map((w) => ({
+        id: w.id,
+        wabaName: w.wabaName,
+        displayPhoneNumber: w.displayPhoneNumber,
+        verifiedName: w.verifiedName,
+        isSelected: w.isSelected,
+      })),
+      // "Action required" surfacing (Phase 14/19): the Settings screen can
+      // render this straight into "12 Instant Form ads, 5 WhatsApp ads, 2
+      // unknown - action required" without a second request. Always
+      // includes every catalog key (even 0-count ones) rather than only
+      // whatever rows exist, so the frontend never has to special-case a
+      // missing key.
+      leadApproachCounts: Object.fromEntries(
+        LEAD_APPROACHES.map((a) => [a.key, leadApproachCounts.find((c) => c.approach === a.key)?.count ?? 0]),
+      ),
     });
   } catch (err) {
     console.error(`[meta-oauth] Failed to load status for tenant ${auth.companyId}:`, err);
@@ -424,7 +458,7 @@ async function handleOAuthDisconnect(req: VercelRequest, res: VercelResponse) {
 // Phase 5: asset selection wizard
 // ---------------------------------------------------------------------
 
-const SELECTABLE_TYPES = new Set(["page", "instagram", "ad_account"]);
+const SELECTABLE_TYPES = new Set(["page", "instagram", "ad_account", "whatsapp"]);
 
 /** Body: { type: "page" | "instagram" | "ad_account", id: string } - `id`
  * is always OUR OWN row id (returned by GET /status's pages/instagramAccounts/
@@ -448,7 +482,7 @@ async function handleSelectAsset(req: VercelRequest, res: VercelResponse) {
   const type = typeof body.type === "string" ? body.type : "";
   const id = typeof body.id === "string" ? body.id : "";
   if (!SELECTABLE_TYPES.has(type) || !id) {
-    res.status(400).json({ error: 'Expected { type: "page" | "instagram" | "ad_account", id: string }' });
+    res.status(400).json({ error: 'Expected { type: "page" | "instagram" | "ad_account" | "whatsapp", id: string }' });
     return;
   }
 
@@ -472,7 +506,10 @@ async function handleSelectAsset(req: VercelRequest, res: VercelResponse) {
       return;
     }
 
-    const selected = type === "instagram" ? await selectInstagramAccount(auth.companyId, id) : await selectAdAccount(auth.companyId, id);
+    let selected;
+    if (type === "instagram") selected = await selectInstagramAccount(auth.companyId, id);
+    else if (type === "whatsapp") selected = await selectMetaWhatsappAccount(auth.companyId, id);
+    else selected = await selectAdAccount(auth.companyId, id);
     if (!selected) {
       // Either the id doesn't exist, or it belongs to a different tenant -
       // same 404 either way, so this never confirms/denies which.
@@ -575,7 +612,21 @@ async function handleWebhookRetry(req: VercelRequest, res: VercelResponse) {
  * browser), so trust comes entirely from the verify token (GET) / HMAC
  * signature (POST), never from anything else in the request - and never,
  * ever from a tenant/company id, which this payload shape doesn't even
- * carry. */
+ * carry.
+ *
+ * WhatsApp Lead Capture feature (Phase 6): this is ALSO the receiver for
+ * WhatsApp Cloud API webhook events. Meta delivers every product an App
+ * subscribes to (Page leadgen AND a WhatsApp Business Account's messages)
+ * to that App's ONE registered Callback URL - there is no separate URL to
+ * register per product - and the Vercel Hobby plan's 12-Function cap is
+ * already fully consumed (see the Phase 0 audit), so this handler branches
+ * internally on the payload's top-level `object` field
+ * ("page" -> the existing Instant Form flow below; "whatsapp_business_account"
+ * -> captureWhatsappEvents/enqueueCapturedWhatsappEvents) rather than a new
+ * endpoint being added. The verify token (GET) and HMAC signature (POST)
+ * checks are identical either way - both products are subscribed under the
+ * SAME Meta App, so both are verified against the same
+ * META_WEBHOOK_VERIFY_TOKEN / META_APP_SECRET. */
 async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     // Meta's one-time app-level subscription verification handshake -
@@ -624,6 +675,41 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
     // where we do not want to be fast, because we cannot trust the body
     // came from Meta at all.
     res.status(401).json({ error: "Invalid signature" });
+    return;
+  }
+
+  // WhatsApp Lead Capture feature (Phase 6) - branch on the payload's own
+  // top-level `object` field BEFORE doing any page-specific parsing. Cheap
+  // and safe to parse twice (captureLeadgenEvents/captureWhatsappEvents each
+  // re-parse rawBody themselves - this only peeks at one field to route),
+  // and keeps each capture function's payload shape/parsing fully separate
+  // rather than threading an object-type flag through one shared parser.
+  let objectType: string | null = null;
+  try {
+    objectType = (JSON.parse(rawBody) as { object?: string }).object ?? null;
+  } catch {
+    // Malformed JSON - captureLeadgenEvents' own JSON.parse below will hit
+    // the same error and return zero counts; nothing to route on here.
+  }
+
+  if (objectType === "whatsapp_business_account") {
+    let waResult;
+    try {
+      waResult = await captureWhatsappEvents(rawBody);
+    } catch (err) {
+      console.error("[whatsapp-webhook] Failed to persist incoming event:", err);
+      res.status(500).json({ error: "Failed to persist event" });
+      return;
+    }
+    // Return success quickly - same "ack the instant storage is durable"
+    // contract as the leadgen path below.
+    res.status(200).json({ received: true, captured: waResult.captured });
+    // Process asynchronously - hands each newly-captured message to QStash
+    // so processWhatsAppMessageEvent.ts (a separate invocation) can create
+    // the Lead. Never awaited by anything Meta is waiting on; a publish
+    // failure is logged and recovered later by reconcile.ts's own
+    // unenqueued-WhatsApp-event sweep.
+    await enqueueCapturedWhatsappEvents(waResult.toEnqueue);
     return;
   }
 

@@ -23,6 +23,8 @@ import {
   mapMetaCampaignToCrmCampaign,
 } from "../../infrastructure/db/repositories/metaSync";
 import { createCampaign } from "../../infrastructure/db/repositories/campaigns";
+import { resolveLeadApproachForAd } from "./metaLeadApproachResolver";
+import { upsertMetaLeadRoute } from "../../infrastructure/db/repositories/whatsapp";
 
 export interface SyncCampaignsResult {
   skipped: boolean;
@@ -31,12 +33,24 @@ export interface SyncCampaignsResult {
   adSetsCount: number;
   adsCount: number;
   autoMappedCount: number; // brand-new Meta campaigns this run auto-created + mapped a CRM campaign for
+  // WhatsApp Lead Capture feature (Phase 3/4) - how many of this run's ads
+  // resolved to each lead approach. UNDETERMINED ads are the "Action
+  // required" signal the Settings screen surfaces (Phase 19).
+  leadApproachCounts: { metaInstantForm: number; whatsapp: number; unknown: number };
 }
 
 export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAccessToken: string): Promise<SyncCampaignsResult> {
   const selectedAdAccount = await getSelectedMetaAdAccount(tenantId);
   if (!selectedAdAccount) {
-    return { skipped: true, reason: "No ad account selected yet.", campaignsCount: 0, adSetsCount: 0, adsCount: 0, autoMappedCount: 0 };
+    return {
+      skipped: true,
+      reason: "No ad account selected yet.",
+      campaignsCount: 0,
+      adSetsCount: 0,
+      adsCount: 0,
+      autoMappedCount: 0,
+      leadApproachCounts: { metaInstantForm: 0, whatsapp: 0, unknown: 0 },
+    };
   }
 
   const campaigns = await getAdAccountCampaigns(selectedAdAccount.adAccountId, userAccessToken);
@@ -44,6 +58,7 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
   let adSetsCount = 0;
   let adsCount = 0;
   let autoMappedCount = 0;
+  const leadApproachCounts = { metaInstantForm: 0, whatsapp: 0, unknown: 0 };
 
   for (const campaign of campaigns) {
     // Looked up BEFORE the upsert below, specifically so this only ever
@@ -99,6 +114,9 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
     // (replaceMetaAdSets returns rows in insert order for the upserted
     // set, but matching by adSetId is more robust than assuming order).
     const adSetRowById = new Map(adSetRows.map((row) => [row.adSetId, row]));
+    // Same for destination_type - resolveLeadApproachForAd needs it per ad
+    // set, without re-fetching ad sets a second time.
+    const destinationTypeByAdSetId = new Map(adSets.map((s) => [s.id, s.destinationType]));
 
     for (const adSet of adSets) {
       const adSetRow = adSetRowById.get(adSet.id);
@@ -111,8 +129,38 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
         ads.map((a) => ({ adId: a.id, adName: a.name, status: a.status })),
       );
       adsCount += adRows.length;
+
+      // WhatsApp Lead Capture feature (Phase 3/4) - resolve and persist
+      // each ad's lead approach right after it's synced, so
+      // webhook/reporting code never has to re-derive it from the Graph
+      // API later (Phase 4's whole point). Sequential per ad, same
+      // "simplest and kindest to Meta's rate limits" posture this whole
+      // function already takes for campaigns/ad sets/ads.
+      const adRowByAdId = new Map(adRows.map((row) => [row.adId, row]));
+      for (const ad of ads) {
+        const adRow = adRowByAdId.get(ad.id);
+        if (!adRow) continue; // should not happen - defensive only
+        const resolved = await resolveLeadApproachForAd(
+          { metaAdId: ad.id, adSetDestinationType: destinationTypeByAdSetId.get(adSet.id) ?? null },
+          userAccessToken,
+        );
+        await upsertMetaLeadRoute(tenantId, {
+          metaConnectionId: selectedAdAccount.metaConnectionId,
+          metaAdAccountId: selectedAdAccount.id,
+          metaCampaignId: metaCampaignRow.id,
+          metaAdSetId: adSetRow.id,
+          metaAdId: adRow.id,
+          approach: resolved.approach,
+          confidence: resolved.confidence,
+          formId: resolved.formId,
+          metadata: resolved.reason ? { reason: resolved.reason } : {},
+        });
+        if (resolved.approach === "meta_instant_form") leadApproachCounts.metaInstantForm++;
+        else if (resolved.approach === "whatsapp") leadApproachCounts.whatsapp++;
+        else leadApproachCounts.unknown++;
+      }
     }
   }
 
-  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount, autoMappedCount };
+  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount, autoMappedCount, leadApproachCounts };
 }

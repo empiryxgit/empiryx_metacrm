@@ -27,7 +27,11 @@ vi.mock("../infrastructure/meta/graphClient", async (importOriginal) => {
     getAdAccountCampaigns: vi.fn(),
     getCampaignAdSets: vi.fn(),
     getAdSetAds: vi.fn(),
+    getAdCreativeLeadFormId: vi.fn(),
     getPageLeadForms: vi.fn(),
+    getUserBusinesses: vi.fn(),
+    getOwnedWhatsAppBusinessAccounts: vi.fn(),
+    getWhatsAppPhoneNumbers: vi.fn(),
   };
 });
 
@@ -58,7 +62,11 @@ function mockHappyPathDefaults() {
   vi.mocked(graphClient.getAdAccountCampaigns).mockResolvedValue([]);
   vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([]);
   vi.mocked(graphClient.getAdSetAds).mockResolvedValue([]);
+  vi.mocked(graphClient.getAdCreativeLeadFormId).mockResolvedValue(null);
   vi.mocked(graphClient.getPageLeadForms).mockResolvedValue([]);
+  vi.mocked(graphClient.getUserBusinesses).mockResolvedValue([]);
+  vi.mocked(graphClient.getOwnedWhatsAppBusinessAccounts).mockResolvedValue([]);
+  vi.mocked(graphClient.getWhatsAppPhoneNumbers).mockResolvedValue([]);
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("OAuth flow", () => {

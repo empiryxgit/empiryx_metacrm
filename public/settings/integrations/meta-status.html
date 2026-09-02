@@ -206,6 +206,59 @@
       ? App.escapeHtml(selectedAdAccount.name)
       : `<span class="status-row-note" style="display:inline">Not selected</span>`;
 
+    // WhatsApp Lead Capture feature (Phase 19/20) - discovered entirely
+    // through this SAME Meta connection (see whatsappDiscoveryService.ts),
+    // never a separate "connect WhatsApp" step. Shown only when at least
+    // one number was actually found - a tenant with no WhatsApp Business
+    // Platform set up at all (the common case today) sees nothing extra
+    // here, exactly like Instagram already behaves when no account is
+    // linked to any Page.
+    const whatsappAccounts = data.whatsappAccounts || [];
+    const selectedWhatsapp = whatsappAccounts.find((w) => w.isSelected) || null;
+    // "The user selects a business asset only when a selection is
+    // genuinely required" (Phase 5) - whatsappDiscoveryService.ts already
+    // auto-selects a tenant's single number, so this inline picker only
+    // ever renders for the genuinely ambiguous case: more than one number
+    // discovered under this Business Manager and none chosen yet.
+    const needsWhatsappPicker = whatsappAccounts.length > 1 && !selectedWhatsapp;
+    const whatsappRow = whatsappAccounts.length
+      ? row(
+          "WhatsApp Number",
+          needsWhatsappPicker
+            ? `
+              <select id="whatsappPickerSelect" style="font-size:12.5px">
+                ${whatsappAccounts.map((w) => `<option value="${w.id}">${App.escapeHtml(w.displayPhoneNumber || w.verifiedName || "Number")}</option>`).join("")}
+              </select>
+              <button class="btn secondary sm" type="button" id="whatsappPickerSave" style="margin-left:6px">Use this number</button>
+            `
+            : selectedWhatsapp
+              ? App.escapeHtml(`${selectedWhatsapp.displayPhoneNumber || selectedWhatsapp.verifiedName || "Connected number"}`)
+              : `<span class="status-row-note" style="display:inline">Not selected</span>`,
+        )
+      : "";
+
+    // "Lead approaches detected" (Phase 19) - "12 Instant Form, 5 WhatsApp,
+    // 2 Unknown - action required". Only the approaches this tenant's
+    // synced ads have actually resolved to are shown (zero-count entries
+    // omitted) so an ordinary Instant-Form-only tenant's status screen
+    // reads exactly as it always has; "Unknown" only ever appears when at
+    // least one synced ad genuinely couldn't be classified (Phase 3 never
+    // guesses), and is called out with an explicit "action required" note
+    // rather than blending in as just another number.
+    const approachCounts = data.leadApproachCounts || {};
+    const approachLabels = { meta_instant_form: "Instant Form", whatsapp: "WhatsApp", website: "Website", messenger: "Messenger", instagram: "Instagram", phone: "Phone", manual: "Manual", unknown: "Unknown" };
+    const approachParts = Object.entries(approachCounts)
+      .filter(([, count]) => count > 0)
+      .map(([key, count]) => `${count} ${approachLabels[key] || key}`);
+    const unknownCount = approachCounts.unknown || 0;
+    const leadApproachesRow = approachParts.length
+      ? row(
+          "Lead Approaches",
+          `${App.escapeHtml(approachParts.join(", "))}` +
+            (unknownCount > 0 ? ` <span class="status-row-error">— ${unknownCount} ad${unknownCount === 1 ? "" : "s"} need attention</span>` : ""),
+        )
+      : "";
+
     // Webhook - reflects whichever Page is currently selected, same status
     // Phase 7's "Meta Lead Capture" card shows on the full config screen.
     // No Page selected yet -> nothing to report, shown as a neutral pill
@@ -236,8 +289,10 @@
         ${row("Facebook Page", facebookPageValue)}
         ${row("Instagram", instagramValue)}
         ${row("Ad Account", adAccountValue)}
+        ${whatsappRow}
         ${row("Campaigns", String(data.campaignsCount))}
         ${row("Lead Forms", String(data.leadFormsCount))}
+        ${leadApproachesRow}
         ${row("Webhook", webhookValue)}
         ${row("Last Sync", lastSyncFmt ? App.escapeHtml(lastSyncFmt) : `<span class="status-row-note" style="display:inline">Never</span>`)}
         ${row("Last Lead", lastLeadFmt ? App.escapeHtml(lastLeadFmt) : `<span class="status-row-note" style="display:inline">No leads received yet</span>`)}
@@ -261,6 +316,28 @@
     document.getElementById("syncBtn").addEventListener("click", runSyncNow);
     document.getElementById("reconnectBtn").addEventListener("click", runReconnect);
     document.getElementById("disconnectBtn").addEventListener("click", showDisconnectConfirm);
+    document.getElementById("whatsappPickerSave")?.addEventListener("click", saveWhatsappSelection);
+  }
+
+  // WhatsApp Lead Capture feature (Phase 5/20) - saves the tenant's choice
+  // when more than one discovered number required picking one. Same
+  // POST /select contract Pages/Instagram/Ad Accounts already use, just a
+  // new `type`.
+  async function saveWhatsappSelection() {
+    const select = document.getElementById("whatsappPickerSelect");
+    const btn = document.getElementById("whatsappPickerSave");
+    const id = select.value;
+    if (!id) return;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    try {
+      await App.apiJson("/api/integrations/meta/select", { method: "POST", body: { type: "whatsapp", id } });
+      await load();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Use this number";
+      showBanner("error", err.message || "Failed to save your WhatsApp number selection.");
+    }
   }
 
   // ---- Actions ------------------------------------------------------------

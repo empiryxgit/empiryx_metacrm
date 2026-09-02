@@ -12,9 +12,11 @@ import { Receiver } from "@upstash/qstash";
 import { timingSafeEqual } from "node:crypto";
 import { processLead, RetryableProcessingError } from "../../src/application/processLead";
 import { processMetaLeadEvent } from "../../src/application/metaSync/processMetaLeadEvent";
+import { processWhatsAppMessageEvent } from "../../src/application/metaSync/processWhatsAppMessageEvent";
 import { runReconciliation } from "../../src/application/reconcile";
 import { incrementRetryCount, logEvent, markLeadDeadLettered } from "../../src/infrastructure/db/repositories";
 import { markMetaLeadEventFailed } from "../../src/infrastructure/db/repositories/metaLeadEvents";
+import { markWhatsappMessageEventFailed } from "../../src/infrastructure/db/repositories/whatsapp";
 
 export const config = {
   api: { bodyParser: false },
@@ -97,6 +99,19 @@ interface TenantLeadReceivedBody {
   tenantId: string;
 }
 
+// WhatsApp Lead Capture feature (Phase 6/7/8) - see
+// src/infrastructure/queue/qstash.ts's publishWhatsappMessageReceived and
+// src/application/metaSync/processWhatsAppMessageEvent.ts. Same endpoint,
+// same QStash topic as the two message shapes above, distinguished purely
+// by this `kind` field - the 12-Function cap never has to grow for this
+// pipeline either.
+interface WhatsappMessageReceivedBody {
+  kind: "whatsapp_message_received";
+  messageEventId: string;
+  waMessageId: string;
+  tenantId: string;
+}
+
 async function handleProcessLead(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -118,10 +133,11 @@ async function handleProcessLead(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const message = JSON.parse(rawBody) as LeadReceivedBody | TenantLeadReceivedBody;
+  const message = JSON.parse(rawBody) as LeadReceivedBody | TenantLeadReceivedBody | WhatsappMessageReceivedBody;
   const attempt = Number(req.headers["upstash-retried"] ?? 0) + 1;
 
   if (message.kind === "tenant_meta_sync") return handleProcessTenantLead(message, attempt, res);
+  if (message.kind === "whatsapp_message_received") return handleProcessWhatsappMessage(message, attempt, res);
   return handleProcessLegacyLead(message, attempt, res);
 }
 
@@ -171,6 +187,24 @@ async function handleProcessTenantLead(message: TenantLeadReceivedBody, attempt:
     const isRetryable = err instanceof RetryableProcessingError;
     const messageText = err instanceof Error ? err.message : String(err);
     console.error(`[process-lead] (tenant sync) Attempt ${attempt} failed for ${message.metaLeadId}: ${messageText}`);
+    res.status(isRetryable ? 502 : 500).json({ error: messageText });
+  }
+}
+
+async function handleProcessWhatsappMessage(message: WhatsappMessageReceivedBody, attempt: number, res: VercelResponse) {
+  try {
+    const outcome = await processWhatsAppMessageEvent(message.messageEventId, message.waMessageId, message.tenantId);
+    console.log(`[process-lead] (whatsapp) ${message.waMessageId} -> ${outcome} (attempt ${attempt})`);
+    res.status(200).json({ outcome });
+  } catch (err) {
+    // processWhatsAppMessageEvent already records the failure on the
+    // whatsapp_message_events row itself (markWhatsappMessageEventRetrying)
+    // before throwing - same "nothing further to persist here" contract as
+    // the tenant-sync path above; the row only reaches this handler's
+    // terminal FAILED state below, once QStash's own retries are exhausted.
+    const isRetryable = err instanceof RetryableProcessingError;
+    const messageText = err instanceof Error ? err.message : String(err);
+    console.error(`[process-lead] (whatsapp) Attempt ${attempt} failed for ${message.waMessageId}: ${messageText}`);
     res.status(isRetryable ? 502 : 500).json({ error: messageText });
   }
 }
@@ -297,10 +331,12 @@ async function handleDeadLetter(req: VercelRequest, res: VercelResponse) {
 
   const payload = JSON.parse(rawBody) as QStashFailureCallbackBody;
   const originalMessage = JSON.parse(Buffer.from(payload.body, "base64").toString("utf8")) as {
-    kind?: "tenant_meta_sync";
+    kind?: "tenant_meta_sync" | "whatsapp_message_received";
     rawEventId?: string;
     leadEventId?: string;
-    metaLeadId: string;
+    messageEventId?: string;
+    metaLeadId?: string;
+    waMessageId?: string;
   };
 
   if (originalMessage.kind === "tenant_meta_sync" && originalMessage.leadEventId) {
@@ -316,11 +352,27 @@ async function handleDeadLetter(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  if (originalMessage.kind === "whatsapp_message_received" && originalMessage.messageEventId) {
+    // WhatsApp pipeline - same reasoning as the tenant-sync branch above:
+    // no `leads` row exists yet, so the terminal failure is recorded on
+    // whatsapp_message_events itself, this pipeline's own durability
+    // record.
+    console.error(
+      `[dead-letter] (whatsapp) Message ${originalMessage.waMessageId} (event ${originalMessage.messageEventId}) exhausted all retries. dlqId=${payload.dlqId}`,
+    );
+    await markWhatsappMessageEventFailed(
+      originalMessage.messageEventId,
+      `Exhausted retries, QStash status ${payload.status}, dlqId=${payload.dlqId}`,
+    );
+    res.status(200).json({ recorded: true });
+    return;
+  }
+
   console.error(
     `[dead-letter] Lead ${originalMessage.metaLeadId} (raw event ${originalMessage.rawEventId}) exhausted all retries. dlqId=${payload.dlqId}`,
   );
 
-  await markLeadDeadLettered(originalMessage.metaLeadId, `Exhausted retries, QStash status ${payload.status}`);
+  await markLeadDeadLettered(originalMessage.metaLeadId ?? "", `Exhausted retries, QStash status ${payload.status}`);
   await logEvent({
     rawEventId: originalMessage.rawEventId,
     eventType: "DeadLettered",

@@ -32,9 +32,13 @@ vi.mock("../../infrastructure/meta/graphClient", async (importOriginal) => {
     getAdAccountCampaigns: vi.fn(),
     getCampaignAdSets: vi.fn(),
     getAdSetAds: vi.fn(),
+    getAdCreativeLeadFormId: vi.fn(),
     getPageLeadForms: vi.fn(),
     ensureAppLeadgenSubscription: vi.fn(),
     subscribePageToLeadgen: vi.fn(),
+    getUserBusinesses: vi.fn(),
+    getOwnedWhatsAppBusinessAccounts: vi.fn(),
+    getWhatsAppPhoneNumbers: vi.fn(),
   };
 });
 
@@ -55,8 +59,12 @@ async function connectAndSelect(label: string) {
   vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([]);
   vi.mocked(graphClient.getAdSetAds).mockResolvedValue([]);
   vi.mocked(graphClient.getPageLeadForms).mockResolvedValue([]);
+  vi.mocked(graphClient.getAdCreativeLeadFormId).mockResolvedValue(null);
   vi.mocked(graphClient.ensureAppLeadgenSubscription).mockResolvedValue(undefined);
   vi.mocked(graphClient.subscribePageToLeadgen).mockResolvedValue(undefined);
+  vi.mocked(graphClient.getUserBusinesses).mockResolvedValue([]);
+  vi.mocked(graphClient.getOwnedWhatsAppBusinessAccounts).mockResolvedValue([]);
+  vi.mocked(graphClient.getWhatsAppPhoneNumbers).mockResolvedValue([]);
 
   await completeMetaConnection(`code-${label}`, tenantId, userId);
   const [page] = await listMetaPages(tenantId);
@@ -78,7 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Sync flow", () => {
   it("Campaign sync + Ad sync: campaigns, ad sets, and ads are all persisted from one run", async () => {
     const { tenantId } = await connectAndSelect("sync-campaign");
     vi.mocked(graphClient.getAdAccountCampaigns).mockResolvedValue([{ id: "camp-1", name: "Campaign One", status: "ACTIVE", startTime: null, stopTime: null }]);
-    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([{ id: "adset-1", name: "Ad Set One", status: "ACTIVE" }]);
+    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([{ id: "adset-1", name: "Ad Set One", status: "ACTIVE", destinationType: null }]);
     vi.mocked(graphClient.getAdSetAds).mockResolvedValue([{ id: "ad-1", name: "Ad One", status: "ACTIVE" }]);
 
     const result = await runMetaSync(tenantId);
@@ -121,7 +129,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Sync flow", () => {
   it("Repeated sync / Duplicate prevention: running sync twice with identical Meta data never doubles rows", async () => {
     const { tenantId } = await connectAndSelect("sync-repeat");
     vi.mocked(graphClient.getAdAccountCampaigns).mockResolvedValue([{ id: "camp-r1", name: "Repeat Campaign", status: "ACTIVE", startTime: null, stopTime: null }]);
-    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([{ id: "adset-r1", name: "Repeat Ad Set", status: "ACTIVE" }]);
+    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([{ id: "adset-r1", name: "Repeat Ad Set", status: "ACTIVE", destinationType: null }]);
     vi.mocked(graphClient.getAdSetAds).mockResolvedValue([{ id: "ad-r1", name: "Repeat Ad", status: "ACTIVE" }]);
     vi.mocked(graphClient.getPageLeadForms).mockResolvedValue([{ id: "form-r1", name: "Repeat Form", status: "ACTIVE", questions: [{ key: "phone_number", label: "Phone", type: "PHONE" }] }]);
 

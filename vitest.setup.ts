@@ -38,6 +38,10 @@ vi.mock("./src/infrastructure/queue/qstash", () => ({
     publishedMessages.push({ kind: "tenant", ...input });
     return `mock-msg-${publishedMessages.length}`;
   }),
+  publishWhatsappMessageReceived: vi.fn(async (input: { messageEventId: string; waMessageId: string; tenantId: string }) => {
+    publishedMessages.push({ kind: "whatsapp", ...input });
+    return `mock-msg-${publishedMessages.length}`;
+  }),
   ensureReconciliationSchedule: vi.fn(async () => "mock-schedule-id"),
 }));
 

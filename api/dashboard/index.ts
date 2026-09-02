@@ -32,6 +32,7 @@ import { getCompanyById, listUsers } from "../../src/infrastructure/db/repositor
 import { listCampaigns } from "../../src/infrastructure/db/repositories/campaigns";
 import { listBranches } from "../../src/infrastructure/db/repositories/branches";
 import { resolveEffectiveIndustryTemplate, resolveStageKey, LEAD_SOURCES, type IndustryTemplate } from "../../src/domain/industryTemplates";
+import { leadApproachLabel } from "../../src/domain/leadApproach";
 import { assertBranchAccessible, resolveBranchAccess, type BranchAccess } from "../../src/application/branchAccess";
 import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 
@@ -267,6 +268,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }))
     .sort((a, b) => b.count - a.count);
 
+  // WhatsApp Lead Capture feature (Phase 21) - minimal "Leads by Approach"
+  // breakdown, same shape/cohort as Leads by Source above (leads CREATED in
+  // the selected range). Reuses leadApproachLabel's own null -> "Unknown"
+  // fallback, so a lead captured before this feature shipped (leadApproach
+  // never set) is grouped under "Unknown" rather than silently dropped from
+  // the total - scoped to exactly what the existing schema already
+  // supports, no new aggregation infrastructure added for this.
+  const leadApproachCounts = new Map<string, number>();
+  for (const row of currentCohort) {
+    const key = row.leadApproach ?? "unknown";
+    leadApproachCounts.set(key, (leadApproachCounts.get(key) ?? 0) + 1);
+  }
+  const leadApproaches = [...leadApproachCounts.entries()]
+    .map(([key, count]) => ({
+      key,
+      label: leadApproachLabel(key),
+      count,
+      percent: currentCohort.length > 0 ? Math.round((count / currentCohort.length) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
   // ---- Campaign performance (cohort: leads created in range, judged by
   // current stage) ------------------------------------------------------
   const byCampaign = new Map<string, LeadRow[]>();
@@ -391,6 +413,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     chart: buckets,
     funnel,
     sources,
+    leadApproaches,
     campaigns: campaignRows,
     leads: leadList,
     leadsTotal: currentCohort.length,

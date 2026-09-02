@@ -9,7 +9,19 @@
 
 import type { MetaLeadDetails } from "../../domain/types";
 
-const GRAPH_VERSION = "v19.0";
+// CRITICAL: Meta sunsets each Graph/Marketing API version on a ~2-year
+// clock. v19.0 (this constant's value until this fix) shipped Feb 2024 and
+// was confirmed SUNSET as of mid-2026 - Meta blocks ALL calls on a sunset
+// version, meaning the entire Meta integration (Instant Form leads
+// included) was silently broken in production before this change, not a
+// side effect of the WhatsApp work. v24.0 is confirmed the current MINIMUM
+// supported version as of this fix; picked over the newest available
+// version deliberately, to stay inside the well-documented, broadly-tested
+// part of Meta's support window rather than immediately adjacent to an
+// unreleased/undocumented edge. Re-check Meta's version deprecation
+// schedule periodically (https://developers.facebook.com/docs/graph-api/changelog)
+// given that ~2-year clock - do not let this drift stale again.
+const GRAPH_VERSION = "v24.0";
 const LEAD_FIELDS = [
   "id",
   "form_id",
@@ -581,18 +593,29 @@ export interface MetaAdSetSummary {
   id: string;
   name: string;
   status: string;
+  // WhatsApp Lead Capture feature (Phase 3) - Meta's own documented field
+  // (Marketing API "Ads that Click to WhatsApp": "destination_type is
+  // Required, set to WHATSAPP for single-destination click to WhatsApp
+  // ads"). Null for an ad set with no click destination configured at all
+  // (e.g. a Lead Generation ad set - see getAdCreativeLeadFormId below for
+  // how THAT approach is actually determined) or any other destination
+  // (WEBSITE/APP/MESSENGER/INSTAGRAM_DIRECT/...) this feature does not yet
+  // classify - metaLeadApproachResolver.ts only ever branches on this being
+  // exactly "WHATSAPP", never inferring meaning from any other value.
+  destinationType: string | null;
 }
 
 interface GraphAdSetNode {
   id: string;
   name: string;
   status: string;
+  destination_type?: string;
 }
 
 /** Every ad set under one campaign. */
 export async function getCampaignAdSets(campaignId: string, userAccessToken: string): Promise<MetaAdSetSummary[]> {
   const results: MetaAdSetSummary[] = [];
-  let url = `${getBaseUrl()}/${campaignId}/adsets?fields=id,name,status&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+  let url = `${getBaseUrl()}/${campaignId}/adsets?fields=id,name,status,destination_type&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
 
   while (url) {
     const response = await fetchWithRetry(url);
@@ -601,7 +624,7 @@ export async function getCampaignAdSets(campaignId: string, userAccessToken: str
     }
     const page = (await response.json()) as GraphPagedResponse<GraphAdSetNode>;
     for (const node of page.data) {
-      results.push({ id: node.id, name: node.name, status: node.status });
+      results.push({ id: node.id, name: node.name, status: node.status, destinationType: node.destination_type ?? null });
     }
     url = page.paging?.next ?? "";
   }
@@ -637,6 +660,44 @@ export async function getAdSetAds(adSetId: string, userAccessToken: string): Pro
     url = page.paging?.next ?? "";
   }
   return results;
+}
+
+interface GraphAdCreativeNode {
+  creative?: {
+    object_story_spec?: {
+      link_data?: {
+        call_to_action?: {
+          type?: string;
+          value?: { lead_gen_form_id?: string };
+        };
+      };
+    };
+  };
+}
+
+/**
+ * WhatsApp Lead Capture feature (Phase 3) - the OTHER half of automatic
+ * lead-approach detection, alongside getCampaignAdSets' destinationType
+ * above. Meta's own documented field path for linking an ad to its Instant
+ * Form (confirmed against Meta's own Marketing API lead-ad sample code):
+ * creative.object_story_spec.link_data.call_to_action.value.lead_gen_form_id.
+ * Returns null (not an error) when the ad has no such creative shape -
+ * every other ad type, including a Click-to-WhatsApp ad, simply has no
+ * lead_gen_form_id here. Deliberately does NOT read the ad or campaign
+ * NAME for anything - metaLeadApproachResolver.ts's own tests assert this
+ * function is never given a reason to.
+ */
+export async function getAdCreativeLeadFormId(adId: string, userAccessToken: string): Promise<string | null> {
+  const url =
+    `${getBaseUrl()}/${adId}?fields=creative{object_story_spec{link_data{call_to_action}}}` +
+    `&access_token=${encodeURIComponent(userAccessToken)}`;
+  const response = await fetchWithRetry(url);
+  if (!response.ok) {
+    throw await buildMetaApiError(response, `Failed to read creative for ad ${adId}`);
+  }
+  const node = (await response.json()) as GraphAdCreativeNode;
+  const cta = node.creative?.object_story_spec?.link_data?.call_to_action;
+  return cta?.value?.lead_gen_form_id ?? null;
 }
 
 // ---------------------------------------------------------------------
@@ -746,6 +807,128 @@ export async function getPageLeadForms(pageId: string, pageAccessToken: string):
         name: node.name,
         status: node.status,
         questions: (node.questions ?? []).map((q) => ({ key: q.key, label: q.label, type: q.type })),
+      });
+    }
+    url = page.paging?.next ?? "";
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------
+// WhatsApp Lead Capture feature (Phase 2/5) - WhatsApp asset discovery
+// through the SAME Meta connection/user token already used for
+// Pages/ad accounts. Nothing here is ever typed in by the tenant: this is
+// exactly the "customer connects Meta once, the CRM discovers the rest"
+// contract - see whatsappDiscoveryService.ts for how these are wired in.
+// Every field/endpoint below is Meta's own documented Business Messaging
+// API shape, not invented for this feature.
+// ---------------------------------------------------------------------
+
+export interface MetaBusinessSummary {
+  id: string;
+  name: string;
+}
+
+interface GraphBusinessNode {
+  id: string;
+  name: string;
+}
+
+/** Every Business Manager account the authorizing user has access to
+ * (requires business_management, already part of OAUTH_SCOPES for Pages/
+ * ad-account discovery - not a new required scope). A WhatsApp Business
+ * Account is owned by a Business, never directly by a user, so this is the
+ * discovery hierarchy's first step. */
+export async function getUserBusinesses(userAccessToken: string): Promise<MetaBusinessSummary[]> {
+  const results: MetaBusinessSummary[] = [];
+  let url = `${getBaseUrl()}/me/businesses?fields=id,name&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+
+  while (url) {
+    const response = await fetchWithRetry(url);
+    if (!response.ok) {
+      throw await buildMetaApiError(response, "Failed to list Business Manager accounts");
+    }
+    const page = (await response.json()) as GraphPagedResponse<GraphBusinessNode>;
+    for (const node of page.data) {
+      results.push({ id: node.id, name: node.name });
+    }
+    url = page.paging?.next ?? "";
+  }
+  return results;
+}
+
+export interface MetaWhatsappBusinessAccountSummary {
+  id: string;
+  name: string;
+}
+
+interface GraphWabaNode {
+  id: string;
+  name: string;
+}
+
+/** Every WhatsApp Business Account owned by (or shared with) one Business
+ * Manager account (Meta's documented "Owned WhatsApp Business Accounts"
+ * endpoint). Requires whatsapp_business_management - requested as an
+ * OPTIONAL additional scope (see metaOAuth.ts OAUTH_SCOPES); a tenant/App
+ * without it granted simply sees an empty list here, never an error that
+ * blocks the rest of the Meta connection. */
+export async function getOwnedWhatsAppBusinessAccounts(
+  businessId: string,
+  userAccessToken: string,
+): Promise<MetaWhatsappBusinessAccountSummary[]> {
+  const results: MetaWhatsappBusinessAccountSummary[] = [];
+  let url =
+    `${getBaseUrl()}/${businessId}/owned_whatsapp_business_accounts?fields=id,name` +
+    `&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+
+  while (url) {
+    const response = await fetchWithRetry(url);
+    if (!response.ok) {
+      throw await buildMetaApiError(response, `Failed to list WhatsApp Business Accounts for business ${businessId}`);
+    }
+    const page = (await response.json()) as GraphPagedResponse<GraphWabaNode>;
+    for (const node of page.data) {
+      results.push({ id: node.id, name: node.name });
+    }
+    url = page.paging?.next ?? "";
+  }
+  return results;
+}
+
+export interface MetaWhatsappPhoneNumberSummary {
+  id: string; // this IS the phone_number_id used everywhere else (webhooks, Cloud API calls)
+  displayPhoneNumber: string | null;
+  verifiedName: string | null;
+}
+
+interface GraphWhatsappPhoneNumberNode {
+  id: string;
+  display_phone_number?: string;
+  verified_name?: string;
+}
+
+/** Every phone number registered under one WhatsApp Business Account
+ * (Meta's documented Phone Number Management API). Same
+ * whatsapp_business_management scope as getOwnedWhatsAppBusinessAccounts
+ * above. */
+export async function getWhatsAppPhoneNumbers(wabaId: string, userAccessToken: string): Promise<MetaWhatsappPhoneNumberSummary[]> {
+  const results: MetaWhatsappPhoneNumberSummary[] = [];
+  let url =
+    `${getBaseUrl()}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name` +
+    `&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+
+  while (url) {
+    const response = await fetchWithRetry(url);
+    if (!response.ok) {
+      throw await buildMetaApiError(response, `Failed to list WhatsApp phone numbers for WABA ${wabaId}`);
+    }
+    const page = (await response.json()) as GraphPagedResponse<GraphWhatsappPhoneNumberNode>;
+    for (const node of page.data) {
+      results.push({
+        id: node.id,
+        displayPhoneNumber: node.display_phone_number ?? null,
+        verifiedName: node.verified_name ?? null,
       });
     }
     url = page.paging?.next ?? "";

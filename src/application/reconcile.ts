@@ -38,9 +38,10 @@ import {
   recordReconciliationRun,
 } from "../infrastructure/db/repositories";
 import { getUnenqueuedMetaLeadEvents, insertMetaSyncLead, markMetaLeadEventEnqueued } from "../infrastructure/db/repositories/metaLeadEvents";
+import { getUnenqueuedWhatsappMessageEvents, markWhatsappMessageEventEnqueued } from "../infrastructure/db/repositories/whatsapp";
 import { listTenantsForMetaLeadReconciliation } from "../infrastructure/db/repositories/metaIntegration";
 import { getMetaCampaignByMetaCampaignId } from "../infrastructure/db/repositories/metaSync";
-import { publishLeadReceived, publishTenantLeadReceived } from "../infrastructure/queue/qstash";
+import { publishLeadReceived, publishTenantLeadReceived, publishWhatsappMessageReceived } from "../infrastructure/queue/qstash";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { refreshExpiringMetaTokens } from "./metaSync/metaTokenRefreshService";
 import { flagConnectionIfAuthError } from "./metaSync/metaConnectionService";
@@ -60,6 +61,14 @@ export interface ReconciliationSummary {
   // publish call, a different failure mode) rather than folded into one
   // combined number.
   unenqueuedMetaLeadEventsRetried: number;
+  // WhatsApp Lead Capture feature (Phase 13) - the WhatsApp pipeline's own
+  // "captured but never confirmed enqueued" retry count, same shape as
+  // unenqueuedMetaLeadEventsRetried but against whatsapp_message_events. No
+  // "missing WhatsApp messages" scan exists (see
+  // getUnenqueuedWhatsappMessageEvents' own comment for why the Cloud API
+  // has no endpoint to scan against) - this retry is the full extent of
+  // this pipeline's self-healing.
+  unenqueuedWhatsappMessageEventsRetried: number;
   // Review finding - the tenant-level pipeline's own MISSING LEAD recovery
   // (as opposed to unenqueuedMetaLeadEventsRetried above, which only
   // retries publishing an event that WAS captured but never confirmed
@@ -223,6 +232,24 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     }
   }
 
+  // WhatsApp Lead Capture feature (Phase 13) - retry publishing any
+  // whatsapp_message_events row that was durably persisted (by the shared
+  // /leadgen webhook receiver's WhatsApp branch) but never confirmed
+  // enqueued. Same "leave it exactly as it was on a repeat failure"
+  // contract as the meta_lead_events sweep above.
+  const unenqueuedWhatsappEvents = await getUnenqueuedWhatsappMessageEvents(15);
+  let whatsappMessageEventsRetried = 0;
+  for (const event of unenqueuedWhatsappEvents) {
+    try {
+      await publishWhatsappMessageReceived({ messageEventId: event.id, waMessageId: event.waMessageId, tenantId: event.tenantId });
+      await markWhatsappMessageEventEnqueued(event.id);
+      whatsappMessageEventsRetried++;
+    } catch (err) {
+      console.error(`[reconciliation] Failed to re-publish whatsapp_message_events ${event.id} (message ${event.waMessageId}):`, err);
+      errors++;
+    }
+  }
+
   // Review finding - the tenant-level pipeline's own MISSING LEAD recovery,
   // bringing it to parity with the legacy per-campaign sweep above (which
   // has always self-healed a webhook delivery Meta simply never sent, not
@@ -323,6 +350,7 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     missingLeadsRecovered: missingRecovered,
     unenqueuedEventsRetried: retried,
     unenqueuedMetaLeadEventsRetried: metaLeadEventsRetried,
+    unenqueuedWhatsappMessageEventsRetried: whatsappMessageEventsRetried,
     tenantPipelineFormsScanned,
     tenantPipelineLeadsSeen,
     tenantPipelineMissingLeadsFound: tenantPipelineMissingFound,
