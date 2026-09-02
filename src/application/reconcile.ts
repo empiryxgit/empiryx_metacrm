@@ -25,7 +25,7 @@
 // publish failed (or whose process died between the durability write and
 // the publish call) now self-heals here too, on the same schedule.
 
-import { getRecentLeadsForForm } from "../infrastructure/meta/graphClient";
+import { getRecentLeadsForForm, MetaApiError } from "../infrastructure/meta/graphClient";
 import { listActiveWebhookConfigs } from "../infrastructure/db/repositories/campaigns";
 import {
   getRecentMetaLeadIds,
@@ -43,6 +43,7 @@ import { getMetaCampaignByMetaCampaignId } from "../infrastructure/db/repositori
 import { publishLeadReceived, publishTenantLeadReceived } from "../infrastructure/queue/qstash";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { refreshExpiringMetaTokens } from "./metaSync/metaTokenRefreshService";
+import { flagConnectionIfAuthError } from "./metaSync/metaConnectionService";
 import { LeadPlatform } from "../domain/types";
 
 const LOOKBACK_HOURS = Number(process.env.RECONCILIATION_LOOKBACK_HOURS ?? 6);
@@ -288,6 +289,20 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
       } catch (err) {
         errors++;
         console.error(`[reconciliation] Error scanning form ${formId} for tenant ${target.tenantId} (tenant-level pipeline):`, err);
+        // Review finding - unlike the one-time historical backfill
+        // (metaFormService.ts), this recurring sweep never used to flag the
+        // connection on a permission/token error - it just logged and moved
+        // on, forever, with no UI signal. A `leads_retrieval`/
+        // `pages_manage_ads` permission revoked (or never actually cleared
+        // by Meta for live use) AFTER the initial connect would then 403
+        // here every 15 minutes while the connection kept showing
+        // "Connected" in Settings. Same classify-and-flag call the live
+        // webhook path (processMetaLeadEvent.ts) and the historical backfill
+        // both already make - a non-auth error (network blip, rate limit)
+        // is a no-op here, same as everywhere else that calls this.
+        if (err instanceof MetaApiError) {
+          await flagConnectionIfAuthError(target.tenantId, err, "Reconciliation sweep (getRecentLeadsForForm)");
+        }
       }
     }
   }
