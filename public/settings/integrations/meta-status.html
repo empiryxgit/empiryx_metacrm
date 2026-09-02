@@ -42,6 +42,16 @@
   .reauth-title{ margin:0 0 10px; font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); font-weight:700; }
   .reauth-desc{ margin:10px 0 0; font-size:13.5px; color:var(--text-primary); }
   .reauth-reason{ margin:6px 0 0; font-size:12.5px; color:var(--danger); }
+
+  /* Advanced Configuration nudge - mirrors meta.html's own "Get started"
+     callout (same border/background) so this reads as a continuation of
+     the SAME setup, not an unrelated screen the user has to go discover on
+     their own. Two states: an eye-catching prompt while Page/Instagram/Ad
+     Account are still unselected, a quiet confirmation once they're not. */
+  .meta-callout{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:20px; padding:14px 16px; border:1px solid var(--brand-primary); border-radius:var(--radius-sm); background:var(--brand-primary-soft); }
+  .meta-callout p{ margin:0; font-size:13px; color:var(--text-primary); }
+  .meta-callout.done{ border-color:var(--border); background:var(--surface-sunken); }
+  .meta-callout.done p{ color:var(--text-muted); }
 </style>
 </head>
 <body>
@@ -156,6 +166,25 @@
     const selectedPage = data.pages.find((p) => p.isSelected) || null;
     const selectedInstagram = data.instagramAccounts.find((i) => i.isSelected) || null;
     const selectedAdAccount = data.adAccounts.find((a) => a.isSelected) || null;
+    // Same definition meta.html's own "Get started" callout uses - at
+    // least one of the three assets has been chosen.
+    const hasAnySelection = Boolean(selectedPage || selectedInstagram || selectedAdAccount);
+
+    // Right after a fresh OAuth connect there is nothing useful to show on
+    // this glanceable status screen yet - every row below would just read
+    // "Not selected." That's exactly the confusion being fixed here: send
+    // the user straight on to the one thing they actually need to do next
+    // (meta.html's Page/Instagram/Ad Account picker) instead of leaving
+    // them to notice and click a small link themselves. Only fires on the
+    // fresh-connect redirect itself (?connected=1, set by the OAuth
+    // callback) - a later, deliberate visit to this page while still
+    // unconfigured shows the callout below instead of bouncing away again.
+    // replace(), not href, so this transient landing never becomes a back-
+    // button stop between meta.html and wherever the user came from.
+    if (new URLSearchParams(window.location.search).get("connected") === "1" && !hasAnySelection) {
+      window.location.replace(`/settings/integrations/meta.html${window.location.search}`);
+      return;
+    }
 
     // Status - "Connected ✓" is the healthy case; a connection that failed
     // its own last sync (markMetaConnectionError - see the connect flow)
@@ -220,7 +249,13 @@
         <button class="btn danger" type="button" id="disconnectBtn">Disconnect Meta</button>
       </div>
       <div id="disconnectConfirm"></div>
-      <p style="margin:16px 0 0"><a href="/settings/integrations/meta.html" style="font-size:12.5px">Advanced configuration (Pages, Ad Account, Lead Forms) →</a></p>
+
+      <div class="meta-callout ${hasAnySelection ? "done" : ""}">
+        <p>${hasAnySelection
+          ? `<span style="color:var(--success); font-weight:700">✓ Configured</span> — Page, Ad Account and Lead Forms are set up.`
+          : `<strong>One step left:</strong> choose which Facebook Page and Ad Account this CRM should use.`}</p>
+        <a class="btn ${hasAnySelection ? "secondary" : ""}" href="/settings/integrations/meta.html" style="text-decoration:none; text-align:center">${hasAnySelection ? "Manage →" : "Continue Setup →"}</a>
+      </div>
     `;
 
     document.getElementById("syncBtn").addEventListener("click", runSyncNow);

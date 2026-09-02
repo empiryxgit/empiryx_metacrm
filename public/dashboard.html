@@ -674,8 +674,18 @@
       { label: "Business profile set up", done: true, href: null },
       { label: "Sales pipeline ready", done: true, href: null },
       {
+        // Review finding - "connected" alone (OAuth done) used to mark this
+        // done, even with no Page/Instagram/Ad Account ever selected - the
+        // exact "I thought Meta was configured" confusion reported against
+        // this checklist. Now matches meta-status.html's own definition of
+        // fully set up: the connection is healthy AND at least one asset
+        // has actually been picked, so this only checks off once there's
+        // nothing left for the user to do on the Meta side.
         label: "Facebook / Instagram connected",
-        done: Boolean(meta?.connection && meta.connection.status === "active"),
+        done: Boolean(
+          meta?.connection?.status === "active" &&
+          (meta.pages?.some((p) => p.isSelected) || meta.instagramAccounts?.some((i) => i.isSelected) || meta.adAccounts?.some((a) => a.isSelected))
+        ),
         href: "/settings/integrations/meta-status.html",
       },
       {
