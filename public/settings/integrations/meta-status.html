@@ -221,10 +221,25 @@
     // ever renders for the genuinely ambiguous case: more than one number
     // discovered under this Business Manager and none chosen yet.
     const needsWhatsappPicker = whatsappAccounts.length > 1 && !selectedWhatsapp;
+    // "Meta Campaign Destination Detection" reframing - label and note
+    // reworded so this reads as ad-destination detection, not a WhatsApp
+    // messaging-product setup screen: the mechanism underneath (receiving
+    // the ad-click-through's first WhatsApp message to capture it as a
+    // Lead) is unavoidable - it's the only Meta-provided way to get an
+    // identifiable lead from a Click-to-WhatsApp ad (see
+    // metaAdInteractionService.ts's header for the verified API research) -
+    // but the number itself is never a WhatsApp inbox this app manages.
+    let whatsappStatusNote = "";
+    if (selectedWhatsapp) {
+      whatsappStatusNote =
+        selectedWhatsapp.webhookStatus === "active"
+          ? `<div class="status-row-note">Detecting leads from this number's ad clicks ✓</div>`
+          : `<div class="status-row-error">Not yet receiving lead events${selectedWhatsapp.webhookLastError ? ` — ${App.escapeHtml(selectedWhatsapp.webhookLastError)}` : " — try Sync Now"}</div>`;
+    }
     const whatsappRow = whatsappAccounts.length
       ? row(
-          "WhatsApp Number",
-          needsWhatsappPicker
+          "WhatsApp (ad destination)",
+          (needsWhatsappPicker
             ? `
               <select id="whatsappPickerSelect" style="font-size:12.5px">
                 ${whatsappAccounts.map((w) => `<option value="${w.id}">${App.escapeHtml(w.displayPhoneNumber || w.verifiedName || "Number")}</option>`).join("")}
@@ -233,7 +248,7 @@
             `
             : selectedWhatsapp
               ? App.escapeHtml(`${selectedWhatsapp.displayPhoneNumber || selectedWhatsapp.verifiedName || "Connected number"}`)
-              : `<span class="status-row-note" style="display:inline">Not selected</span>`,
+              : `<span class="status-row-note" style="display:inline">Not selected</span>`) + whatsappStatusNote,
         )
       : "";
 

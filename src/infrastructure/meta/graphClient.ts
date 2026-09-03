@@ -701,6 +701,69 @@ export async function getAdCreativeLeadFormId(adId: string, userAccessToken: str
 }
 
 // ---------------------------------------------------------------------
+// "Meta Campaign Destination Detection" reframing, Phase 17 - Advertising
+// Interaction reporting. Verified against Meta's current Marketing API docs
+// and CTWA attribution material (not assumed from stale examples) that
+// there is NO per-click, per-user identifiable event for a WhatsApp-
+// destination ad before the user actually sends a WhatsApp message - the
+// only thing Meta exposes at the ad level before that point is this
+// AGGREGATE insights data. This function must never be used to manufacture
+// individual leads (see metaAdInteractionService.ts's own header) - it
+// exists purely to show "N ad clicks / conversations started" as a
+// separate, honestly-aggregate metric next to the real identifiable Lead
+// count metaWhatsappEventService.ts produces from the actual messages
+// webhook.
+// ---------------------------------------------------------------------
+
+export interface MetaAdInsightSummary {
+  linkClicks: number;
+  // Meta's own action_type "onsite_conversion.messaging_conversation_started_7d"
+  // - a rolling 7-day count of messaging conversations (Messenger/Instagram/
+  // WhatsApp alike; Meta does not split this out further by destination
+  // surface) attributed to this ad. For an ad whose ad set destinationType
+  // is "WHATSAPP" (see MetaAdSetSummary above), this is the closest
+  // Meta-provided proxy for "WhatsApp conversations this ad started" - an
+  // aggregate count, never a list of identifiable people.
+  messagingConversationsStarted: number;
+}
+
+interface GraphAdInsightAction {
+  action_type: string;
+  value: string;
+}
+
+interface GraphAdInsightNode {
+  actions?: GraphAdInsightAction[];
+}
+
+/** Aggregate (not day-by-day) insights for one ad over an explicit
+ * [since, until] range - same on-demand, never-persisted posture as
+ * getCampaignInsights above (Meta already retains this history; nothing
+ * durable is worth storing). A day/ad with zero activity simply has no
+ * `data` row at all, which is indistinguishable from "not found" at the
+ * Graph API level - both are treated as zero here, not an error, since an
+ * ad with genuinely no clicks in the window is an expected, normal result. */
+export async function getAdInsights(adId: string, userAccessToken: string, since: string, until: string): Promise<MetaAdInsightSummary> {
+  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
+  const url =
+    `${getBaseUrl()}/${adId}/insights?fields=actions` +
+    `&time_range=${timeRange}&access_token=${encodeURIComponent(userAccessToken)}`;
+
+  const response = await fetchWithRetry(url);
+  if (!response.ok) {
+    throw await buildMetaApiError(response, `Failed to load ad insights for ad ${adId}`);
+  }
+  const page = (await response.json()) as GraphPagedResponse<GraphAdInsightNode>;
+  const actions = page.data[0]?.actions ?? [];
+
+  const findAction = (actionType: string) => Number(actions.find((a) => a.action_type === actionType)?.value ?? 0);
+  return {
+    linkClicks: findAction("link_click"),
+    messagingConversationsStarted: findAction("onsite_conversion.messaging_conversation_started_7d"),
+  };
+}
+
+// ---------------------------------------------------------------------
 // Phase 7: automatic Page webhook subscription - two DISTINCT Meta
 // concepts, both needed for a Page's leadgen events to actually reach this
 // app, neither ever exposed to a customer as something they configure:

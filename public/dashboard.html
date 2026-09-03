@@ -122,6 +122,15 @@
             </div>
           </div>
           <div class="donut-row" id="leadApproachBody"></div>
+          <!-- "Meta Campaign Destination Detection" reframing, Phase 17 -
+               Advertising Interaction vs identifiable Lead. Only shown when
+               the tenant actually has WhatsApp-routed ads (see
+               maybeLoadAdInteractions below) - a tenant with none never
+               sees an empty/loading row here. Deliberately a plain,
+               separate line, never merged into the donut above: an
+               "interaction" is an aggregate Meta metric, not a person, and
+               must never be readable as a Lead count. -->
+          <p class="dash-card-sub" id="adInteractionNote" hidden></p>
         </div>
       </div>
 
@@ -582,6 +591,31 @@
     return branchId ? `&branchId=${encodeURIComponent(branchId)}` : "";
   }
 
+  // "Meta Campaign Destination Detection" reframing, Phase 17 - fetched as
+  // a second, progressive request (never blocks the main dashboard paint,
+  // never fetched at all for a tenant with no WhatsApp-routed ads yet - the
+  // common case). See api/dashboard/index.ts's own comment on why this is
+  // opt-in rather than baked into the default response. Failure here (Meta
+  // outage, timeout, no connection) just leaves the note hidden - never an
+  // error banner, since this is a supplementary metric, not core dashboard
+  // data.
+  async function maybeLoadAdInteractions(data) {
+    const note = document.getElementById("adInteractionNote");
+    note.hidden = true;
+    const hasWhatsappLeads = (data.leadApproaches || []).some(a => a.key === "whatsapp" && a.count > 0);
+    if (!hasWhatsappLeads) return;
+    try {
+      const withInteractions = await App.apiJson(`/api/dashboard?${apiRangeQuery()}${branchQueryParam()}&includeAdInteractions=true`);
+      const summary = withInteractions.whatsappAdInteractions;
+      if (!summary || !summary.available) return;
+      const identifiableLeads = (data.leadApproaches || []).find(a => a.key === "whatsapp")?.count ?? 0;
+      note.textContent = `WhatsApp ad interactions: ${summary.conversationsStarted} conversations started (Meta's own aggregate ad metric, not individual people) — ${identifiableLeads} became identifiable leads in the CRM.`;
+      note.hidden = false;
+    } catch (err) {
+      console.warn("Failed to load WhatsApp ad interaction summary", err);
+    }
+  }
+
   // Just the "fetch + render the numbers" half of load() below, with no
   // auth/nav work - this is what a branch-switch reacts to (see
   // App.onBranchChange near the bottom), so switching branches never
@@ -595,6 +629,7 @@
       const data = await App.apiJson(`/api/dashboard?${apiRangeQuery()}${branchQueryParam()}`);
       document.getElementById("dashboardBody").style.display = "";
       renderAll(data);
+      void maybeLoadAdInteractions(data); // fire-and-forget, never blocks the main render
       document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
       if (currentMe) renderSetupChecklist(currentMe, data);
     } catch (err) {

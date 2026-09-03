@@ -101,6 +101,60 @@ describe.skipIf(!process.env.DATABASE_URL)("Sync flow", () => {
     expect(await countAdsForTenant(tenantId)).toBe(1);
   });
 
+  it("Destination detection: one campaign with a mix of Instant Form and WhatsApp ads resolves each ad independently, never one approach per campaign", async () => {
+    // "Meta Campaign Destination Detection" reframing, Phase 4/18 - the
+    // spec's own worked example: one campaign, Ad A -> Instant Form,
+    // Ad B/C -> WhatsApp. The resolver only ever looks at each AD's own
+    // creative and its AD SET's destination_type (metaLeadApproachResolver.ts),
+    // never the campaign - this is the integration-level proof that holds
+    // for a real sync run, not just the resolver in isolation.
+    const { tenantId } = await connectAndSelect("sync-mixed-approach");
+    vi.mocked(graphClient.getAdAccountCampaigns).mockResolvedValue([
+      { id: "camp-mixed", name: "Summer Property Campaign", status: "ACTIVE", startTime: null, stopTime: null },
+    ]);
+    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([
+      { id: "adset-form", name: "Ad Set (Instant Form)", status: "ACTIVE", destinationType: null },
+      { id: "adset-wa", name: "Ad Set (WhatsApp)", status: "ACTIVE", destinationType: "WHATSAPP" },
+    ]);
+    vi.mocked(graphClient.getAdSetAds).mockImplementation(async (adSetId: string) => {
+      if (adSetId === "adset-form") return [{ id: "ad-a", name: "Ad A", status: "ACTIVE" }];
+      if (adSetId === "adset-wa") return [{ id: "ad-b", name: "Ad B", status: "ACTIVE" }, { id: "ad-c", name: "Ad C", status: "ACTIVE" }];
+      return [];
+    });
+    vi.mocked(graphClient.getAdCreativeLeadFormId).mockImplementation(async (adId: string) => (adId === "ad-a" ? "form-a" : null));
+
+    const result = await runMetaSync(tenantId);
+    expect(result.ok).toBe(true);
+
+    const { getMetaLeadRouteByMetaAdId, countMetaLeadRoutesByApproach } = await import("../../infrastructure/db/repositories/whatsapp");
+    const routeA = await getMetaLeadRouteByMetaAdId(tenantId, "ad-a");
+    const routeB = await getMetaLeadRouteByMetaAdId(tenantId, "ad-b");
+    const routeC = await getMetaLeadRouteByMetaAdId(tenantId, "ad-c");
+
+    expect(routeA).toMatchObject({ route: { approach: "meta_instant_form", formId: "form-a" }, campaignId: "camp-mixed" });
+    expect(routeB).toMatchObject({ route: { approach: "whatsapp" }, campaignId: "camp-mixed" });
+    expect(routeC).toMatchObject({ route: { approach: "whatsapp" }, campaignId: "camp-mixed" });
+
+    const byApproach = new Map((await countMetaLeadRoutesByApproach(tenantId)).map((r) => [r.approach, r.count]));
+    expect(byApproach.get("meta_instant_form")).toBe(1);
+    expect(byApproach.get("whatsapp")).toBe(2);
+  });
+
+  it("Destination detection: an ad set with an unsupported/unrecognized destination_type resolves Unknown, never guessed as WhatsApp or Instant Form", async () => {
+    const { tenantId } = await connectAndSelect("sync-unknown-approach");
+    vi.mocked(graphClient.getAdAccountCampaigns).mockResolvedValue([{ id: "camp-unknown", name: "Website Traffic Campaign", status: "ACTIVE", startTime: null, stopTime: null }]);
+    vi.mocked(graphClient.getCampaignAdSets).mockResolvedValue([{ id: "adset-website", name: "Ad Set (Website)", status: "ACTIVE", destinationType: "WEBSITE" }]);
+    vi.mocked(graphClient.getAdSetAds).mockResolvedValue([{ id: "ad-website", name: "Ad (Website)", status: "ACTIVE" }]);
+    vi.mocked(graphClient.getAdCreativeLeadFormId).mockResolvedValue(null);
+
+    const result = await runMetaSync(tenantId);
+    expect(result.ok).toBe(true);
+
+    const { getMetaLeadRouteByMetaAdId } = await import("../../infrastructure/db/repositories/whatsapp");
+    const route = await getMetaLeadRouteByMetaAdId(tenantId, "ad-website");
+    expect(route).toMatchObject({ route: { approach: "unknown", confidence: "UNDETERMINED" } });
+  });
+
   it("Form sync: forms and their default field mappings are persisted", async () => {
     const { tenantId } = await connectAndSelect("sync-form");
     vi.mocked(graphClient.getPageLeadForms).mockResolvedValue([

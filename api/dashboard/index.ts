@@ -35,6 +35,7 @@ import { resolveEffectiveIndustryTemplate, resolveStageKey, LEAD_SOURCES, type I
 import { leadApproachLabel } from "../../src/domain/leadApproach";
 import { assertBranchAccessible, resolveBranchAccess, type BranchAccess } from "../../src/application/branchAccess";
 import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
+import { getWhatsappAdInteractionSummary } from "../../src/application/metaSync/metaAdInteractionService";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -114,6 +115,36 @@ function buildClassifier(template: IndustryTemplate) {
 
 function inRange(date: Date | null, start: Date, end: Date): boolean {
   return Boolean(date && date >= start && date < end);
+}
+
+function toDateOnly(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+// "Meta Campaign Destination Detection" reframing, Phase 17 - the
+// Advertising Interaction summary is opt-in (?includeAdInteractions=true),
+// never fetched on the default dashboard load. It costs one Graph API call
+// per WhatsApp-routed ad (see metaAdInteractionService.ts), so the main
+// dashboard response - which every tenant pays for on every page view -
+// stays fast and Meta-outage-proof regardless; the frontend fetches this as
+// a second, progressive request only for tenants who actually have
+// WhatsApp-routed ads (dashboard.html checks `leadApproaches` from the
+// first response before asking for it). A slow/unresponsive Meta call here
+// still must never turn into a dashboard 500 or hang past the function's
+// own duration budget, so it's wrapped in both try/catch and a hard time
+// budget, with a safely-empty summary as the fallback either way.
+const AD_INTERACTIONS_TIMEOUT_MS = 8000;
+
+async function safeGetWhatsappAdInteractionSummary(tenantId: string, since: string, until: string) {
+  try {
+    return await Promise.race([
+      getWhatsappAdInteractionSummary(tenantId, since, until),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), AD_INTERACTIONS_TIMEOUT_MS)),
+    ]);
+  } catch (err) {
+    console.warn(`[dashboard] Failed to load WhatsApp ad interaction summary for tenant ${tenantId}:`, err);
+    return null;
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -401,6 +432,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       owner: l.ownerId ? ownerNameById.get(l.ownerId) ?? null : null,
     }));
 
+  // "Meta Campaign Destination Detection" reframing, Phase 17 - opt-in only
+  // (see safeGetWhatsappAdInteractionSummary's own comment above); omitted
+  // entirely from the response (not even a null field) unless requested, so
+  // existing consumers of this endpoint are byte-for-byte unaffected.
+  const includeAdInteractions = getQueryString(req, "includeAdInteractions") === "true";
+  const whatsappAdInteractions = includeAdInteractions
+    ? await safeGetWhatsappAdInteractionSummary(auth.companyId, toDateOnly(start), toDateOnly(end))
+    : undefined;
+
   res.status(200).json({
     range: { key: rangeKey, start: start.toISOString(), end: end.toISOString(), days },
     template: {
@@ -414,6 +454,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     funnel,
     sources,
     leadApproaches,
+    ...(includeAdInteractions ? { whatsappAdInteractions } : {}),
     campaigns: campaignRows,
     leads: leadList,
     leadsTotal: currentCohort.length,

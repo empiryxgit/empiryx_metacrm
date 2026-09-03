@@ -27,6 +27,44 @@ There is no separate "Connect WhatsApp" screen, no `WhatsAppLead` entity,
 and no second webhook URL. Everywhere this feature touches the codebase, it
 extends an existing mechanism rather than adding a parallel one.
 
+## What this is, and what it deliberately is not
+
+This is best understood as **"WhatsApp ad-destination detection,"** not
+"WhatsApp messaging integration." The distinction matters because it's easy
+to look at "subscribes to the Cloud API `messages` webhook and reads
+inbound message content" and assume that means a chatbot, an inbox, or
+conversation automation lives here. None of that exists in this codebase,
+and none of it is planned:
+
+- **No** WhatsApp chatbot or AI auto-replies.
+- **No** conversation management, inbox UI, or message history beyond the
+  one message that created the Lead (which is stored, verbatim, in that
+  Lead's Notes field - the same free-text field every other capture path
+  already uses).
+- **No** outbound WhatsApp messages of any kind are ever sent by this app.
+
+What *is* here is the minimum mechanism Meta actually requires to turn a
+Click-to-WhatsApp ad click into an identifiable Lead at all. This was
+verified directly against Meta's current Marketing/Cloud API documentation
+(not assumed from older examples, and not just from this project's own
+prior research) while reframing this feature around "destination
+detection": there is no per-click, per-user identifiable event for a
+WhatsApp-destination ad - no webhook, no Graph API field - that exists
+*before* the user's first WhatsApp message actually arrives. The click
+identifier Meta itself generates for CTWA attribution (`ctwa_clid`) doesn't
+exist until that point either; it travels *inside* the first inbound
+message's `referral`/`context.ad` metadata, not through any separate
+channel. So subscribing to that one message and reading its contents once
+is not an optional design choice on top of "just detect the destination" -
+it is the *only* Meta-provided path to an identifiable WhatsApp lead. What
+this codebase deliberately does with that one message - capture it as a
+Lead and stop - is the boundary that keeps this "ad destination detection,"
+not "messaging integration."
+
+See "Advertising Interaction vs. identifiable Lead" below for what happens
+when no message ever arrives at all (an ad click Meta can only report as an
+aggregate number, never a person).
+
 ## Schema additions
 
 All additive - no existing column, table, or migration was altered.
@@ -150,6 +188,38 @@ never sent at all has nothing to reconcile against - this is a real,
 structural difference from the Instant Form pipeline's guarantees, not an
 oversight.
 
+## Advertising Interaction vs. identifiable Lead (Phase 17)
+
+Not every click on a Click-to-WhatsApp ad turns into a WhatsApp message -
+plenty of people tap the ad and never actually send anything. Meta reports
+those clicks and "conversations started" as an **aggregate, ad-level
+metric** (the `actions` field on the ad-insights endpoint, action types
+`link_click` and `onsite_conversion.messaging_conversation_started_7d`) -
+never as a list of people, and never with enough information to construct
+an identifiable Lead. Turning that aggregate number into fabricated
+individual Lead rows would be a real correctness bug (150 clicks does not
+mean 150 leads), so this codebase never does that - the two numbers are
+computed by entirely separate code paths and never merge:
+
+- **Identifiable Leads** - real rows in `leads`, created only when an
+  actual WhatsApp message arrives (see "The webhook" above). Source of
+  truth: `leads.lead_approach = "whatsapp"`.
+- **Advertising Interactions** - Meta's own aggregate click/conversation
+  counts for the tenant's WhatsApp-routed ads
+  (`src/infrastructure/meta/graphClient.ts`'s `getAdInsights`, summed by
+  `src/application/metaSync/metaAdInteractionService.ts`). Fetched
+  on-demand, never persisted (Meta already retains this history), and never
+  written into `leads` or any table that could be confused with one.
+
+The Dashboard surfaces both, deliberately worded to keep the distinction
+visible to a non-technical tenant: "WhatsApp ad interactions: 150
+conversations started (Meta's own aggregate ad metric, not individual
+people) — 32 became identifiable leads in the CRM." This is fetched as a
+second, progressive request (`?includeAdInteractions=true`) only for a
+tenant who already has at least one WhatsApp-routed ad, so it never slows
+down or adds Meta API load to the default dashboard load for the majority
+of tenants who don't have any yet.
+
 ## What the tenant sees
 
 - **Pipeline / Leads list** (`public/pipeline.html`) - a "Lead approach"
@@ -161,15 +231,35 @@ oversight.
   Organic WhatsApp" note when it didn't. The lead's first WhatsApp message
   is stored in its Notes field, same as every other free-text capture in
   this schema.
-- **Settings → Integrations → Meta** - a "WhatsApp Number" row (shown only
-  when a number was actually discovered) and a "Lead Approaches" summary
-  ("12 Instant Form, 5 WhatsApp, 2 Unknown"), with an explicit
-  "N ads need attention" note whenever any ad resolved to Unknown. A
-  discovered-but-ambiguous multi-number tenant sees a small inline picker
-  here - the only place a WhatsApp-specific selection is ever asked for.
-- **Dashboard** - a "How leads reach you" breakdown card, the same
-  cohort/shape as the existing "Where your customers come from" source
-  breakdown.
+- **Settings → Integrations → Meta** - a "WhatsApp (ad destination)" row
+  (shown only when a number was actually discovered, reworded from "WhatsApp
+  Number" to keep the destination-detection framing explicit), its webhook
+  subscription health (see the "leads not showing" incident below), and a
+  "Lead Approaches" summary ("12 Instant Form, 5 WhatsApp, 2 Unknown"), with
+  an explicit "N ads need attention" note whenever any ad resolved to
+  Unknown. A discovered-but-ambiguous multi-number tenant sees a small
+  inline picker here - the only place a WhatsApp-specific selection is ever
+  asked for.
+- **Dashboard** - a "How leads reach you" breakdown card (identifiable
+  Leads only, same cohort/shape as the existing "Where your customers come
+  from" source breakdown), plus the separate Advertising Interaction note
+  described above.
+
+## Known limitation: webhook subscription (fixed)
+
+The original implementation discovered a tenant's WhatsApp number and
+auto-selected it, but never actually told Meta to *start delivering* that
+number's inbound-message events to this app - the asset-level
+`POST /{waba-id}/subscribed_apps` opt-in (and its app-level counterpart)
+that the Page/Instant Form pipeline has always performed
+(`ensureAppLeadgenSubscription`/`subscribePageToLeadgen`) had no WhatsApp
+equivalent. Meta doesn't error in this state, it simply never sends
+anything, so a tenant could have a fully "connected" number and never
+receive a lead. Fixed via `metaWhatsappWebhookService.ts` (mirrors the Page
+pattern exactly) - see the project status doc for full detail. The fix
+re-confirms the subscription on every discovery run, so a tenant who
+selected their number before this fix existed gets subscribed retroactively
+on their next reconnect, with no manual step required.
 
 ## Testing
 
@@ -177,6 +267,26 @@ oversight.
 Postgres: discovery auto-selection, valid/malformed/duplicate/unknown-number
 webhook capture, tenant isolation, end-to-end lead creation (with and
 without referral attribution, and against an unsynced ad), idempotent
-double-processing, and the shared webhook endpoint's HTTP-level signature
-verification for both a valid and a forged WhatsApp payload. Every existing
-Meta Instant Form test continues to pass unmodified alongside it.
+double-processing, the shared webhook endpoint's HTTP-level signature
+verification for both a valid and a forged WhatsApp payload, and (added
+alongside the webhook-subscription fix) that a connect/select actually
+subscribes the webhook and records the outcome. Every existing Meta Instant
+Form test continues to pass unmodified alongside it.
+
+`src/application/metaSync/metaLeadApproachResolver.test.ts` (pure logic, no
+Postgres) exercises the three-way destination-detection split in isolation:
+Instant Form / WhatsApp / Unknown, the priority rule between the two
+signals, and that neither the ad nor ad-set NAME is ever consulted.
+`src/application/metaSync/sync.flow.test.ts` adds an integration-level
+proof that a single campaign with a genuine mix of Instant Form and
+WhatsApp ads resolves each ad independently (never one approach applied to
+a whole campaign), plus an unrecognized-destination-type case resolving to
+Unknown rather than being guessed.
+
+`src/application/metaSync/metaAdInteraction.test.ts` covers the Advertising
+Interaction summary: no connection / no WhatsApp-routed ads both resolve to
+an honestly-empty "unavailable" result rather than an error; aggregate
+numbers sum correctly across multiple ads; one ad's Graph API call failing
+never fails the whole summary; tenant isolation; and, the one assertion
+every test in this file effectively repeats, that this code path can never
+create a Lead no matter what the aggregate metric reports.

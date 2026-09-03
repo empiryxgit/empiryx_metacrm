@@ -261,6 +261,30 @@ export async function countMetaLeadRoutesByApproach(tenantId: string) {
   return rows;
 }
 
+/** "Meta Campaign Destination Detection" reframing, Phase 17 - every
+ * currently-active ad this tenant's own resolver classified as
+ * approach="whatsapp" (see metaLeadApproachResolver.ts - never a name
+ * match, always destination_type="WHATSAPP" or an already-known number),
+ * with Meta's own raw ad id (needed to call graphClient.getAdInsights) and
+ * enough display context for a report row. Feeds
+ * metaAdInteractionService.ts's aggregate-interaction summary - this list
+ * is exactly "every ad Meta itself says is a WhatsApp destination", the
+ * same set metaLeadRoutes already tracks for real Lead attribution, reused
+ * here for the separate aggregate-metric side of the picture. */
+export async function listWhatsappRoutedAds(tenantId: string) {
+  const db = await getDb();
+  return db
+    .select({
+      metaAdId: metaAds.adId,
+      adName: metaAds.adName,
+      campaignName: metaCampaigns.name,
+    })
+    .from(metaLeadRoutes)
+    .innerJoin(metaAds, eq(metaLeadRoutes.metaAdId, metaAds.id))
+    .leftJoin(metaCampaigns, eq(metaLeadRoutes.metaCampaignId, metaCampaigns.id))
+    .where(and(eq(metaLeadRoutes.tenantId, tenantId), eq(metaLeadRoutes.approach, "whatsapp"), eq(metaLeadRoutes.status, "active")));
+}
+
 // ---- WhatsApp message events (Phase 6/7 - webhook durability + idempotency) ----
 
 export interface RecordWhatsappMessageEventInput {
