@@ -53,7 +53,12 @@ CREATE TABLE IF NOT EXISTS "crm"."whatsapp_message_events" (
 	"updated_at" timestamp with time zone
 );
 --> statement-breakpoint
-ALTER TABLE "crm"."leads" ADD COLUMN "lead_approach" text;--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "crm"."leads" ADD COLUMN "lead_approach" text;
+EXCEPTION
+ WHEN duplicate_column THEN null;
+END $$;
+--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "crm"."meta_lead_routes" ADD CONSTRAINT "meta_lead_routes_tenant_id_companies_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "crm"."companies"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
