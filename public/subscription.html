@@ -354,6 +354,17 @@
     me = await App.requireAuth();
     if (!me) return;
     App.renderNav(me, "/subscription.html");
+    // Phase 11 - the shared apiJson() 402/account_locked redirect
+    // (public/assets/app.js) always lands here with this query param, so a
+    // locked-out user sees exactly why they were sent here rather than a
+    // bare subscription page. The trial banner App.renderTrialBanner
+    // already rendered above (via requireAuth) covers the ordinary
+    // trial/expiry messaging - this is specifically about "you just tried
+    // to do something and were blocked."
+    if (new URLSearchParams(window.location.search).get("locked") === "1") {
+      document.getElementById("banner").innerHTML =
+        `<div class="banner info">Your trial or subscription has expired, so changes are paused. Subscribe below to pick up right where you left off - nothing has been lost.</div>`;
+    }
     try {
       await load();
     } catch (err) {

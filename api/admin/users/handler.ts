@@ -8,7 +8,7 @@
 // on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireAuth, requirePermission, parseCookies, type AuthContext } from "../../../src/infrastructure/auth/context";
+import { requireAuth, requirePermission, assertNotLockedOut, parseCookies, type AuthContext } from "../../../src/infrastructure/auth/context";
 import {
   countOtherActiveUsersWithRole,
   createUser,
@@ -796,6 +796,22 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   }
 
   const action = getQueryString(req, "action");
+
+  // Phase 11 - every genuinely mutating action below (add/invite/suspend/
+  // remove a client, generate/revoke an onboarding link) is blocked once
+  // the account is locked out; the reads (dashboard/leads-report/
+  // campaigns-report/client-detail/list-onboarding-links) and the two
+  // client-CONTEXT session actions (enter/exit - switching WHICH client's
+  // existing data you're viewing, not a CRM write) stay open on purpose -
+  // see assertNotLockedOut's own doc comment in
+  // src/infrastructure/auth/context.ts. "clients" is GET (list) or POST
+  // (add) - only the POST branch is a write, so it's narrowed by method
+  // here rather than excluded outright.
+  const AGENCY_WRITE_ACTIONS = new Set(["invite-client", "set-client-status", "generate-onboarding-link", "revoke-onboarding-link"]);
+  if (action && (AGENCY_WRITE_ACTIONS.has(action) || (action === "clients" && req.method !== "GET"))) {
+    if (!(await assertNotLockedOut(req, res, auth.companyId))) return;
+  }
+
   if (action === "dashboard") return handleAgencyDashboard(req, res, auth);
   if (action === "leads-report") return handleAgencyLeadsReport(req, res, auth);
   if (action === "campaigns-report") return handleAgencyCampaignsReport(req, res, auth);
@@ -1135,7 +1151,12 @@ async function handleAgencyInviteResource(req: VercelRequest, res: VercelRespons
 
   const action = getQueryString(req, "action");
   if (action === "pending") return handleAgencyInvitePending(req, res, auth.companyId);
-  if (action === "respond") return handleAgencyInviteRespond(req, res, auth.companyId, auth.userId);
+  if (action === "respond") {
+    // Phase 11 - accepting/declining an invite mutates this company's own
+    // agency_clients relationship, same lockout rule as every other write.
+    if (!(await assertNotLockedOut(req, res, auth.companyId))) return;
+    return handleAgencyInviteRespond(req, res, auth.companyId, auth.userId);
+  }
 
   res.status(404).json({ error: "Not found" });
 }

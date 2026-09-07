@@ -138,11 +138,42 @@ export async function resolvePoolRootCompanyId(companyId: string): Promise<{ roo
  * legitimate tenant's leads; getCampaignLimitStatus's own 404 on a missing
  * company is a separate, already-handled failure mode elsewhere.
  */
-export async function isLeadIngestionBlocked(companyId: string): Promise<boolean> {
+async function computeEntitlementBlocked(companyId: string): Promise<boolean> {
   const { rootCompanyId } = await resolvePoolRootCompanyId(companyId);
   const rootCompany = await getCompanyById(rootCompanyId);
   if (!rootCompany) return false;
   return isEntitlementBlocked(resolveEntitlementState(rootCompany));
+}
+
+export async function isLeadIngestionBlocked(companyId: string): Promise<boolean> {
+  return computeEntitlementBlocked(companyId);
+}
+
+/**
+ * Phase 11 - the harder trial-expiration lockout. A trial_expired or
+ * subscription_expired account can still VIEW everything it already has
+ * (every GET endpoint stays open - see requirePermission in
+ * src/infrastructure/auth/context.ts, the only caller of this function),
+ * but every WRITE gated by a specific permission (create/update/delete a
+ * lead, campaign, user, role, branch, setting, form, etc.) is blocked
+ * until the account subscribes. Identical underlying check to
+ * isLeadIngestionBlocked above (same computeEntitlementBlocked helper,
+ * same pool-root resolution so a claimed client is locked out by its
+ * agency's own state, never its own) - kept as a separate exported name
+ * because the two live at genuinely different call sites (a QStash
+ * background worker vs. every synchronous API write) and describe
+ * different things to a reader, even though the state they check is one
+ * and the same.
+ *
+ * The billing/subscribe endpoints themselves are the deliberate exception
+ * - a locked-out account must still be able to pay its way out - so
+ * requirePermission's callers for those two actions
+ * (handleBillingCreateOrder, handleBillingVerify in
+ * api/campaigns/handler.ts) pass { allowWhenBlocked: true } rather than
+ * this function ever special-casing a resource/action string itself.
+ */
+export async function isAccountLockedOut(companyId: string): Promise<boolean> {
+  return computeEntitlementBlocked(companyId);
 }
 
 /** Extra slots only count while the paid-for cycle is still in the future -

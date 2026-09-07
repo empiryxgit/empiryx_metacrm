@@ -662,7 +662,12 @@ async function handleBillingCreateOrder(req: VercelRequest, res: VercelResponse)
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  // Phase 11 - a locked-out (trial/subscription expired) account must
+  // still be able to start a payment, or it could never subscribe its way
+  // out. See requirePermission's own doc comment in
+  // src/infrastructure/auth/context.ts for why this is the only kind of
+  // call site allowed to opt out.
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE, { allowWhenBlocked: true });
   if (!auth) return;
 
   // `kind`: "subscribe" starts (or renews) the paid BASE plan itself -
@@ -707,7 +712,10 @@ async function handleBillingVerify(req: VercelRequest, res: VercelResponse) {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  // Phase 11 - same exemption as handleBillingCreateOrder above: verifying
+  // a payment that would UNLOCK the account can never itself be blocked by
+  // the account being locked.
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE, { allowWhenBlocked: true });
   if (!auth) return;
 
   const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = (req.body ?? {}) as {

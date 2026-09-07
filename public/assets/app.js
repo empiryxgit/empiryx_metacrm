@@ -40,6 +40,18 @@ const App = (() => {
     const res = await api(path, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      // Phase 11 - a fully expired trial/subscription blocks every
+      // permission-gated write across the whole app (see requirePermission
+      // in src/infrastructure/auth/context.ts) with this one machine-
+      // readable code, on every page, so it's handled once here rather
+      // than repeated at dozens of individual call sites the way the
+      // narrower 402 campaign_limit_reached/client_limit_reached codes
+      // are (those predate this and still redirect per-page - see
+      // campaigns.html/clients.html/agency-dashboard.html).
+      if (res.status === 402 && data.code === "account_locked") {
+        window.location.href = "/subscription.html?locked=1";
+        return new Promise(() => {}); // never resolves - navigation is happening
+      }
       // fieldErrors (per-field validation messages) is carried through when
       // present - see src/domain/formValidation.ts / api/forms/handler.ts -
       // so a caller can highlight individual inputs instead of just showing
