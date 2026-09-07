@@ -125,6 +125,10 @@ const App = (() => {
     branches: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 17.5S4.5 12.4 4.5 8.3a5.5 5.5 0 0 1 11 0c0 4.1-5.5 9.2-5.5 9.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="10" cy="8.2" r="1.9" stroke="currentColor" stroke-width="1.4"/></svg>`,
     settings: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.4"/><path d="M10 3v1.6M10 15.4V17M17 10h-1.6M4.6 10H3M14.9 5.1l-1.1 1.1M6.2 13.7l-1.1 1.1M14.9 14.9l-1.1-1.1M6.2 6.2 5.1 5.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     metaIntegration: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M8 6.5 4.8 9.7a2.3 2.3 0 0 0 3.3 3.3L11.2 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 13.5 15.2 10.3a2.3 2.3 0 0 0-3.3-3.3L8.8 10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    // "Subscription & Capacity" (public/subscription.html) - a simple card
+    // glyph, distinct from "settings" (a gear) since this is specifically
+    // about the plan/billing screen, not general configuration.
+    billing: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1.4" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 8.4h15" stroke="currentColor" stroke-width="1.4"/><path d="M5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     // "Agency" nav-group trigger - a small two-building skyline, distinct
     // from "branches" (a single location pin, used for one specific
     // client/branch) so the two dropdown triggers read differently at a
@@ -205,6 +209,14 @@ const App = (() => {
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
     { href: "/admin/branches.html", label: "Branches", perm: "branches.manage", icon: NAV_ICONS.branches },
     { href: "/settings.html", label: "Meta Integration", perm: "integrations.manage", icon: NAV_ICONS.metaIntegration },
+    // Direct entry point for public/subscription.html - same "company.manage"
+    // gate as the "Subscription & Capacity" card on settings.html itself
+    // (see that page's own load()). Without its own nav link here, this
+    // page was only reachable by clicking into "Meta Integration" above and
+    // noticing the card - unreachable at all for anyone who has
+    // company.manage but not integrations.manage, since that's the only
+    // other link in this list that lands on settings.html.
+    { href: "/subscription.html", label: "Subscription & Capacity", perm: "company.manage", icon: NAV_ICONS.billing },
   ];
 
   function navLinkHtml(link, activeHref, extraClass) {

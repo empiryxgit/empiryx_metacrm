@@ -235,7 +235,7 @@
   (async () => {
     me = await App.requireAuth();
     if (!me) return;
-    App.renderNav(me, "/settings.html");
+    App.renderNav(me, "/subscription.html");
     try {
       await load();
     } catch (err) {
