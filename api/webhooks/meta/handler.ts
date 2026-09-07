@@ -1,7 +1,8 @@
-// Meta HTTP surface - TWO otherwise-unrelated-looking concerns share this
-// one file/Vercel Function purely because Vercel's Hobby plan caps a
-// deployment at 12 Functions total and this was already the file for
-// everything Meta touches over raw HTTP (same reasoning api/admin/
+// Meta HTTP surface - plus, as of the campaign-limit/Razorpay billing
+// feature, a THIRD, entirely unrelated public webhook (see "3." below) -
+// share this one file/Vercel Function purely because Vercel's Hobby plan
+// caps a deployment at 12 Functions total and this was already the file
+// for everything Meta touches over raw HTTP (same reasoning api/admin/
 // users/handler.ts documents for folding in /api/branches/*):
 //
 //   1. The public per-campaign webhook receiver -
@@ -107,11 +108,37 @@
 //                                        surfaced to Meta (the ack is long
 //                                        gone by then).
 //
+//   4. THE RAZORPAY PAYMENT WEBHOOK - /api/webhooks/razorpay - nothing to
+//      do with Meta at all; folded in here purely because this file is
+//      already the one place in the deployment that (a) has bodyParser
+//      disabled file-wide and (b) already has a raw-body HMAC-signature
+//      verification helper to model a second one on (see
+//      verifyRazorpaySignature usage below, built directly on
+//      verifyMetaSignature's own pattern) - see this file's own top
+//      comment for why folding unrelated concerns into an existing
+//      Function, rather than creating a 13th, is this deployment's
+//      standing answer to the Hobby-plan cap.
+//        POST -> Razorpay calls this after a payment event (only
+//                "payment.captured" is acted on - see
+//                handleRazorpayWebhook below). Verified against
+//                RAZORPAY_WEBHOOK_SECRET (a SEPARATE secret from
+//                RAZORPAY_KEY_SECRET - configured in the Razorpay
+//                Dashboard's own Webhooks screen, not derived from the API
+//                keys), then handed to confirmOveragePaymentFromWebhook
+//                (src/application/billing.ts) - the AUTHORITATIVE fallback
+//                confirmation path for a purchase whose browser-side
+//                /api/billing/verify call never completed (tab closed
+//                mid-payment, a network blip, etc.). Idempotent by
+//                razorpay_order_id - see billingOrders' own doc comment in
+//                schema.ts for the full created->paid race this and the
+//                browser path both participate in.
+//
 // bodyParser is disabled for the whole file (Vercel configures it per-file,
-// not per-route) so the webhook receiver can verify X-Hub-Signature-256
-// against the exact raw bytes Meta sent - the OAuth/select/sync routes
-// below read+parse their own (small, trusted-shape) JSON bodies via
-// readJsonBody rather than relying on req.body.
+// not per-route) so the webhook receivers (Meta's, and now Razorpay's) can
+// verify their own signature header against the exact raw bytes each sent -
+// the OAuth/select/sync routes below read+parse their own (small,
+// trusted-shape) JSON bodies via readJsonBody rather than relying on
+// req.body.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyMetaSignature } from "../../../src/infrastructure/meta/verifySignature";
@@ -148,6 +175,8 @@ import { listMetaCampaignsWithMappingForAdAccount } from "../../../src/infrastru
 import { getLastMetaLeadReceivedAt } from "../../../src/infrastructure/db/repositories";
 import { countMetaLeadRoutesByApproach, listMetaWhatsappAccounts } from "../../../src/infrastructure/db/repositories/whatsapp";
 import { LEAD_APPROACHES } from "../../../src/domain/leadApproach";
+import { verifyRazorpayWebhookSignature } from "../../../src/infrastructure/razorpay/client";
+import { confirmOveragePaymentFromWebhook } from "../../../src/application/billing";
 
 export const config = {
   api: { bodyParser: false },
@@ -949,6 +978,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // subscription Meta already has registered against it keeps working.
   if (resource === "leadgen" || resource === "page-events") return handleMetaLeadgenWebhook(req, res);
   if (resource === "meta-forms") return handleMetaForms(req, res);
+  if (resource === "razorpay-webhook") return handleRazorpayWebhook(req, res);
 
   const slug = req.query.slug as string;
   const webhookConfig = await getWebhookConfigBySlug(slug);
@@ -1007,5 +1037,64 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Only a genuine failure to persist reaches here - tell Meta to retry.
     console.error("[webhook] Failed to persist incoming event:", err);
     res.status(500).json({ error: "Failed to persist event" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Razorpay payment webhook - see this file's own header comment (item 4)
+// for why this unrelated concern lives here. Public, unauthenticated (a
+// real webhook can't carry our session cookie), trust comes entirely from
+// the X-Razorpay-Signature HMAC check below - never from anything else in
+// the request.
+// ---------------------------------------------------------------------------
+async function handleRazorpayWebhook(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const rawBody = await readRawBody(req);
+  const signature = req.headers["x-razorpay-signature"];
+  const signatureHeader = (Array.isArray(signature) ? signature[0] : signature) ?? null;
+
+  if (!verifyRazorpayWebhookSignature(rawBody, signatureHeader)) {
+    // Same posture as the Meta receiver above - do not even parse an
+    // unverified body, let alone act on it.
+    res.status(401).json({ error: "Invalid signature" });
+    return;
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    res.status(400).json({ error: "Invalid JSON" });
+    return;
+  }
+
+  // Razorpay fires several event types (order.paid, payment.authorized,
+  // payment.captured, ...) - only payment.captured is Razorpay's own
+  // documented "funds actually captured" signal; every other event is
+  // acknowledged (200, so Razorpay stops retrying it) but otherwise
+  // ignored.
+  if (payload.event !== "payment.captured") {
+    res.status(200).json({ received: true, ignored: true });
+    return;
+  }
+
+  try {
+    const paymentEntity = (payload.payload as any)?.payment?.entity as { id?: string; order_id?: string } | undefined;
+    const razorpayOrderId = paymentEntity?.order_id;
+    const razorpayPaymentId = paymentEntity?.id;
+    if (!razorpayOrderId || !razorpayPaymentId) {
+      res.status(200).json({ received: true, ignored: true });
+      return;
+    }
+    await confirmOveragePaymentFromWebhook({ razorpayOrderId, razorpayPaymentId });
+    res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("[razorpay-webhook] Failed to process payment.captured:", err);
+    res.status(500).json({ error: "Failed to process webhook" });
   }
 }

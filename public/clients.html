@@ -397,6 +397,13 @@
       showCredentialModal(result);
       await load();
     } catch (err) {
+      // 402 = plan's client limit reached (see assertClientLimitNotReached
+      // in src/application/billing.ts) - send to the subscription page to
+      // buy extra capacity instead of just showing an error in the modal.
+      if (err.status === 402) {
+        window.location.href = "/subscription.html";
+        return;
+      }
       addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     } finally {
       addSaveBtn.disabled = false;
@@ -458,6 +465,10 @@
       inviteSuccess.innerHTML = `<div class="banner success">Invitation sent to ${App.escapeHtml(result.ownerEmail)}. ${App.escapeHtml(result.company.name)} will show up here once they accept.</div>`;
       await load();
     } catch (err) {
+      if (err.status === 402) {
+        window.location.href = "/subscription.html";
+        return;
+      }
       inviteError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     } finally {
       inviteSendBtn.disabled = false;

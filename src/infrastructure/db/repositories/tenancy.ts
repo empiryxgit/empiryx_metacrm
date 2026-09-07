@@ -100,6 +100,56 @@ export async function updateOnboardingProfileFields(
 }
 
 /**
+ * Applies a PAID overage order's capacity to a company row - the only
+ * writer of companies.extraCampaignSlots/extraClientSlots/
+ * extraCapacityCycle/extraCapacityExpiresAt (see those columns' own
+ * comments in schema.ts). Called exactly once per order, from whichever of
+ * verifyAndApplyOveragePayment / confirmOveragePaymentFromWebhook
+ * (src/application/billing.ts) wins that order's created->paid race - see
+ * markBillingOrderPaid's own comment for how that race is closed before
+ * this function is ever reached.
+ *
+ * Top-up rule: if this company's current overage cycle is STILL ACTIVE
+ * (extraCapacityExpiresAt in the future), the new purchase ADDS to the
+ * existing slots and the expiry becomes the LATER of the two dates -
+ * buying more capacity mid-cycle tops it up rather than throwing away
+ * time already paid for. If the previous cycle has already expired (or
+ * there was none), this is instead a fresh grant: the company's slots are
+ * SET to exactly what this purchase bought (not added to stale numbers
+ * from an expired cycle), with a brand-new expiry. Either way,
+ * extraCapacityCycle is always overwritten to reflect the cycle just
+ * purchased (display-only - see that column's own comment; it is never
+ * itself compared against "now").
+ */
+export async function applyOverageCapacityPurchase(
+  companyId: string,
+  input: { extraCampaigns: number; extraClients: number; cycle: string; expiresAt: Date },
+) {
+  const db = await getDb();
+  const company = await getCompanyById(companyId);
+  if (!company) return;
+
+  const now = new Date();
+  const currentExpiresAt = company.extraCapacityExpiresAt ? new Date(company.extraCapacityExpiresAt) : null;
+  const stillActive = currentExpiresAt !== null && currentExpiresAt.getTime() > now.getTime();
+
+  const nextCampaignSlots = (stillActive ? company.extraCampaignSlots : 0) + input.extraCampaigns;
+  const nextClientSlots = (stillActive ? company.extraClientSlots : 0) + input.extraClients;
+  const nextExpiresAt = stillActive && currentExpiresAt && currentExpiresAt.getTime() > input.expiresAt.getTime() ? currentExpiresAt : input.expiresAt;
+
+  await db
+    .update(companies)
+    .set({
+      extraCampaignSlots: nextCampaignSlots,
+      extraClientSlots: nextClientSlots,
+      extraCapacityCycle: input.cycle,
+      extraCapacityExpiresAt: nextExpiresAt,
+      updatedAt: now,
+    })
+    .where(eq(companies.id, companyId));
+}
+
+/**
  * Settings -> Business Configuration -> Industry/Template - see
  * api/onboarding/handler.ts's handleBusinessConfig, the only caller. Every
  * value here has ALREADY been validated by that caller (industryTemplate

@@ -805,6 +805,14 @@
       const { campaign } = await App.apiJson("/api/campaigns", { method: "POST", body });
       window.location.href = `/campaign.html?id=${campaign.id}`;
     } catch (err) {
+      // 402 = plan's campaign limit reached (see assertCampaignLimitNotReached
+      // in src/application/billing.ts) - hard block, so send the user
+      // straight to the subscription page to buy extra capacity instead of
+      // just showing an error banner they can't act on here.
+      if (err.status === 402) {
+        window.location.href = "/subscription.html";
+        return;
+      }
       banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     }
   });

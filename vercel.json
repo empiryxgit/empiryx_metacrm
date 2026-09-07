@@ -57,6 +57,10 @@
     { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },
     { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },
 
+    { "source": "/api/billing/status", "destination": "/api/campaigns/handler?resource=billing&action=status" },
+    { "source": "/api/billing/order", "destination": "/api/campaigns/handler?resource=billing&action=create-order" },
+    { "source": "/api/billing/verify", "destination": "/api/campaigns/handler?resource=billing&action=verify" },
+
     { "source": "/api/admin/roles", "destination": "/api/admin/roles/handler" },
     { "source": "/api/admin/roles/:roleId", "destination": "/api/admin/roles/handler?roleId=:roleId" },
 
@@ -108,6 +112,7 @@
 
     { "source": "/api/webhooks/meta/leadgen", "destination": "/api/webhooks/meta/handler?resource=leadgen" },
     { "source": "/api/webhooks/meta/page-events", "destination": "/api/webhooks/meta/handler?resource=page-events" },
+    { "source": "/api/webhooks/razorpay", "destination": "/api/webhooks/meta/handler?resource=razorpay-webhook" },
     { "source": "/api/webhooks/meta/:slug", "destination": "/api/webhooks/meta/handler?slug=:slug" },
 
     { "source": "/api/integrations/meta/connect", "destination": "/api/webhooks/meta/handler?resource=oauth-connect" },

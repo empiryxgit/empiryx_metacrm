@@ -11,7 +11,7 @@
 // already relied on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requirePermission } from "../../src/infrastructure/auth/context";
+import { requireAuth, requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import {
   createCampaign,
@@ -36,6 +36,15 @@ import { evaluateLegacyWebhookMigration } from "../../src/application/metaSync/l
 import { getConnectionForSync, flagConnectionIfAuthError, MetaSyncNotConnectedError } from "../../src/application/metaSync/metaConnectionService";
 import { getCampaignInsights, MetaApiError } from "../../src/infrastructure/meta/graphClient";
 import { getCachedCampaignInsights, setCachedCampaignInsights } from "../../src/infrastructure/cache/redis";
+import { AuthError } from "../../src/application/auth";
+import {
+  assertCampaignLimitNotReached,
+  createOverageOrder,
+  getBillingStatus,
+  LimitExceededError,
+  verifyAndApplyOveragePayment,
+} from "../../src/application/billing";
+import { isBillingCycle } from "../../src/domain/billing";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -52,6 +61,7 @@ function getBaseUrl(req: VercelRequest): string {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const resource = getQueryString(req, "resource");
   if (resource === "meta-campaigns") return handleMetaCampaigns(req, res);
+  if (resource === "billing") return handleBilling(req, res);
 
   const campaignId = getQueryString(req, "campaignId");
   const subresource = getQueryString(req, "sub");
@@ -115,6 +125,23 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     if (!branchAssertion.ok) {
       res.status(branchAssertion.status).json({ error: branchAssertion.error });
       return;
+    }
+
+    // Hard block, not a warning - a tenant (or an agency's pooled book,
+    // including a client acting on their own) at their plan's campaign
+    // limit is refused here, server-side, before a row is ever inserted -
+    // see assertCampaignLimitNotReached's own doc comment for exactly what
+    // "at the limit" is computed against. The frontend (campaigns.html)
+    // detects this 402 by its `code` and redirects straight to
+    // /subscription.html rather than just showing an error banner.
+    try {
+      await assertCampaignLimitNotReached(auth.companyId);
+    } catch (err) {
+      if (err instanceof LimitExceededError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
+        return;
+      }
+      throw err;
     }
 
     const campaign = await createCampaign({
@@ -575,5 +602,123 @@ async function handleMetaCampaignInsights(req: VercelRequest, res: VercelRespons
     await flagConnectionIfAuthError(auth.companyId, err, "Campaign insights");
     const message = err instanceof MetaApiError ? err.message : "Failed to load campaign insights from Meta.";
     res.status(502).json({ error: message });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Billing - campaign/client capacity + Razorpay overage purchases
+// (/api/billing/status, /api/billing/order, /api/billing/verify - see
+// vercel.json's own rewrites and public/subscription.html, the frontend
+// this powers). Folded into this same Vercel Function rather than getting
+// its own - see this file's header comment for why every route here
+// already shares one function, and README.md's "12-function" constraint.
+// ---------------------------------------------------------------------------
+
+async function handleBilling(req: VercelRequest, res: VercelResponse) {
+  const action = getQueryString(req, "action");
+  if (action === "status") return handleBillingStatus(req, res);
+  if (action === "create-order") return handleBillingCreateOrder(req, res);
+  if (action === "verify") return handleBillingVerify(req, res);
+  res.status(404).json({ error: "Not found" });
+}
+
+// Read-only - gated on plain requireAuth (not a specific permission) since
+// this is the same status a user gets redirected here to see right after
+// hitting a 402 creating a campaign, and CAMPAIGNS_MANAGE holders are not
+// necessarily COMPANY_MANAGE holders too. Deliberately does NOT run
+// through withEffectiveCompanyContext - billing/capacity is an
+// organization-level concern, same "always the caller's own real company"
+// posture agencyClientContext.ts documents for admin/company-settings
+// endpoints, not something that should ever be swapped by an agency's
+// active client context.
+async function handleBillingStatus(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  try {
+    const status = await getBillingStatus(auth.companyId);
+    res.status(200).json(status);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[billing/status] Failed:", err);
+    res.status(500).json({ error: "Failed to load billing status." });
+  }
+}
+
+// Gated on COMPANY_MANAGE (not CAMPAIGNS_MANAGE) - initiating a real charge
+// against the company is an admin-tier action, same tier as company
+// profile/settings, not something every campaign-manager-level user should
+// be able to trigger on their own.
+async function handleBillingCreateOrder(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  if (!auth) return;
+
+  const { quantity, cycle } = (req.body ?? {}) as { quantity?: number; cycle?: string };
+  if (!quantity || !Number.isInteger(quantity) || quantity < 1) {
+    res.status(400).json({ error: "quantity must be a positive whole number." });
+    return;
+  }
+  if (!isBillingCycle(cycle)) {
+    res.status(400).json({ error: "Unknown billing cycle." });
+    return;
+  }
+
+  try {
+    const order = await createOverageOrder({ companyId: auth.companyId, createdBy: auth.userId, quantity, cycle });
+    res.status(201).json(order);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[billing/create-order] Failed:", err);
+    res.status(500).json({ error: "Failed to start payment. Please try again." });
+  }
+}
+
+// The BROWSER round-trip confirmation - Checkout.js's own success handler
+// (see public/subscription.html) POSTs the completed payment's id+
+// signature here immediately; the Razorpay webhook (api/webhooks/meta/
+// handler.ts's razorpay-webhook branch) is the authoritative fallback if
+// this call never happens (tab closed mid-payment, network blip, etc.).
+async function handleBillingVerify(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
+  if (!auth) return;
+
+  const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = (req.body ?? {}) as {
+    razorpayOrderId?: string;
+    razorpayPaymentId?: string;
+    razorpaySignature?: string;
+  };
+  if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+    res.status(400).json({ error: "Missing payment details." });
+    return;
+  }
+
+  try {
+    const result = await verifyAndApplyOveragePayment({ companyId: auth.companyId, razorpayOrderId, razorpayPaymentId, razorpaySignature });
+    res.status(200).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[billing/verify] Failed:", err);
+    res.status(500).json({ error: "Failed to verify payment." });
   }
 }

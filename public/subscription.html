@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Subscription & Capacity — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .usage-row{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 0; border-bottom:1px solid var(--border); }
+  .usage-row:last-child{ border-bottom:none; }
+  .usage-label{ font-size:13.5px; color:var(--text-primary); font-weight:600; }
+  .usage-sub{ font-size:12px; color:var(--text-muted); margin-top:2px; }
+  .usage-count{ font-size:15px; font-weight:700; color:var(--text-primary); white-space:nowrap; }
+  .usage-count.limit-hit{ color:var(--danger); }
+  .usage-bar{ height:6px; border-radius:999px; background:var(--surface-sunken, #eee); overflow:hidden; margin-top:8px; }
+  .usage-bar-fill{ height:100%; background:var(--brand-primary); border-radius:999px; transition:width .2s ease; }
+  .usage-bar-fill.limit-hit{ background:var(--danger); }
+
+  .cycle-tabs{ display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 16px; }
+  .cycle-tab{ padding:8px 14px; border:1px solid var(--border); border-radius:999px; background:var(--surface); font-size:12.5px; font-weight:600; cursor:pointer; color:var(--text-secondary); }
+  .cycle-tab.active{ border-color:var(--brand-primary); background:var(--brand-primary-soft); color:var(--brand-primary-hover); }
+  .cycle-tab .save-badge{ margin-left:6px; font-weight:700; color:var(--success); }
+
+  .qty-row{ display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+  .qty-row input[type="number"]{ width:90px; margin:0; }
+  .qty-unit{ font-size:13px; color:var(--text-muted); }
+
+  .price-summary{ display:flex; align-items:baseline; justify-content:space-between; padding:14px 16px; background:var(--surface-sunken, #f7f6f3); border-radius:12px; margin-bottom:16px; }
+  .price-summary .amount{ font-size:22px; font-weight:800; color:var(--text-primary); }
+  .price-summary .amount-sub{ font-size:12px; color:var(--text-muted); }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap" style="max-width:760px">
+    <h1 class="page-title">Subscription &amp; Capacity</h1>
+    <p class="page-sub">Your plan's campaign and client limits, and where to add more.</p>
+    <div id="banner"></div>
+
+    <div class="card" id="usageCard">
+      <h2 class="section-title">Current usage</h2>
+      <div id="usageRows"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div></div>
+    </div>
+
+    <div class="card" id="externalCard" style="display:none">
+      <h2 class="section-title">Extra capacity</h2>
+      <p class="hint" style="margin:0">Your account is managed by an agency on RUTA - they own the plan and any extra campaign/client capacity for your team. Ask them to add more from their own Subscription &amp; Capacity page.</p>
+    </div>
+
+    <div class="card" id="purchaseCard" style="display:none">
+      <h2 class="section-title">Add extra capacity</h2>
+      <p class="hint" id="unitHint" style="margin:0 0 14px"></p>
+
+      <div class="qty-row">
+        <label for="qty" style="margin:0; font-size:13px; font-weight:600">Quantity</label>
+        <input type="number" id="qty" min="1" step="1" value="1" />
+        <span class="qty-unit" id="qtyUnitLabel"></span>
+      </div>
+
+      <div class="cycle-tabs" id="cycleTabs"></div>
+
+      <div class="price-summary">
+        <div>
+          <div class="amount" id="priceAmount">₹0</div>
+          <div class="amount-sub" id="priceSub"></div>
+        </div>
+        <button class="btn" type="button" id="payBtn">Pay &amp; add capacity</button>
+      </div>
+      <p class="hint" style="margin:0; font-size:11.5px">Payments are processed securely by Razorpay - RUTA never sees or stores your card, UPI, or bank details.</p>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me;
+  let status;
+  let selectedCycle = "monthly";
+
+  const fmtRupees = (paise) => "₹" + (paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+  function usageRowHtml(label, sub, used, limit) {
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const hit = used >= limit;
+    return `
+      <div class="usage-row" style="flex-direction:column; align-items:stretch; gap:4px">
+        <div style="display:flex; align-items:center; justify-content:space-between">
+          <div>
+            <div class="usage-label">${App.escapeHtml(label)}</div>
+            <div class="usage-sub">${App.escapeHtml(sub)}</div>
+          </div>
+          <div class="usage-count ${hit ? "limit-hit" : ""}">${used} / ${limit}</div>
+        </div>
+        <div class="usage-bar"><div class="usage-bar-fill ${hit ? "limit-hit" : ""}" style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }
+
+  function renderUsage() {
+    const rows = [];
+    rows.push(usageRowHtml(
+      "Campaigns",
+      status.accountType === "agency" ? "Across your agency and every client you manage" : "This account's own campaigns",
+      status.campaigns.used,
+      status.campaigns.limit,
+    ));
+    if (status.clients) {
+      rows.push(usageRowHtml("Clients", "Client organizations linked to your agency", status.clients.used, status.clients.limit));
+    }
+    document.getElementById("usageRows").innerHTML = rows.join("");
+
+    if (status.currentCycle && status.currentCycle.expiresAt) {
+      const when = new Date(status.currentCycle.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+      document.getElementById("banner").innerHTML = `<div class="banner info">Your extra capacity is active until ${when}.</div>`;
+    }
+  }
+
+  function renderPurchaseUi() {
+    if (status.managedExternally) {
+      document.getElementById("externalCard").style.display = "block";
+      document.getElementById("purchaseCard").style.display = "none";
+      return;
+    }
+    document.getElementById("purchaseCard").style.display = "block";
+
+    const isAgency = status.overage.kind === "agency_bundles";
+    document.getElementById("unitHint").textContent = isAgency
+      ? "Extra capacity is bought in bundles - each bundle adds 1 client and 2 campaigns to your agency's pooled limit."
+      : "Each unit adds one extra campaign to your plan.";
+    document.getElementById("qtyUnitLabel").textContent = isAgency ? "bundle(s)" : "campaign(s)";
+
+    const tabs = document.getElementById("cycleTabs");
+    tabs.innerHTML = status.overage.pricing.map((p) => `
+      <button type="button" class="cycle-tab ${p.cycle === selectedCycle ? "active" : ""}" data-cycle="${p.cycle}">
+        ${App.escapeHtml(p.label)}${p.discountPct ? `<span class="save-badge">Save ${p.discountPct}%</span>` : ""}
+      </button>
+    `).join("");
+    tabs.querySelectorAll(".cycle-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedCycle = btn.dataset.cycle;
+        renderPurchaseUi();
+      });
+    });
+
+    updatePriceSummary();
+  }
+
+  function updatePriceSummary() {
+    const qty = Math.max(1, parseInt(document.getElementById("qty").value, 10) || 1);
+    const pricing = status.overage.pricing.find((p) => p.cycle === selectedCycle);
+    const total = pricing.unitAmountInPaise * qty;
+    document.getElementById("priceAmount").textContent = fmtRupees(total);
+    document.getElementById("priceSub").textContent = `${qty} × ${status.overage.unitLabel}, ${pricing.label.toLowerCase()} billing`;
+  }
+
+  document.getElementById("qty").addEventListener("input", () => { if (status && !status.managedExternally) updatePriceSummary(); });
+
+  function loadRazorpayScript() {
+    return new Promise((resolve, reject) => {
+      if (window.Razorpay) return resolve();
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Could not load the payment SDK. Check your connection and try again."));
+      document.head.appendChild(script);
+    });
+  }
+
+  document.getElementById("payBtn").addEventListener("click", async () => {
+    const banner = document.getElementById("banner");
+    const payBtn = document.getElementById("payBtn");
+    banner.innerHTML = "";
+    const qty = Math.max(1, parseInt(document.getElementById("qty").value, 10) || 1);
+
+    payBtn.disabled = true;
+    payBtn.textContent = "Starting payment…";
+    try {
+      await loadRazorpayScript();
+      const order = await App.apiJson("/api/billing/order", { method: "POST", body: { quantity: qty, cycle: selectedCycle } });
+
+      const rzp = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amountInPaise,
+        currency: order.currency,
+        order_id: order.razorpayOrderId,
+        name: "RUTA",
+        description: status.overage.kind === "agency_bundles" ? "Extra client + campaign capacity" : "Extra campaign capacity",
+        prefill: { email: me.user.email, name: me.user.fullName },
+        theme: { color: "#F47B32" },
+        handler: async (response) => {
+          try {
+            await App.apiJson("/api/billing/verify", {
+              method: "POST",
+              body: {
+                razorpayOrderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature,
+              },
+            });
+            banner.innerHTML = `<div class="banner success">Payment received - your extra capacity is live.</div>`;
+            await load();
+          } catch (err) {
+            banner.innerHTML = `<div class="banner error">Payment succeeded but we couldn't confirm it here (${App.escapeHtml(err.message)}). It will be applied automatically shortly - refresh this page in a minute.</div>`;
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            payBtn.disabled = false;
+            payBtn.textContent = "Pay & add capacity";
+          },
+        },
+      });
+      rzp.on("payment.failed", (resp) => {
+        banner.innerHTML = `<div class="banner error">Payment failed: ${App.escapeHtml(resp.error?.description || "Please try again.")}</div>`;
+        payBtn.disabled = false;
+        payBtn.textContent = "Pay & add capacity";
+      });
+      rzp.open();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      payBtn.disabled = false;
+      payBtn.textContent = "Pay & add capacity";
+    }
+  });
+
+  async function load() {
+    status = await App.apiJson("/api/billing/status");
+    renderUsage();
+    renderPurchaseUi();
+  }
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings.html");
+    try {
+      await load();
+    } catch (err) {
+      document.getElementById("usageRows").innerHTML = `<div class="state-block"><p class="state-title">Couldn't load your plan</p><p class="state-desc">${App.escapeHtml(err.message)}</p></div>`;
+    }
+  })();
+</script>
+</body>
+</html>

@@ -175,6 +175,46 @@ export const companies = crm.table("companies", {
   // array is a valid, deliberate "none selected" answer (the step is
   // skippable - see PHASE 9's "I'll Set This Up Later").
   selectedLeadSources: jsonb("selected_lead_sources"),
+  // --- Campaign/client capacity billing (overage on top of the plan's
+  // base allowance - see src/domain/billing.ts for the fixed catalog of
+  // base limits and overage prices these columns are checked against, and
+  // src/application/billing.ts for how a payment turns into these numbers
+  // going up) ---------------------------------------------------------
+  // How many EXTRA campaign slots this company has paid for, beyond its
+  // plan's base allowance (baseCampaignLimit() in src/domain/billing.ts -
+  // 5 for Individual, 10 for Agency). For an agency, this lives on the
+  // AGENCY's own company row and applies to the pooled cross-client limit
+  // (see getCampaignLimitStatus's own comment) - a client company's row
+  // never carries its own extra slots, since a client never buys a plan of
+  // its own (see addClientOrganization's doc comment in
+  // src/application/agency.ts). Zero until the first overage purchase;
+  // reverts to zero once extraCapacityExpiresAt has passed (checked lazily
+  // at read time - same "no cron sweep, just compare to now()" posture as
+  // onboardingStep/accountType elsewhere in this table - a future renewal/
+  // auto-charge flow would need its own job, deliberately out of scope for
+  // this first pass).
+  extraCampaignSlots: integer("extra_campaign_slots").notNull().default(0),
+  // Same idea, agency-only: extra CLIENT slots beyond the plan's base 5
+  // (BASE_CLIENT_LIMIT_AGENCY). Always purchased together with campaign
+  // slots as one bundle (1 client + 2 campaigns per bundle - see
+  // AGENCY_BUNDLE_EXTRA_CLIENTS/AGENCY_BUNDLE_EXTRA_CAMPAIGNS), never sold
+  // separately, but tracked as its own column since the two limits
+  // (campaigns vs. clients) are checked at different times (campaign
+  // creation vs. add-client) against different counts.
+  extraClientSlots: integer("extra_client_slots").notNull().default(0),
+  // Which billing cycle the CURRENT (most recent) overage purchase was
+  // paid for - monthly|quarterly|halfyearly|yearly (see BillingCycle in
+  // src/domain/billing.ts). Display-only (what to show on the billing
+  // page as "renews on...") - the actual expiry that governs whether the
+  // slots above still count is extraCapacityExpiresAt, not this column.
+  extraCapacityCycle: text("extra_capacity_cycle"),
+  // When the currently-active overage purchase's paid-for cycle ends - the
+  // slots above are only honored while this is in the future (see
+  // extraSlotsActive() in src/application/billing.ts). A top-up purchase
+  // made while a cycle is still active ADDS to the existing slots and
+  // extends this date rather than starting over - see
+  // applyOverageCapacityPurchase's own comment for the exact rule.
+  extraCapacityExpiresAt: timestamp("extra_capacity_expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (t) => ({
@@ -1848,3 +1888,114 @@ export const reconciliationRuns = crm.table("reconciliation_runs", {
   errors: integer("errors").notNull().default(0),
   notes: text("notes"),
 });
+
+// ---------------------------------------------------------------------------
+// Billing - Razorpay overage orders (extra campaign/client capacity bought
+// on top of a plan's base allowance - see companies.extraCampaignSlots/
+// extraClientSlots above for where a PAID order actually lands, and
+// src/application/billing.ts for the flow end to end).
+// ---------------------------------------------------------------------------
+
+/**
+ * One row per Razorpay Order this app has ever created for an overage
+ * purchase - created in "created" status the moment the /api/billing/order
+ * endpoint asks Razorpay for an order (before the buyer has paid anything),
+ * then flipped to "paid" exactly once by whichever of the two independent
+ * confirmation paths gets there first:
+ *   1. The BROWSER round-trip - Checkout.js hands the completed payment's
+ *      razorpay_payment_id/razorpay_signature back to /api/billing/verify,
+ *      which HMAC-verifies them and applies capacity immediately (fast
+ *      path - the buyer sees their new limit right away).
+ *   2. The Razorpay WEBHOOK (payment.captured) - the authoritative
+ *      fallback for when step 1 never completes (buyer closes the tab
+ *      mid-payment, a network blip eats the browser's own verify call,
+ *      etc.) - see api/webhooks/meta/handler.ts's razorpay-webhook branch.
+ * Both paths go through markBillingOrderPaid()'s conditional "UPDATE ...
+ * WHERE status = 'created'" (src/infrastructure/db/repositories/
+ * billing.ts) - only the one that actually wins that race applies
+ * companies.extraCampaignSlots/extraClientSlots; the loser just stamps its
+ * own confirmation timestamp. This is what makes a duplicate webhook
+ * delivery (Razorpay's own docs say to expect retries) or a buyer
+ * refreshing the success page never grant capacity twice for one payment.
+ *
+ * razorpayOrderId is UNIQUE and is the join key both paths look this row
+ * up by - never companyId+quantity+cycle, which could collide across two
+ * genuinely separate purchases.
+ */
+export const billingOrders = crm.table(
+  "billing_orders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    // Always the PAYING company - for an agency's overage purchase this is
+    // the agency's own id, never a client's (a client never buys a plan of
+    // its own - see companies.extraCampaignSlots' own comment above and
+    // resolvePoolRootCompanyId in src/application/billing.ts, which is what
+    // guarantees this is always the correct root before an order is ever
+    // created).
+    companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // The user who clicked "Pay" - nullable + ON DELETE SET NULL, same
+    // "never let removing a user delete history" posture as every other
+    // createdBy column in this schema.
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    // "individual_campaigns" | "agency_bundles" - see OverageKind in
+    // src/domain/billing.ts. Determines both the unit price this order was
+    // priced at and what buying `quantity` of it actually grants (raw
+    // campaign slots vs. client+campaign bundles) - see
+    // overageSlotsForQuantity().
+    kind: text("kind").notNull(),
+    // How many units of `kind` this order is for (raw campaigns for
+    // Individual, bundles for Agency) - always a positive whole number,
+    // validated at the API layer before an order is ever created.
+    quantity: integer("quantity").notNull(),
+    // "monthly" | "quarterly" | "halfyearly" | "yearly" - see BillingCycle
+    // in src/domain/billing.ts. Which upfront cycle this specific purchase
+    // paid for; drives both the price charged (computeOverageAmountInPaise)
+    // and how far out extraCapacityExpiresAt is pushed once paid.
+    cycle: text("cycle").notNull(),
+    // Razorpay's own smallest-unit convention (paise, not rupees) - the
+    // exact amount the Razorpay Order was created for, snapshotted here so
+    // this row is a true historical receipt even if the pricing catalog in
+    // src/domain/billing.ts changes later.
+    amountInPaise: integer("amount_in_paise").notNull(),
+    currency: text("currency").notNull().default("INR"),
+    // Razorpay's own order id (order_XXXXXXXX) - the id Checkout.js opens
+    // client-side and the id both confirmation paths look this row up by.
+    // UNIQUE: exactly one billing_orders row per Razorpay order, ever.
+    razorpayOrderId: text("razorpay_order_id").notNull(),
+    // Populated once a payment attempt against this order completes -
+    // Razorpay's own payment id (pay_XXXXXXXX). Null while status is still
+    // "created" (order exists, nobody has paid yet).
+    razorpayPaymentId: text("razorpay_payment_id"),
+    // The razorpay_signature Checkout.js returned alongside
+    // razorpayPaymentId - kept for audit only (the HMAC check itself
+    // already happened before this row was ever marked "paid"; this is not
+    // re-validated on read). Null for a webhook-only confirmation (the
+    // webhook carries no browser-side signature triple of its own - see
+    // confirmOveragePaymentFromWebhook's own comment).
+    razorpaySignature: text("razorpay_signature"),
+    // "created" | "paid" | "failed" - not a DB enum, same convention as
+    // every other status column in this schema. The ONLY column
+    // markBillingOrderPaid's conditional UPDATE gates on - see this
+    // table's own doc comment above for why that matters.
+    status: text("status").notNull().default("created"),
+    // Set when the BROWSER round-trip (step 1 above) is what won the
+    // created->paid race for this order. Independent of
+    // webhookConfirmedAt below - a genuinely paid order commonly has only
+    // one of the two set, and that is expected, not a data-quality problem.
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    // Set whenever the Razorpay webhook (step 2 above) has independently
+    // confirmed this payment - whether or not IT was the one that won the
+    // created->paid race (see stampBillingOrderWebhookConfirmed's own
+    // comment: an order the browser round-trip already paid still gets
+    // this stamped for the audit trail).
+    webhookConfirmedAt: timestamp("webhook_confirmed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    companyIdx: index("ix_billing_orders_company_id").on(t.companyId),
+    razorpayOrderIdx: uniqueIndex("ux_billing_orders_razorpay_order_id").on(t.razorpayOrderId),
+    statusIdx: index("ix_billing_orders_status").on(t.status),
+    createdAtIdx: index("ix_billing_orders_created_at").on(t.createdAt),
+  }),
+);

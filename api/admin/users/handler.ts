@@ -63,6 +63,7 @@ import {
   listOnboardingLinks,
   revokeOnboardingLink,
 } from "../../../src/application/agencyOnboarding";
+import { assertClientLimitNotReached, LimitExceededError } from "../../../src/application/billing";
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -968,9 +969,22 @@ async function handleAgencyClientsCollection(req: VercelRequest, res: VercelResp
       return;
     }
     try {
+      // Hard block, not a warning - same posture as the campaign limit
+      // (see api/campaigns/handler.ts's own comment) - an agency at its
+      // plan's client limit is refused here, server-side, before a new
+      // client company is ever created. Always checked against the
+      // agency's own real companyId (never swapped by client context -
+      // this handler never runs through withEffectiveCompanyContext, see
+      // agencyClientContext.ts's own documented rule for administration
+      // endpoints).
+      await assertClientLimitNotReached(auth.companyId);
       const result = await addClientOrganization({ agencyCompanyId: auth.companyId, actingUserId: auth.userId, companyName, ownerName, ownerEmail });
       res.status(201).json(result);
     } catch (err) {
+      if (err instanceof LimitExceededError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
+        return;
+      }
       if (err instanceof AuthError) {
         res.status(err.status).json({ error: err.message });
         return;
@@ -995,9 +1009,18 @@ async function handleAgencyInviteClient(req: VercelRequest, res: VercelResponse,
     return;
   }
   try {
+    // Same hard block as handleAgencyClientsCollection's POST above - an
+    // invite still ultimately claims a client slot once accepted, so it's
+    // refused up front rather than letting the agency collect an
+    // acceptance it can't actually seat.
+    await assertClientLimitNotReached(agencyCompanyId);
     const result = await inviteExistingClient({ agencyCompanyId, actingUserId, ownerEmail });
     res.status(201).json(result);
   } catch (err) {
+    if (err instanceof LimitExceededError) {
+      res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
+      return;
+    }
     if (err instanceof AuthError) {
       res.status(err.status).json({ error: err.message });
       return;
