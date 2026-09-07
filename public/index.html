@@ -271,25 +271,6 @@
   .faq-note{ max-width:780px; margin:20px auto 0; text-align:center; font-size:13.5px; color:var(--text-muted); }
   .faq-note a{ color:var(--brand-primary-hover); font-weight:600; }
 
-  /* ---------- Digital Marketing cross-sell ---------- */
-  #digital-marketing{ padding:0 0 56px; }
-  .dm-wrap{
-    background:var(--brand-dark); border-radius:28px; padding:40px 48px; color:#fff; margin:0 24px;
-    display:flex; align-items:center; justify-content:space-between; gap:40px; flex-wrap:wrap; box-shadow:var(--shadow-lg);
-  }
-  .dm-content{ max-width:600px; }
-  .dm-eyebrow{ font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--brand-primary); margin:0 0 12px; }
-  .dm-h{ font-size:26px; font-weight:800; letter-spacing:-0.01em; margin:0 0 12px; color:#fff; }
-  .dm-sub{ font-size:14px; line-height:1.65; color:var(--text-on-dark-muted); margin:0 0 22px; }
-  .dm-list{ list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(2,1fr); gap:11px 24px; }
-  .dm-list li{ display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; color:#fff; }
-  .dm-ic{
-    flex-shrink:0; width:22px; height:22px; border-radius:7px; background:rgba(244,123,50,.22); color:var(--brand-primary);
-    display:flex; align-items:center; justify-content:center;
-  }
-  .dm-cta{ display:flex; flex-direction:column; align-items:center; gap:10px; flex-shrink:0; }
-  .dm-cta-note{ font-size:12px; color:var(--text-on-dark-muted); }
-
   /* ---------- Final CTA ---------- */
   .cta-band{
     background:linear-gradient(135deg, var(--brand-primary) 0%, #E86A28 100%);
@@ -322,7 +303,6 @@
     .steps{ grid-template-columns:repeat(2,1fr); gap:32px 18px; }
     .step-line{ display:none; }
     .industries-wrap{ margin:0 16px; }
-    .dm-wrap{ margin:0 16px; }
     .pricing-card{ grid-template-columns:1fr; }
     .pricing-card-features{ border-right:none; border-bottom:1px solid var(--border); }
   }
@@ -339,10 +319,6 @@
     .ind-grid{ grid-template-columns:1fr; }
     .industries-wrap{ padding:32px 0; margin:0; border-radius:0; }
     .industries-wrap .container{ padding:0 18px; }
-    #digital-marketing{ padding:0 0 32px; }
-    .dm-wrap{ padding:28px 20px; margin:0; border-radius:0; flex-direction:column; align-items:flex-start; }
-    .dm-list{ grid-template-columns:1fr; }
-    .dm-cta{ align-items:flex-start; width:100%; }
     .cta-band{ padding:32px 20px; }
     .hero-toast{ display:none; }
     .hv-toast{ display:none; }
@@ -376,7 +352,6 @@
         <a href="#industries">Industries</a>
         <a href="#how-it-works">How it works</a>
         <a href="#pricing">Pricing</a>
-        <a href="#digital-marketing">Marketing</a>
         <a href="#faq">FAQ</a>
       </nav>
       <div class="nav-cta">
@@ -392,7 +367,6 @@
       <a href="#industries" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Industries</a>
       <a href="#how-it-works" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">How it works</a>
       <a href="#pricing" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Pricing</a>
-      <a href="#digital-marketing" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Digital Marketing</a>
       <a href="#faq" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">FAQ</a>
       <a href="https://cal.com/empiryx-support/30min" target="_blank" rel="noopener noreferrer" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Talk to our Team</a>
     </div>
@@ -717,29 +691,6 @@
     </div>
   </section>
 
-    <!-- ================= DIGITAL MARKETING ================= -->
-  <section id="digital-marketing">
-    <div class="container">
-      <div class="dm-wrap">
-        <div class="dm-content">
-          <p class="dm-eyebrow">Need leads, not just lead management?</p>
-          <h2 class="dm-h">We also run full-service Digital Marketing</h2>
-          <p class="dm-sub">Beyond the RUTA platform itself, our in-house digital marketing team can plan, create, and run your Meta ad campaigns end to end — campaign strategy and audience targeting, ad creative and content, and ongoing optimization while the campaign is live. Every lead those campaigns generate flows straight into the same RUTA pipeline you already use, so it's one connected package: ads that bring the leads in, and an LMS that makes sure none of them get missed.</p>
-          <ul class="dm-list">
-            <li><span class="dm-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Campaign strategy &amp; targeting</li>
-            <li><span class="dm-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Ad creative &amp; content</li>
-            <li><span class="dm-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Ongoing optimization</li>
-            <li><span class="dm-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>Leads flow straight into RUTA</li>
-          </ul>
-        </div>
-        <div class="dm-cta">
-          <a href="https://cal.com/empiryx-support/30min" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-lg">Let's Connect →</a>
-          <span class="dm-cta-note">Book a 30-minute call with our team</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
   <!-- ================= FAQ ================= -->
   <section id="faq">
     <div class="container">
@@ -818,13 +769,6 @@
           </summary>
           <div class="faq-answer"><p>Yes. Every client's data lives in its own isolated account — agency users only ever see clients they've been explicitly assigned to, and every time an agency user accesses a client's data, it's automatically logged.</p></div>
         </details>
-
-        <details class="faq-item">
-          <summary>Do you also help with Digital Marketing, not just lead management?
-            <span class="faq-toggle-ic"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></span>
-          </summary>
-          <div class="faq-answer"><p>Yes. Beyond the RUTA platform itself, our in-house digital marketing team can plan, create, and run your Meta ad campaigns end to end — campaign strategy and audience targeting, ad creative and copy, and ongoing optimization while the campaign is live. Every lead those campaigns generate flows straight into the same RUTA pipeline you're already using, so you get one connected package instead of stitching together a separate agency and a separate tool: campaigns that bring the leads in, and an LMS that makes sure none of them get missed. See <a href="#digital-marketing">Digital Marketing</a> below, or <a href="https://cal.com/empiryx-support/30min" target="_blank" rel="noopener noreferrer">let's connect</a> to talk through your campaigns.</p></div>
-        </details>
       </div>
 
       <p class="faq-note">Didn't find your answer? Email us at <a href="mailto:empiryxtech@gmail.com">empiryxtech@gmail.com</a> and we'll help.</p>
@@ -866,7 +810,6 @@
             <a href="#industries">Industries</a>
             <a href="#how-it-works">How it works</a>
             <a href="#pricing">Pricing</a>
-            <a href="#digital-marketing">Digital Marketing</a>
             <a href="#faq">FAQ</a>
             <a href="/login.html">Access LMS</a>
           </div>
