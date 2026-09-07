@@ -58,6 +58,7 @@
     { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },
 
     { "source": "/api/billing/status", "destination": "/api/campaigns/handler?resource=billing&action=status" },
+    { "source": "/api/billing/history", "destination": "/api/campaigns/handler?resource=billing&action=history" },
     { "source": "/api/billing/order", "destination": "/api/campaigns/handler?resource=billing&action=create-order" },
     { "source": "/api/billing/verify", "destination": "/api/campaigns/handler?resource=billing&action=verify" },
 

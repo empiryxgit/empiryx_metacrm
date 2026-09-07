@@ -31,6 +31,19 @@
   .price-summary{ display:flex; align-items:baseline; justify-content:space-between; padding:14px 16px; background:var(--surface-sunken, #f7f6f3); border-radius:12px; margin-bottom:16px; }
   .price-summary .amount{ font-size:22px; font-weight:800; color:var(--text-primary); }
   .price-summary .amount-sub{ font-size:12px; color:var(--text-muted); }
+  .page-tabs{ display:flex; gap:4px; margin:20px 0; border-bottom:1px solid var(--border); }
+  .page-tab{ border:0; border-bottom:2px solid transparent; background:transparent; color:var(--text-muted); cursor:pointer; padding:10px 14px; font:inherit; font-size:13px; font-weight:700; }
+  .page-tab.active{ border-bottom-color:var(--brand-primary); color:var(--brand-primary-hover); }
+  .history-table-wrap{ overflow-x:auto; }
+  .history-table{ width:100%; border-collapse:collapse; min-width:620px; }
+  .history-table th,.history-table td{ padding:12px 10px; border-bottom:1px solid var(--border); text-align:left; font-size:12.5px; white-space:nowrap; }
+  .history-table th{ color:var(--text-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+  .history-table td{ color:var(--text-primary); }
+  .history-table tr:last-child td{ border-bottom:0; }
+  .payment-status{ display:inline-flex; padding:4px 8px; border-radius:999px; font-size:11px; font-weight:700; text-transform:capitalize; }
+  .payment-status.paid{ background:var(--success-soft, #e7f5ec); color:var(--success); }
+  .payment-status.created{ background:var(--surface-sunken, #f2f1ee); color:var(--text-muted); }
+  .payment-status.failed{ background:var(--danger-soft, #fdecec); color:var(--danger); }
 </style>
 </head>
 <body>
@@ -40,6 +53,12 @@
     <p class="page-sub">Your plan's campaign and client limits, and where to add more.</p>
     <div id="banner"></div>
 
+    <div class="page-tabs" role="tablist" aria-label="Subscription views">
+      <button class="page-tab active" id="overviewTab" type="button" role="tab" aria-selected="true">Overview</button>
+      <button class="page-tab" id="historyTab" type="button" role="tab" aria-selected="false">Payment History</button>
+    </div>
+
+    <div id="overviewView">
     <div class="card" id="usageCard">
       <h2 class="section-title">Current usage</h2>
       <div id="usageRows"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div></div>
@@ -87,6 +106,13 @@
       </div>
       <p class="hint" style="margin:0; font-size:11.5px">Payments are processed securely by Razorpay - RUTA never sees or stores your card, UPI, or bank details.</p>
     </div>
+    </div>
+
+    <div class="card" id="historyView" style="display:none">
+      <h2 class="section-title">Payment History</h2>
+      <p class="hint" style="margin:0 0 16px">A record of subscription and extra-capacity payments made by your account.</p>
+      <div id="historyContent"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div></div>
+    </div>
   </div>
 
 <script src="/assets/app.js"></script>
@@ -95,8 +121,57 @@
   let status;
   let selectedCycle = "monthly";
   let selectedSubscribeCycle = "monthly";
+  let historyLoaded = false;
 
   const fmtRupees = (paise) => "₹" + (paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+
+  function paymentKindLabel(kind, quantity) {
+    if (kind === "base_subscription") return "Base subscription";
+    if (kind === "agency_bundles") return `${quantity} extra capacity bundle${quantity === 1 ? "" : "s"}`;
+    return `${quantity} extra campaign${quantity === 1 ? "" : "s"}`;
+  }
+
+  function formatPaymentDate(value) {
+    return new Date(value).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  async function loadPaymentHistory() {
+    const result = await App.apiJson("/api/billing/history");
+    const content = document.getElementById("historyContent");
+    if (!result.orders.length) {
+      content.innerHTML = `<div class="state-block"><p class="state-title">No payments yet</p><p class="state-desc">Your completed and pending payment orders will appear here.</p></div>`;
+      historyLoaded = true;
+      return;
+    }
+    content.innerHTML = `<div class="history-table-wrap"><table class="history-table"><thead><tr><th>Date</th><th>Purchase</th><th>Cycle</th><th>Amount</th><th>Status</th><th>Payment ID</th></tr></thead><tbody>${result.orders.map((order) => `
+      <tr>
+        <td>${formatPaymentDate(order.createdAt)}</td>
+        <td>${App.escapeHtml(paymentKindLabel(order.kind, order.quantity))}</td>
+        <td>${App.escapeHtml(order.cycle)}</td>
+        <td>${App.escapeHtml(fmtRupees(order.amountInPaise))}</td>
+        <td><span class="payment-status ${App.escapeHtml(order.status)}">${App.escapeHtml(order.status)}</span></td>
+        <td>${App.escapeHtml(order.razorpayPaymentId || order.razorpayOrderId)}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+    historyLoaded = true;
+  }
+
+  function selectView(view) {
+    const overview = view === "overview";
+    document.getElementById("overviewView").style.display = overview ? "block" : "none";
+    document.getElementById("historyView").style.display = overview ? "none" : "block";
+    document.getElementById("overviewTab").classList.toggle("active", overview);
+    document.getElementById("historyTab").classList.toggle("active", !overview);
+    document.getElementById("overviewTab").setAttribute("aria-selected", String(overview));
+    document.getElementById("historyTab").setAttribute("aria-selected", String(!overview));
+    if (!overview && !historyLoaded) {
+      loadPaymentHistory().catch((err) => {
+        document.getElementById("historyContent").innerHTML = `<div class="state-block"><p class="state-title">Couldn't load payment history</p><p class="state-desc">${App.escapeHtml(err.message)}</p></div>`;
+      });
+    }
+  }
+
+  document.getElementById("overviewTab").addEventListener("click", () => selectView("overview"));
+  document.getElementById("historyTab").addEventListener("click", () => selectView("history"));
 
   function usageRowHtml(label, sub, used, limit) {
     const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;

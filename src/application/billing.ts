@@ -28,20 +28,16 @@ import {
   computeOverageAmountInPaise,
   cycleEndDate,
   overageKindForAccountType,
-  overageSlotsForQuantity,
   CYCLE_DISCOUNT,
   CYCLE_LABELS,
   BILLING_CYCLE_KEYS,
   type BillingCycle,
   type OverageKind,
-  type PurchaseKind,
 } from "../domain/billing";
 import { resolveEntitlementState, effectiveCampaignLimit, effectiveClientLimit, isEntitlementBlocked, type EntitlementState } from "../domain/trial";
 import { selectExcessForDowngrade, type DowngradeCandidate } from "../domain/capacityDowngrade";
 import {
   getCompanyById,
-  applyOverageCapacityPurchase,
-  applyBaseSubscriptionPurchase,
 } from "../infrastructure/db/repositories/tenancy";
 import { listClaimedClientOrganizations, getClaimingAgencyForClient, setAgencyClientStatus } from "../infrastructure/db/repositories/organizations";
 import { listCampaigns, listCampaignsForCompanies, updateCampaign } from "../infrastructure/db/repositories/campaigns";
@@ -49,7 +45,8 @@ import { recordAgencyAuditEvent } from "./agencyAuditLog";
 import {
   getBillingOrderByRazorpayOrderId,
   insertBillingOrder,
-  markBillingOrderPaid,
+  listBillingOrdersForCompany,
+  markBillingOrderPaidAndApply,
   stampBillingOrderWebhookConfirmed,
 } from "../infrastructure/db/repositories/billing";
 import { createRazorpayOrder, verifyRazorpayPaymentSignature } from "../infrastructure/razorpay/client";
@@ -490,6 +487,17 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
   };
 }
 
+export async function getBillingHistory(companyId: string) {
+  const { rootCompanyId } = await resolvePoolRootCompanyId(companyId);
+  const orders = await listBillingOrdersForCompany(rootCompanyId);
+  return orders.map((order) => ({
+    ...order,
+    createdAt: order.createdAt.toISOString(),
+    verifiedAt: order.verifiedAt?.toISOString() ?? null,
+    webhookConfirmedAt: order.webhookConfirmedAt?.toISOString() ?? null,
+  }));
+}
+
 /**
  * Lean read used by /api/auth/me (see api/auth/handler.ts's handleMe) to
  * power the trial banner shown on every protected page (App.renderTrialBanner
@@ -618,29 +626,6 @@ export async function createBaseSubscriptionOrder(input: {
   };
 }
 
-/** Branches on the order's own stored `kind` (see PurchaseKind in
- * src/domain/billing.ts) - a base_subscription order converts the company
- * to an active paid plan (applyBaseSubscriptionPurchase), while either
- * overage kind (individual_campaigns/agency_bundles, the only other values
- * ever written to billingOrders.kind) grants extra capacity on top of an
- * already-active plan, exactly as before this feature existed. */
-async function applyPaidOrder(order: { companyId: string; kind: string; quantity: number; cycle: string }) {
-  if ((order.kind as PurchaseKind) === BASE_SUBSCRIPTION_KIND) {
-    await applyBaseSubscriptionPurchase(order.companyId, {
-      cycle: order.cycle,
-      expiresAt: cycleEndDate(order.cycle as BillingCycle),
-    });
-    return;
-  }
-  const { extraCampaigns, extraClients } = overageSlotsForQuantity(order.kind as OverageKind, order.quantity);
-  await applyOverageCapacityPurchase(order.companyId, {
-    extraCampaigns,
-    extraClients,
-    cycle: order.cycle,
-    expiresAt: cycleEndDate(order.cycle as BillingCycle),
-  });
-}
-
 /** The BROWSER round-trip confirmation path - Checkout.js's own success
  * callback POSTs here with the completed payment's id+signature. */
 export async function verifyAndApplyOveragePayment(input: {
@@ -657,15 +642,13 @@ export async function verifyAndApplyOveragePayment(input: {
     throw new AuthError("Payment signature verification failed.", 400);
   }
 
-  const won = await markBillingOrderPaid(input.razorpayOrderId, {
+  const won = await markBillingOrderPaidAndApply({
+    razorpayOrderId: input.razorpayOrderId,
     razorpayPaymentId: input.razorpayPaymentId,
     razorpaySignature: input.razorpaySignature,
     via: "verify",
+    expiresAt: cycleEndDate(order.cycle as BillingCycle),
   });
-
-  if (won) {
-    await applyPaidOrder(order);
-  }
 
   return { applied: true, alreadyProcessed: !won };
 }
@@ -681,7 +664,8 @@ export async function confirmOveragePaymentFromWebhook(input: { razorpayOrderId:
   if (!order) return;
 
   if (order.status === "created") {
-    const won = await markBillingOrderPaid(input.razorpayOrderId, {
+    const won = await markBillingOrderPaidAndApply({
+      razorpayOrderId: input.razorpayOrderId,
       razorpayPaymentId: input.razorpayPaymentId,
       // The webhook carries no browser-side signature triple of its own -
       // the webhook's OWN HMAC (already verified by the caller, see
@@ -689,9 +673,9 @@ export async function confirmOveragePaymentFromWebhook(input: { razorpayOrderId:
       // trust boundary for this confirmation path.
       razorpaySignature: null,
       via: "webhook",
+      expiresAt: cycleEndDate(order.cycle as BillingCycle),
     });
     if (won) {
-      await applyPaidOrder(order);
       return;
     }
   }

@@ -41,6 +41,7 @@ import {
   assertCampaignLimitNotReached,
   createBaseSubscriptionOrder,
   createOverageOrder,
+  getBillingHistory,
   getBillingStatus,
   LimitExceededError,
   verifyAndApplyOveragePayment,
@@ -618,9 +619,30 @@ async function handleMetaCampaignInsights(req: VercelRequest, res: VercelRespons
 async function handleBilling(req: VercelRequest, res: VercelResponse) {
   const action = getQueryString(req, "action");
   if (action === "status") return handleBillingStatus(req, res);
+  if (action === "history") return handleBillingHistory(req, res);
   if (action === "create-order") return handleBillingCreateOrder(req, res);
   if (action === "verify") return handleBillingVerify(req, res);
   res.status(404).json({ error: "Not found" });
+}
+
+async function handleBillingHistory(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  try {
+    res.status(200).json({ orders: await getBillingHistory(auth.companyId) });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[billing/history] Failed:", err);
+    res.status(500).json({ error: "Failed to load payment history." });
+  }
 }
 
 // Read-only - gated on plain requireAuth (not a specific permission) since
