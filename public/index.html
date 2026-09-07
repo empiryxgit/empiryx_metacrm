@@ -191,6 +191,41 @@
   .step h3{ font-size:15px; font-weight:700; margin:0 0 8px; color:var(--text-primary); }
   .step p{ font-size:13.5px; line-height:1.6; color:var(--text-secondary); margin:0; }
 
+  /* ---------- Pricing ---------- */
+  .trial-banner{
+    display:flex; align-items:center; justify-content:space-between; gap:28px; flex-wrap:wrap;
+    background:linear-gradient(135deg, var(--brand-primary) 0%, #E86A28 100%);
+    border-radius:var(--radius-lg); padding:36px 40px; color:#fff; margin-bottom:36px; box-shadow:var(--shadow-lg);
+  }
+  .trial-banner-badge{ display:inline-flex; align-items:center; gap:8px; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; background:rgba(255,255,255,.18); border-radius:999px; padding:6px 14px; margin:0 0 12px; }
+  .trial-banner h3{ font-size:22px; font-weight:800; margin:0 0 8px; letter-spacing:-0.01em; }
+  .trial-banner p{ font-size:14.5px; color:rgba(255,255,255,.9); margin:0; max-width:460px; line-height:1.55; }
+  .trial-banner-cta{ display:flex; flex-direction:column; align-items:flex-end; gap:10px; flex-shrink:0; }
+  .trial-banner-price{ font-size:28px; font-weight:800; text-align:right; }
+  .trial-banner-price span{ font-size:12.5px; font-weight:600; opacity:.85; display:block; margin-top:2px; }
+
+  .pricing-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:20px; align-items:stretch; }
+  .plan-card{
+    position:relative; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg);
+    padding:28px 24px; display:flex; flex-direction:column; transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  }
+  .plan-card:hover{ transform:translateY(-3px); box-shadow:var(--shadow-md); }
+  .plan-card.featured{ border-color:var(--brand-primary); box-shadow:var(--shadow-md); }
+  .plan-ribbon{
+    position:absolute; top:-13px; left:50%; transform:translateX(-50%); white-space:nowrap;
+    background:var(--brand-primary); color:#fff; font-size:11px; font-weight:700; letter-spacing:.03em;
+    text-transform:uppercase; border-radius:999px; padding:5px 14px; box-shadow:var(--shadow-sm);
+  }
+  .plan-name{ font-size:14px; font-weight:700; color:var(--text-primary); margin:0 0 14px; }
+  .plan-price-row{ display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  .plan-original{ font-size:15px; color:var(--text-muted); text-decoration:line-through; }
+  .plan-price{ font-size:29px; font-weight:800; color:var(--text-primary); letter-spacing:-0.01em; }
+  .plan-period{ font-size:12.5px; color:var(--text-muted); margin:5px 0 0; }
+  .plan-effective{ color:var(--brand-primary-hover); font-weight:600; }
+  .plan-save{ display:inline-flex; width:fit-content; font-size:11px; font-weight:700; color:#1a8a5a; background:#E7F6EE; border-radius:999px; padding:3px 10px; margin:12px 0 0; }
+  .plan-desc{ font-size:13px; color:var(--text-secondary); line-height:1.55; margin:16px 0 22px; padding-top:16px; border-top:1px solid var(--border); }
+  .plan-card .btn{ margin-top:auto; width:100%; }
+
   /* ---------- Final CTA ---------- */
   .cta-band{
     background:linear-gradient(135deg, var(--brand-primary) 0%, #E86A28 100%);
@@ -223,6 +258,7 @@
     .steps{ grid-template-columns:repeat(2,1fr); gap:32px 18px; }
     .step-line{ display:none; }
     .industries-wrap{ margin:0 16px; }
+    .pricing-grid{ grid-template-columns:repeat(2,1fr); }
   }
   @media (max-width: 720px){
     .nav-links{ display:none; }
@@ -241,6 +277,11 @@
     .foot-grid{ flex-direction:column; }
     .hero-note{ display:none; }
     .mobile-panel.open{ display:flex; }
+    .pricing-grid{ grid-template-columns:1fr; }
+    .trial-banner{ flex-direction:column; align-items:flex-start; padding:28px; }
+    .trial-banner-cta{ align-items:flex-start; width:100%; }
+    .trial-banner-price{ text-align:left; }
+    .trial-banner-price span{ text-align:left; }
   }
 </style>
 </head>
@@ -261,6 +302,7 @@
         <a href="#features">Features</a>
         <a href="#industries">Industries</a>
         <a href="#how-it-works">How it works</a>
+        <a href="#pricing">Pricing</a>
       </nav>
       <div class="nav-cta">
         <a href="/login.html" class="btn btn-primary">Access CRM</a>
@@ -273,6 +315,7 @@
       <a href="#features" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Features</a>
       <a href="#industries" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Industries</a>
       <a href="#how-it-works" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">How it works</a>
+      <a href="#pricing" style="padding:10px 0; font-size:15px; font-weight:500; color:var(--text-primary);">Pricing</a>
     </div>
   </header>
 
@@ -493,6 +536,68 @@
     </div>
   </section>
 
+  <!-- ================= PRICING ================= -->
+  <section id="pricing">
+    <div class="container">
+      <div class="section-head center">
+        <p class="section-eyebrow">Simple, transparent pricing</p>
+        <h2 class="section-h">Start free. Scale when you're ready.</h2>
+        <p class="section-sub">Every plan — including the trial — runs on the exact same RUTA functionality. Plans differ only in how many campaigns you can connect and how you're billed.</p>
+      </div>
+
+      <div class="trial-banner">
+        <div>
+          <span class="trial-banner-badge">15-Day Free Trial</span>
+          <h3>Try RUTA with 1 live campaign</h3>
+          <p>Connect one Meta campaign and watch every lead it generates land straight into your pipeline — free for 15 days, full functionality included.</p>
+        </div>
+        <div class="trial-banner-cta">
+          <div class="trial-banner-price">Free<span>1 campaign + its leads</span></div>
+          <a href="/register.html" class="btn btn-dark btn-lg">Start free trial →</a>
+        </div>
+      </div>
+
+      <div class="pricing-grid">
+        <div class="plan-card">
+          <div class="plan-name">Monthly</div>
+          <div class="plan-price-row"><span class="plan-price">₹2,500</span></div>
+          <div class="plan-period">billed every month</div>
+          <div class="plan-desc">5 campaigns · same full functionality as the trial</div>
+          <a href="/register.html" class="btn btn-ghost">Choose Monthly</a>
+        </div>
+
+        <div class="plan-card">
+          <div class="plan-name">Quarterly</div>
+          <div class="plan-price-row"><span class="plan-original">₹7,500</span><span class="plan-price">₹6,750</span></div>
+          <div class="plan-period">billed every 3 months · <span class="plan-effective">≈ ₹2,250/mo</span></div>
+          <span class="plan-save">Save 10%</span>
+          <div class="plan-desc">5 campaigns · same full functionality as the trial</div>
+          <a href="/register.html" class="btn btn-ghost">Choose Quarterly</a>
+        </div>
+
+        <div class="plan-card featured">
+          <div class="plan-ribbon">Most Popular</div>
+          <div class="plan-name">Half-Yearly</div>
+          <div class="plan-price-row"><span class="plan-original">₹15,000</span><span class="plan-price">₹12,000</span></div>
+          <div class="plan-period">billed every 6 months · <span class="plan-effective">≈ ₹2,000/mo</span></div>
+          <span class="plan-save">Save 20%</span>
+          <div class="plan-desc">5 campaigns · same full functionality as the trial</div>
+          <a href="/register.html" class="btn btn-primary">Choose Half-Yearly</a>
+        </div>
+
+        <div class="plan-card featured">
+          <div class="plan-ribbon">Best Value</div>
+          <div class="plan-name">Yearly</div>
+          <div class="plan-price-row"><span class="plan-original">₹30,000</span><span class="plan-price">₹22,500</span></div>
+          <div class="plan-period">billed yearly · <span class="plan-effective">≈ ₹1,875/mo</span></div>
+          <span class="plan-save">Save 25%</span>
+          <div class="plan-desc">5 campaigns · same full functionality as the trial</div>
+          <a href="/register.html" class="btn btn-primary">Choose Yearly</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ================= FINAL CTA ================= -->
   <section style="padding-top:0;">
     <div class="container">
@@ -524,6 +629,7 @@
             <a href="#features">Features</a>
             <a href="#industries">Industries</a>
             <a href="#how-it-works">How it works</a>
+            <a href="#pricing">Pricing</a>
             <a href="/login.html">Access CRM</a>
           </div>
           <div class="foot-col">
@@ -533,7 +639,7 @@
           </div>
           <div class="foot-col">
             <h4>Contact</h4>
-            <a href="mailto:info@empiryx.com">info@empiryx.com</a>
+            <a href="mailto:empiryxtech@gmail.com">empiryxtech@gmail.com</a>
           </div>
         </div>
       </div>
