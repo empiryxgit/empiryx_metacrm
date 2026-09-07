@@ -39,6 +39,7 @@ import { getCachedCampaignInsights, setCachedCampaignInsights } from "../../src/
 import { AuthError } from "../../src/application/auth";
 import {
   assertCampaignLimitNotReached,
+  createBaseSubscriptionOrder,
   createOverageOrder,
   getBillingStatus,
   LimitExceededError,
@@ -664,18 +665,27 @@ async function handleBillingCreateOrder(req: VercelRequest, res: VercelResponse)
   const auth = await requirePermission(req, res, PERMISSIONS.COMPANY_MANAGE);
   if (!auth) return;
 
-  const { quantity, cycle } = (req.body ?? {}) as { quantity?: number; cycle?: string };
-  if (!quantity || !Number.isInteger(quantity) || quantity < 1) {
-    res.status(400).json({ error: "quantity must be a positive whole number." });
-    return;
-  }
+  // `kind`: "subscribe" starts (or renews) the paid BASE plan itself -
+  // createBaseSubscriptionOrder below - anything else (including the
+  // field being absent, for backward compatibility with any existing
+  // caller that predates this) is the ordinary extra-capacity purchase
+  // this endpoint has always supported. Subscribing takes no `quantity`
+  // (a company has exactly one base plan); overage still requires one.
+  const { quantity, cycle, kind } = (req.body ?? {}) as { quantity?: number; cycle?: string; kind?: string };
   if (!isBillingCycle(cycle)) {
     res.status(400).json({ error: "Unknown billing cycle." });
     return;
   }
+  if (kind !== "subscribe" && (!quantity || !Number.isInteger(quantity) || quantity < 1)) {
+    res.status(400).json({ error: "quantity must be a positive whole number." });
+    return;
+  }
 
   try {
-    const order = await createOverageOrder({ companyId: auth.companyId, createdBy: auth.userId, quantity, cycle });
+    const order =
+      kind === "subscribe"
+        ? await createBaseSubscriptionOrder({ companyId: auth.companyId, createdBy: auth.userId, cycle })
+        : await createOverageOrder({ companyId: auth.companyId, createdBy: auth.userId, quantity: quantity as number, cycle });
     res.status(201).json(order);
   } catch (err) {
     if (err instanceof AuthError) {

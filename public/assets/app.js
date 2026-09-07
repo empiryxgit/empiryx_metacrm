@@ -53,6 +53,78 @@ const App = (() => {
     return data;
   }
 
+  /** The 15-day trial / paid-base-plan banner (see src/domain/trial.ts and
+   * src/application/billing.ts's getEntitlementSummary, which is what
+   * /api/auth/me's `entitlement` field comes from) - called once from
+   * requireAuth() below, right after `me` is fetched, so it shows up on
+   * EVERY protected page without each page having to remember to call it
+   * itself. Renders nothing (and removes any previous banner) once the
+   * account is genuinely "subscribed" - the common case for every
+   * pre-existing/grandfathered company and every converted trial. Inserted
+   * right after #topnav, ahead of that page's own .wrap content - never
+   * inside a page-specific #banner div (several pages already use that id
+   * for their own transient success/error messages; this is a persistent,
+   * page-independent notice). */
+  function renderTrialBanner(me) {
+    const existing = document.getElementById("trialBanner");
+    const entitlement = me?.entitlement;
+    const nav = document.getElementById("topnav");
+    if (!entitlement || !nav) {
+      existing?.remove();
+      return;
+    }
+
+    const state = entitlement.entitlement;
+    const isAgency = entitlement.accountType === "agency";
+    let cls = "info";
+    let message = "";
+    let ctaLabel = null;
+
+    if (state.kind === "trialing") {
+      cls = state.daysRemaining <= 3 ? "warning" : "info";
+      const parts = [
+        isAgency ? "Agency Trial Active" : "Free Trial Active",
+        `${state.daysRemaining} day${state.daysRemaining === 1 ? "" : "s"} remaining`,
+      ];
+      if (isAgency && entitlement.clients) parts.push(`Clients: ${entitlement.clients.used} of ${entitlement.clients.limit}`);
+      parts.push(`Campaigns: ${entitlement.campaigns.used} of ${entitlement.campaigns.limit}`);
+      message = parts.join(" · ");
+      ctaLabel = isAgency ? "Upgrade Agency Plan" : "Upgrade Plan";
+    } else if (state.kind === "trial_expired") {
+      cls = "error";
+      message = isAgency
+        ? "Your Agency free trial has ended. Subscribe to continue managing your clients and campaigns."
+        : "Your 15-day free trial has ended. Subscribe to a plan to continue managing your leads.";
+      ctaLabel = isAgency ? "View Agency Plans & Subscribe" : "View Plans & Subscribe";
+    } else if (state.kind === "subscription_expired") {
+      cls = "error";
+      message = isAgency
+        ? "Your Agency subscription has ended. Renew to continue managing your clients and campaigns."
+        : "Your subscription has ended. Renew to continue managing your leads.";
+      ctaLabel = "Renew Plan";
+    } else {
+      // "subscribed" - nothing to show.
+      existing?.remove();
+      return;
+    }
+
+    const banner = existing || document.createElement("div");
+    banner.id = "trialBanner";
+    banner.className = `banner ${cls}`;
+    banner.style.margin = "14px 0 0";
+    banner.innerHTML = `
+      <span style="flex:1">${escapeHtml(message)}</span>
+      ${ctaLabel ? `<button type="button" class="btn sm" id="trialBannerCta">${escapeHtml(ctaLabel)}</button>` : ""}
+    `;
+    if (!existing) {
+      const wrap = document.querySelector(".wrap");
+      if (wrap) wrap.insertAdjacentElement("beforebegin", banner);
+      else nav.insertAdjacentElement("afterend", banner);
+    }
+    const cta = document.getElementById("trialBannerCta");
+    if (cta) cta.onclick = () => { window.location.href = "/subscription.html"; };
+  }
+
   /** Called at the top of every protected page. Redirects to /login.html if not
    * authenticated, or to /onboarding.html if the company hasn't finished
    * onboarding yet (unless the page itself IS the onboarding page). */
@@ -63,6 +135,7 @@ const App = (() => {
         window.location.href = "/onboarding.html";
         return null;
       }
+      renderTrialBanner(me);
       return me;
     } catch {
       // Bug fix: this used to send just window.location.pathname, dropping
@@ -872,6 +945,7 @@ const App = (() => {
     hasPermission,
     logout,
     renderNav,
+    renderTrialBanner,
     escapeHtml,
     initials,
     getSelectedBranchId,

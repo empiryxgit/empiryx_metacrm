@@ -215,6 +215,48 @@ export const companies = crm.table("companies", {
   // extends this date rather than starting over - see
   // applyOverageCapacityPurchase's own comment for the exact rule.
   extraCapacityExpiresAt: timestamp("extra_capacity_expires_at", { withTimezone: true }),
+  // --- 15-day free trial + base-plan subscription (see src/domain/trial.ts
+  // for the state machine these four columns feed, and
+  // src/application/billing.ts's getCampaignLimitStatus/getClientLimitStatus
+  // for how that state changes the campaign/client limits above). Deliberately
+  // separate from extraCampaignSlots/extraClientSlots/extraCapacityCycle/
+  // extraCapacityExpiresAt above - those are OVERAGE, purchased only on top
+  // of an already-active base plan; these four are whether the base plan
+  // itself is currently trialing, active, or lapsed.
+  //
+  // trialStartedAt/trialEndsAt: null for every company that predates this
+  // feature (see this migration's own SQL comment - grandfathered as
+  // permanently "subscribed" via subscriptionStatus's column default
+  // below, never given a retroactive trial) and for every claimed CLIENT
+  // company (a client never has a plan of its own - entitlement always
+  // resolves to its claiming agency's own row, see
+  // resolvePoolRootCompanyId). Set together, once, only by
+  // registerCompanyAndOwner (src/application/auth.ts) at the moment a
+  // brand-new top-level Individual or Agency account is created - never
+  // updated again afterward (a trial does not restart or extend).
+  trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  // "trialing" | "active" | "expired" - same "plain text, validated at the
+  // application layer, never compared ad hoc outside its own resolver"
+  // convention as accountType/onboardingStatus above; resolveEntitlementState()
+  // in src/domain/trial.ts is the one place that ever trusts a raw value
+  // here. Defaults to "active" (not "trialing") so every pre-existing
+  // company - and every claimed client company, which never has a plan of
+  // its own - resolves as permanently subscribed with no trial, exactly
+  // how every company already behaved before this column existed.
+  subscriptionStatus: text("subscription_status").notNull().default("active"),
+  // Which billing cycle the current PAID BASE PLAN purchase (not overage -
+  // see extraCapacityCycle above) was paid for, once the trial converts -
+  // display-only, same role extraCapacityCycle plays for overage.
+  subscriptionCycle: text("subscription_cycle"),
+  // When the current paid base-plan cycle ends. Null while subscriptionStatus
+  // is "trialing" (trialEndsAt governs instead) or for a grandfathered/
+  // legacy "active" row with no purchase on file (treated as active
+  // forever - see resolveEntitlementState's own comment). Set by
+  // applyBaseSubscriptionPurchase (src/infrastructure/db/repositories/
+  // tenancy.ts) the same way applyOverageCapacityPurchase already sets
+  // extraCapacityExpiresAt.
+  subscriptionExpiresAt: timestamp("subscription_expires_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (t) => ({

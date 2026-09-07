@@ -22,7 +22,9 @@ import type { AccountType } from "../domain/accountType";
 import { resolveAccountType } from "../domain/accountType";
 import {
   BASE_CLIENT_LIMIT_AGENCY,
+  BASE_SUBSCRIPTION_KIND,
   baseCampaignLimit,
+  computeBaseSubscriptionAmountInPaise,
   computeOverageAmountInPaise,
   cycleEndDate,
   overageKindForAccountType,
@@ -32,8 +34,14 @@ import {
   BILLING_CYCLE_KEYS,
   type BillingCycle,
   type OverageKind,
+  type PurchaseKind,
 } from "../domain/billing";
-import { getCompanyById, applyOverageCapacityPurchase } from "../infrastructure/db/repositories/tenancy";
+import { resolveEntitlementState, effectiveCampaignLimit, effectiveClientLimit, type EntitlementState } from "../domain/trial";
+import {
+  getCompanyById,
+  applyOverageCapacityPurchase,
+  applyBaseSubscriptionPurchase,
+} from "../infrastructure/db/repositories/tenancy";
 import { listClaimedClientOrganizations, getClaimingAgencyForClient } from "../infrastructure/db/repositories/organizations";
 import { listCampaigns, listCampaignsForCompanies } from "../infrastructure/db/repositories/campaigns";
 import {
@@ -44,6 +52,30 @@ import {
 } from "../infrastructure/db/repositories/billing";
 import { createRazorpayOrder, verifyRazorpayPaymentSignature } from "../infrastructure/razorpay/client";
 import { randomUUID } from "node:crypto";
+
+/** Serializes an EntitlementState (src/domain/trial.ts) for a JSON API
+ * response - Date -> ISO string, everything else passed through as-is.
+ * Shared by getBillingStatus (/api/billing/status) and getEntitlementSummary
+ * (/api/auth/me) so the trial banner and the Subscription & Capacity page
+ * can never disagree about which state an account is in. */
+export type SerializedEntitlementState =
+  | { kind: "trialing"; daysRemaining: number; trialEndsAt: string }
+  | { kind: "trial_expired"; trialEndsAt: string }
+  | { kind: "subscribed"; expiresAt: string | null }
+  | { kind: "subscription_expired"; expiresAt: string };
+
+function serializeEntitlementState(state: EntitlementState): SerializedEntitlementState {
+  switch (state.kind) {
+    case "trialing":
+      return { kind: "trialing", daysRemaining: state.daysRemaining, trialEndsAt: state.trialEndsAt.toISOString() };
+    case "trial_expired":
+      return { kind: "trial_expired", trialEndsAt: state.trialEndsAt.toISOString() };
+    case "subscribed":
+      return { kind: "subscribed", expiresAt: state.expiresAt ? state.expiresAt.toISOString() : null };
+    case "subscription_expired":
+      return { kind: "subscription_expired", expiresAt: state.expiresAt.toISOString() };
+  }
+}
 
 /** A 402 - distinct from a plain AuthError so callers (the campaigns/
  * agency-clients handlers) can attach the machine-readable `code`/
@@ -129,7 +161,15 @@ export async function getCampaignLimitStatus(companyId: string): Promise<Campaig
 
   const { extraCampaigns } = activeExtraSlots(rootCompany);
   const baseLimit = baseCampaignLimit(accountType);
-  const limit = baseLimit + extraCampaigns;
+  // Trial-aware: during an active trial this overrides baseLimit+extra down
+  // to TRIAL_CAMPAIGN_LIMIT (1); once trial_expired/subscription_expired it
+  // is pinned to `used` (blocking new creation while leaving existing
+  // campaigns untouched) - see effectiveCampaignLimit's own doc comment in
+  // src/domain/trial.ts. Only genuinely "subscribed" resolves to the
+  // ordinary paid baseLimit + extra overage, exactly as before this
+  // feature existed.
+  const entitlement = resolveEntitlementState(rootCompany);
+  const limit = effectiveCampaignLimit(entitlement, baseLimit + extraCampaigns, used);
 
   return { accountType, rootCompanyId, used, baseLimit, extra: extraCampaigns, limit, remaining: Math.max(0, limit - used) };
 }
@@ -171,7 +211,10 @@ export async function getClientLimitStatus(agencyCompanyId: string): Promise<Cli
   const claimed = await listClaimedClientOrganizations(agencyCompanyId);
   const used = claimed.length;
   const { extraClients } = activeExtraSlots(company);
-  const limit = BASE_CLIENT_LIMIT_AGENCY + extraClients;
+  // Trial-aware, same rule as getCampaignLimitStatus above - see
+  // effectiveClientLimit's own doc comment in src/domain/trial.ts.
+  const entitlement = resolveEntitlementState(company);
+  const limit = effectiveClientLimit(entitlement, BASE_CLIENT_LIMIT_AGENCY + extraClients, used);
 
   return { used, baseLimit: BASE_CLIENT_LIMIT_AGENCY, extra: extraClients, limit, remaining: Math.max(0, limit - used) };
 }
@@ -203,6 +246,13 @@ export interface BillingStatus {
   // createOverageOrder's own guard, which independently refuses to create
   // an order for a non-root company either way).
   managedExternally: boolean;
+  // The 15-day trial / paid-base-plan state (see src/domain/trial.ts) -
+  // what drives /subscription.html's trial banner and the "Subscribe to
+  // your plan" purchase flow below. Always the ROOT company's own state
+  // (see resolvePoolRootCompanyId) - a claimed client is always
+  // "subscribed" in its own right (it never has a plan of its own), the
+  // AGENCY's trial/subscription is what actually governs.
+  entitlement: SerializedEntitlementState;
   campaigns: CampaignLimitStatus;
   clients: ClientLimitStatus | null;
   currentCycle: { cycle: BillingCycle | null; expiresAt: string | null } | null;
@@ -211,6 +261,15 @@ export interface BillingStatus {
     unitLabel: string;
     pricing: Array<{ cycle: BillingCycle; label: string; unitAmountInPaise: number; discountPct: number }>;
   };
+  // Present only while the root company is not yet "subscribed" (trialing,
+  // trial_expired, or subscription_expired) - the base-plan purchase flow
+  // (createBaseSubscriptionOrder below) that converts a trial (or lapsed
+  // subscription) into an active paid plan. Null once already subscribed -
+  // /subscription.html shows the ordinary "Add extra capacity" purchase
+  // card instead in that case.
+  subscribe: {
+    pricing: Array<{ cycle: BillingCycle; label: string; amountInPaise: number; discountPct: number }>;
+  } | null;
 }
 
 export async function getBillingStatus(companyId: string): Promise<BillingStatus> {
@@ -228,10 +287,14 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
       }
     : null;
 
+  const entitlementState = rootCompany ? resolveEntitlementState(rootCompany) : { kind: "subscribed" as const, expiresAt: null };
+  const entitlement = serializeEntitlementState(entitlementState);
+
   const kind = overageKindForAccountType(accountType);
   return {
     accountType,
     managedExternally,
+    entitlement,
     campaigns,
     clients,
     currentCycle,
@@ -245,6 +308,51 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
         discountPct: Math.round(CYCLE_DISCOUNT[cycle] * 100),
       })),
     },
+    subscribe:
+      entitlementState.kind === "subscribed"
+        ? null
+        : {
+            pricing: BILLING_CYCLE_KEYS.map((cycle) => ({
+              cycle,
+              label: CYCLE_LABELS[cycle],
+              amountInPaise: computeBaseSubscriptionAmountInPaise(accountType, cycle),
+              discountPct: Math.round(CYCLE_DISCOUNT[cycle] * 100),
+            })),
+          },
+  };
+}
+
+/**
+ * Lean read used by /api/auth/me (see api/auth/handler.ts's handleMe) to
+ * power the trial banner shown on every protected page (App.renderTrialBanner
+ * in public/assets/app.js) - the same entitlement/usage numbers
+ * getBillingStatus computes for /subscription.html, without that
+ * function's overage/subscribe pricing catalogs (irrelevant to a nav
+ * banner). Always resolves against the caller's own REAL company
+ * (never an active agency client context - see handleMe's own comment on
+ * why billing/entitlement is deliberately not run through
+ * withEffectiveCompanyContext), same as every other billing function in
+ * this file.
+ */
+export interface EntitlementSummary {
+  accountType: AccountType;
+  entitlement: SerializedEntitlementState;
+  campaigns: { used: number; limit: number };
+  clients: { used: number; limit: number } | null;
+}
+
+export async function getEntitlementSummary(companyId: string): Promise<EntitlementSummary> {
+  const { rootCompanyId, accountType } = await resolvePoolRootCompanyId(companyId);
+  const campaigns = await getCampaignLimitStatus(companyId);
+  const clients = accountType === "agency" ? await getClientLimitStatus(rootCompanyId) : null;
+  const rootCompany = await getCompanyById(rootCompanyId);
+  const entitlementState = rootCompany ? resolveEntitlementState(rootCompany) : { kind: "subscribed" as const, expiresAt: null };
+
+  return {
+    accountType,
+    entitlement: serializeEntitlementState(entitlementState),
+    campaigns: { used: campaigns.used, limit: campaigns.limit },
+    clients: clients ? { used: clients.used, limit: clients.limit } : null,
   };
 }
 
@@ -294,7 +402,68 @@ export async function createOverageOrder(input: {
   };
 }
 
+/**
+ * Starts the trial -> paid conversion (or a lapsed subscription's renewal) -
+ * the base-plan counterpart to createOverageOrder above. Always quantity 1
+ * (a company has exactly one base plan). Same root-company-only guard as
+ * createOverageOrder: a claimed client can never subscribe on its own
+ * behalf, only the agency (or a self-standing Individual) can.
+ */
+export async function createBaseSubscriptionOrder(input: {
+  companyId: string;
+  createdBy: string;
+  cycle: BillingCycle;
+}): Promise<{ orderId: string; razorpayOrderId: string; amountInPaise: number; currency: string; keyId: string }> {
+  const { rootCompanyId, accountType } = await resolvePoolRootCompanyId(input.companyId);
+  if (rootCompanyId !== input.companyId) {
+    throw new AuthError("Your plan is managed by your agency - ask them to subscribe.", 403);
+  }
+
+  const amountInPaise = computeBaseSubscriptionAmountInPaise(accountType, input.cycle);
+  const localId = randomUUID();
+
+  const razorpayOrder = await createRazorpayOrder({
+    amountInPaise,
+    currency: "INR",
+    receipt: localId,
+    notes: { companyId: rootCompanyId, kind: BASE_SUBSCRIPTION_KIND, quantity: "1", cycle: input.cycle },
+  });
+
+  await insertBillingOrder({
+    id: localId,
+    companyId: rootCompanyId,
+    createdBy: input.createdBy,
+    kind: BASE_SUBSCRIPTION_KIND,
+    quantity: 1,
+    cycle: input.cycle,
+    amountInPaise,
+    currency: "INR",
+    razorpayOrderId: razorpayOrder.id,
+  });
+
+  return {
+    orderId: localId,
+    razorpayOrderId: razorpayOrder.id,
+    amountInPaise,
+    currency: "INR",
+    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+  };
+}
+
+/** Branches on the order's own stored `kind` (see PurchaseKind in
+ * src/domain/billing.ts) - a base_subscription order converts the company
+ * to an active paid plan (applyBaseSubscriptionPurchase), while either
+ * overage kind (individual_campaigns/agency_bundles, the only other values
+ * ever written to billingOrders.kind) grants extra capacity on top of an
+ * already-active plan, exactly as before this feature existed. */
 async function applyPaidOrder(order: { companyId: string; kind: string; quantity: number; cycle: string }) {
+  if ((order.kind as PurchaseKind) === BASE_SUBSCRIPTION_KIND) {
+    await applyBaseSubscriptionPurchase(order.companyId, {
+      cycle: order.cycle,
+      expiresAt: cycleEndDate(order.cycle as BillingCycle),
+    });
+    return;
+  }
   const { extraCampaigns, extraClients } = overageSlotsForQuantity(order.kind as OverageKind, order.quantity);
   await applyOverageCapacityPurchase(order.companyId, {
     extraCampaigns,

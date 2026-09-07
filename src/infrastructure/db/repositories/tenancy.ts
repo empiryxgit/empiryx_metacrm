@@ -36,9 +36,25 @@ export async function createCompany(input: {
   // report on why that wiring is deferred to a later phase, not wired in
   // here) would ever pass "NOT_STARTED".
   onboardingStatus?: OnboardingStatus;
+  // 15-day free trial (see src/domain/trial.ts) - deliberately optional
+  // and omitted by every existing caller (agency client provisioning,
+  // agency onboarding) so those rows keep falling back to
+  // companies.subscriptionStatus's own column default ("active", no
+  // trial - correct, since a claimed client company never has a plan of
+  // its own). Only src/application/auth.ts's registerCompanyAndOwner ever
+  // passes this, for a brand-new top-level Individual/Agency registration.
+  trial?: { startedAt: Date; endsAt: Date };
 }) {
   const db = await getDb();
-  const rows = await db.insert(companies).values(input).returning();
+  const { trial, ...rest } = input;
+  const rows = await db
+    .insert(companies)
+    .values(
+      trial
+        ? { ...rest, trialStartedAt: trial.startedAt, trialEndsAt: trial.endsAt, subscriptionStatus: "trialing" as const }
+        : rest,
+    )
+    .returning();
   return firstOrThrow(rows);
 }
 
@@ -144,6 +160,40 @@ export async function applyOverageCapacityPurchase(
       extraClientSlots: nextClientSlots,
       extraCapacityCycle: input.cycle,
       extraCapacityExpiresAt: nextExpiresAt,
+      updatedAt: now,
+    })
+    .where(eq(companies.id, companyId));
+}
+
+/**
+ * Converts a "trialing" (or lapsed "expired") company to a paid, active
+ * base-plan subscription - called once a base_subscription billing_orders
+ * row is marked paid (see applyPaidOrder in src/application/billing.ts,
+ * the single caller). A renewal purchase made while a paid cycle is still
+ * active EXTENDS the existing expiry rather than starting over - same rule
+ * applyOverageCapacityPurchase above already applies to extraCapacityExpiresAt,
+ * kept consistent here rather than reinvented. Deliberately does NOT touch
+ * trialStartedAt/trialEndsAt - the trial dates stay on the row as a
+ * historical fact even after conversion; only subscriptionStatus/
+ * subscriptionCycle/subscriptionExpiresAt (and, transitively, every
+ * resolveEntitlementState() call from this point on) change.
+ */
+export async function applyBaseSubscriptionPurchase(companyId: string, input: { cycle: string; expiresAt: Date }) {
+  const db = await getDb();
+  const company = await getCompanyById(companyId);
+  if (!company) return;
+
+  const now = new Date();
+  const currentExpiresAt = company.subscriptionExpiresAt ? new Date(company.subscriptionExpiresAt) : null;
+  const stillActive = company.subscriptionStatus === "active" && currentExpiresAt !== null && currentExpiresAt.getTime() > now.getTime();
+  const nextExpiresAt = stillActive && currentExpiresAt && currentExpiresAt.getTime() > input.expiresAt.getTime() ? currentExpiresAt : input.expiresAt;
+
+  await db
+    .update(companies)
+    .set({
+      subscriptionStatus: "active",
+      subscriptionCycle: input.cycle,
+      subscriptionExpiresAt: nextExpiresAt,
       updatedAt: now,
     })
     .where(eq(companies.id, companyId));

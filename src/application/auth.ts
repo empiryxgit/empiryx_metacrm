@@ -29,6 +29,7 @@ import {
 } from "../infrastructure/auth/tokens";
 import { INDUSTRY_KEYS, getIndustryTemplate, type IndustryKey } from "../domain/industryTemplates";
 import { resolveAccountType } from "../domain/accountType";
+import { trialEndDate } from "../domain/trial";
 import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../domain/fixedRoles";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { recordAgencyAuditEvent } from "./agencyAuditLog";
@@ -166,11 +167,24 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   // completeOnboarding() below still runs for them regardless, since that's
   // also what stamps onboardingCompletedAt (the actual field App.requireAuth()
   // gates on - see completeOnboarding's own comment).
+  // Every brand-new top-level registration (Individual or Agency alike -
+  // never a claimed CLIENT company, which is provisioned through
+  // createClientOrganization/agencyOnboarding.ts, neither of which pass
+  // `trial` here) starts its own 15-day free trial the instant the
+  // company row is created - see src/domain/trial.ts for the state this
+  // feeds and this feature's own PR description for why trial start can
+  // never be a separate, later step (a company with no trial/subscription
+  // state at all would fall back to companies.subscriptionStatus's
+  // "active, no expiry" column default and be treated as permanently
+  // subscribed for free, exactly the grandfathering behavior reserved for
+  // genuinely pre-existing companies only).
+  const trialStartedAt = new Date();
   const company = await createCompany({
     name: input.companyName,
     slug,
     industryTemplate,
     accountType,
+    trial: { startedAt: trialStartedAt, endsAt: trialEndDate(trialStartedAt) },
     ...(accountType === "agency" ? {} : { onboardingStatus: "NOT_STARTED" as const }),
   });
   // Agency companies get the four fixed AGENCY_OWNER/ADMIN/MANAGER/USER

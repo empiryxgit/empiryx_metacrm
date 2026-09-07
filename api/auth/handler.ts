@@ -34,6 +34,7 @@ import { hashPassword, verifyPassword } from "../../src/infrastructure/auth/pass
 import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../../src/domain/fixedRoles";
 import { checkRateLimit } from "../../src/infrastructure/cache/redis";
 import { resolveActiveClientContext } from "../../src/application/agencyClientContext";
+import { getEntitlementSummary } from "../../src/application/billing";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -279,11 +280,26 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
   // auth always carries the caller's own REAL company/role - the client
   // switcher (see src/application/agencyClientContext.ts) never rewrites
   // the JWT, only an additional cookie this handler reads separately below.
-  const [user, realCompany, role, clientContext] = await Promise.all([
+  // Entitlement (trial/subscription state - see src/domain/trial.ts) is
+  // resolved from auth.companyId, the caller's own REAL company, same
+  // deliberate "never through an active client context" posture
+  // agencyClientContext.ts documents for every other organization-level
+  // concern (billing/capacity is the caller's own agency's to know about,
+  // not whichever client they're currently "inside") - this is what lets
+  // App.renderTrialBanner (public/assets/app.js) show the same trial
+  // banner regardless of which client an agency user is currently
+  // viewing. Best-effort: a failure here must never block login/session
+  // resolution itself, same posture as every other best-effort read in
+  // this codebase (see e.g. setCompanyCreatedBy's own comment).
+  const [user, realCompany, role, clientContext, entitlement] = await Promise.all([
     getUserById(auth.userId),
     getCompanyById(auth.companyId),
     getRoleById(auth.companyId, auth.roleId),
     resolveActiveClientContext(req, auth),
+    getEntitlementSummary(auth.companyId).catch((err) => {
+      console.error("[auth/me] Failed to resolve entitlement summary:", err);
+      return null;
+    }),
   ]);
 
   if (!user || !realCompany) {
@@ -320,6 +336,9 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
     // case, including for non-agency users (for whom this concept doesn't
     // apply at all).
     clientContext: clientContext ? { id: clientContext.clientCompanyId, name: clientContext.clientName } : null,
+    // Trial/subscription state for App.renderTrialBanner - see this function's own comment above on why this is always the caller's
+    // real company's state. Null only on the (best-effort) failure path.
+    entitlement,
     // Owner (isSystem) always reflects the full, current permission catalog
     // rather than whatever snapshot was stored when the role was created -
     // see effectivePermissions() in src/application/auth.ts for why. Only

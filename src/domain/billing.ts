@@ -115,3 +115,42 @@ export function cycleEndDate(cycle: BillingCycle, from: Date = new Date()): Date
   end.setMonth(end.getMonth() + CYCLE_MONTHS[cycle]);
   return end;
 }
+
+// ---------------------------------------------------------------------------
+// Base-plan subscription pricing (the trial-to-paid conversion - see
+// src/domain/trial.ts for the trial/subscription state machine this feeds,
+// and src/application/billing.ts's createBaseSubscriptionOrder). Distinct
+// from the overage pricing above: overage is only ever purchased ON TOP OF
+// an already-active base plan, while this is the base plan itself. Same
+// unitMonthly * quantity(always 1) * months * (1 - discount) formula, and
+// the exact same figures shown on public/index.html's own PICKERS table
+// (see that file's #pricing section) - never invented separately.
+//   Individual - ₹2,500/mo.
+//   Agency Basic - ₹6,999/mo.
+// ---------------------------------------------------------------------------
+
+export const INDIVIDUAL_BASE_PLAN_MONTHLY_PAISE = 250_000; // ₹2,500/mo
+export const AGENCY_BASE_PLAN_MONTHLY_PAISE = 699_900; // ₹6,999/mo
+
+/** Stored verbatim on billingOrders.kind, same role OverageKind's two
+ * values already play - a THIRD kind, for the base plan itself rather
+ * than extra capacity on top of one. Kept as its own literal (not folded
+ * into OverageKind) so "is this order for the base plan or for overage" -
+ * a real branch in src/application/billing.ts's applyPaidOrder - stays a
+ * simple, exhaustive-checkable comparison. */
+export const BASE_SUBSCRIPTION_KIND = "base_subscription" as const;
+export type PurchaseKind = OverageKind | typeof BASE_SUBSCRIPTION_KIND;
+
+function baseSubscriptionUnitMonthlyPaise(accountType: AccountType): number {
+  return accountType === "agency" ? AGENCY_BASE_PLAN_MONTHLY_PAISE : INDIVIDUAL_BASE_PLAN_MONTHLY_PAISE;
+}
+
+/** Total order amount (in paise) for ONE base-plan subscription, paid
+ * upfront for one `cycle` - always quantity 1 (a company has exactly one
+ * base plan, never several), unlike computeOverageAmountInPaise's
+ * `quantity` parameter. */
+export function computeBaseSubscriptionAmountInPaise(accountType: AccountType, cycle: BillingCycle): number {
+  const months = CYCLE_MONTHS[cycle];
+  const discount = CYCLE_DISCOUNT[cycle];
+  return Math.round(baseSubscriptionUnitMonthlyPaise(accountType) * months * (1 - discount));
+}

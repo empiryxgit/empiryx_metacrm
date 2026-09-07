@@ -50,6 +50,22 @@
       <p class="hint" style="margin:0">Your account is managed by an agency on RUTA - they own the plan and any extra campaign/client capacity for your team. Ask them to add more from their own Subscription &amp; Capacity page.</p>
     </div>
 
+    <div class="card" id="subscribeCard" style="display:none">
+      <h2 class="section-title">Subscribe to your plan</h2>
+      <p class="hint" id="subscribeHint" style="margin:0 0 14px"></p>
+
+      <div class="cycle-tabs" id="subscribeCycleTabs"></div>
+
+      <div class="price-summary">
+        <div>
+          <div class="amount" id="subscribePriceAmount">₹0</div>
+          <div class="amount-sub" id="subscribePriceSub"></div>
+        </div>
+        <button class="btn" type="button" id="subscribeBtn">Subscribe &amp; Pay</button>
+      </div>
+      <p class="hint" style="margin:0; font-size:11.5px">Payments are processed securely by Razorpay - RUTA never sees or stores your card, UPI, or bank details.</p>
+    </div>
+
     <div class="card" id="purchaseCard" style="display:none">
       <h2 class="section-title">Add extra capacity</h2>
       <p class="hint" id="unitHint" style="margin:0 0 14px"></p>
@@ -78,6 +94,7 @@
   let me;
   let status;
   let selectedCycle = "monthly";
+  let selectedSubscribeCycle = "monthly";
 
   const fmtRupees = (paise) => "₹" + (paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
@@ -117,9 +134,110 @@
     }
   }
 
+  function renderSubscribeUi() {
+    if (!status.subscribe) {
+      document.getElementById("subscribeCard").style.display = "none";
+      return;
+    }
+    document.getElementById("subscribeCard").style.display = "block";
+
+    const isAgency = status.accountType === "agency";
+    document.getElementById("subscribeHint").textContent = status.entitlement.kind === "trialing"
+      ? `Your ${isAgency ? "Agency " : ""}free trial is active - subscribe any time to unlock your full plan limit (${isAgency ? "5 clients, 10 campaigns" : "5 campaigns"}) before it ends.`
+      : `Your trial has ended. Subscribe to the ${isAgency ? "Agency" : "Individual"} plan to keep managing your ${isAgency ? "clients and campaigns" : "leads"}.`;
+
+    const tabs = document.getElementById("subscribeCycleTabs");
+    tabs.innerHTML = status.subscribe.pricing.map((p) => `
+      <button type="button" class="cycle-tab ${p.cycle === selectedSubscribeCycle ? "active" : ""}" data-cycle="${p.cycle}">
+        ${App.escapeHtml(p.label)}${p.discountPct ? `<span class="save-badge">Save ${p.discountPct}%</span>` : ""}
+      </button>
+    `).join("");
+    tabs.querySelectorAll(".cycle-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedSubscribeCycle = btn.dataset.cycle;
+        renderSubscribeUi();
+      });
+    });
+
+    updateSubscribePriceSummary();
+  }
+
+  function updateSubscribePriceSummary() {
+    const pricing = status.subscribe.pricing.find((p) => p.cycle === selectedSubscribeCycle);
+    document.getElementById("subscribePriceAmount").textContent = fmtRupees(pricing.amountInPaise);
+    document.getElementById("subscribePriceSub").textContent = `${pricing.label.toLowerCase()} billing`;
+  }
+
+  document.getElementById("subscribeBtn").addEventListener("click", async () => {
+    const banner = document.getElementById("banner");
+    const btn = document.getElementById("subscribeBtn");
+    banner.innerHTML = "";
+    btn.disabled = true;
+    btn.textContent = "Starting payment…";
+    try {
+      await loadRazorpayScript();
+      const order = await App.apiJson("/api/billing/order", { method: "POST", body: { kind: "subscribe", cycle: selectedSubscribeCycle } });
+
+      const rzp = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amountInPaise,
+        currency: order.currency,
+        order_id: order.razorpayOrderId,
+        name: "RUTA",
+        description: status.accountType === "agency" ? "Agency plan subscription" : "Individual plan subscription",
+        prefill: { email: me.user.email, name: me.user.fullName },
+        theme: { color: "#F47B32" },
+        handler: async (response) => {
+          try {
+            await App.apiJson("/api/billing/verify", {
+              method: "POST",
+              body: {
+                razorpayOrderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature,
+              },
+            });
+            banner.innerHTML = `<div class="banner success">Payment received - your plan is now active.</div>`;
+            await load();
+          } catch (err) {
+            banner.innerHTML = `<div class="banner error">Payment succeeded but we couldn't confirm it here (${App.escapeHtml(err.message)}). It will be applied automatically shortly - refresh this page in a minute.</div>`;
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            btn.disabled = false;
+            btn.textContent = "Subscribe & Pay";
+          },
+        },
+      });
+      rzp.on("payment.failed", (resp) => {
+        banner.innerHTML = `<div class="banner error">Payment failed: ${App.escapeHtml(resp.error?.description || "Please try again.")}</div>`;
+        btn.disabled = false;
+        btn.textContent = "Subscribe & Pay";
+      });
+      rzp.open();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Subscribe & Pay";
+    }
+  });
+
   function renderPurchaseUi() {
     if (status.managedExternally) {
       document.getElementById("externalCard").style.display = "block";
+      document.getElementById("purchaseCard").style.display = "none";
+      document.getElementById("subscribeCard").style.display = "none";
+      return;
+    }
+    renderSubscribeUi();
+    // Extra capacity only makes sense once the base plan itself is
+    // active - buying overage before subscribing would grant capacity
+    // with nothing underneath it. See getBillingStatus's own comment on
+    // why `subscribe` is null exactly when `entitlement.kind` is
+    // "subscribed".
+    if (status.subscribe) {
       document.getElementById("purchaseCard").style.display = "none";
       return;
     }
