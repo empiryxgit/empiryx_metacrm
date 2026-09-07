@@ -22,6 +22,10 @@
     { "source": "/api/platform-admin/logout", "destination": "/api/system?resource=platform-admin&action=logout" },
     { "source": "/api/platform-admin/dashboard", "destination": "/api/system?resource=platform-admin&action=dashboard" },
     { "source": "/api/platform-admin/companies/:companyId", "destination": "/api/system?resource=platform-admin&action=company&companyId=:companyId" },
+    { "source": "/api/platform-admin/notifications", "destination": "/api/system?resource=platform-admin&action=notifications" },
+    { "source": "/api/platform-admin/audit", "destination": "/api/system?resource=platform-admin&action=audit" },
+    { "source": "/api/notifications", "destination": "/api/system?resource=notifications&action=list" },
+    { "source": "/api/notifications/:notificationId/read", "destination": "/api/system?resource=notifications&action=read&notificationId=:notificationId" },
 
     { "source": "/api/auth/register", "destination": "/api/auth/handler?action=register" },
     { "source": "/api/auth/login", "destination": "/api/auth/handler?action=login" },

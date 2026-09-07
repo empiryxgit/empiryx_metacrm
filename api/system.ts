@@ -12,8 +12,9 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
 import { requireAuth, requirePermission, requirePlatformAdmin } from "../src/infrastructure/auth/context";
 import { PLATFORM_ADMIN_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../src/infrastructure/auth/tokens";
-import { getPlatformCompanyDetail, getPlatformDashboard, loginPlatformAdmin, setPlatformCompanyStatus } from "../src/application/platformAdmin";
+import { getPlatformAuditLogList, getPlatformCompanyDetail, getPlatformDashboard, getPlatformNotificationList, getUserNotificationList, loginPlatformAdmin, publishPlatformNotification, readUserNotification, setPlatformCompanyStatus } from "../src/application/platformAdmin";
 import { AuthError } from "../src/application/auth";
+import { getCompanyById } from "../src/infrastructure/db/repositories/tenancy";
 import { getIntegrationCounts, getLastReconciliationRun } from "../src/infrastructure/db/repositories";
 import { PERMISSIONS, PERMISSION_CATALOG } from "../src/domain/permissions";
 
@@ -28,6 +29,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return handlePermissions(req, res);
     case "platform-admin":
       return handlePlatformAdmin(req, res);
+    case "notifications":
+      return handleNotifications(req, res);
     default:
       res.status(404).json({ error: "Not found" });
   }
@@ -111,7 +114,70 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
     }
     return;
   }
+  if (action === "notifications") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    try {
+      if (req.method === "GET") {
+        res.status(200).json({ notifications: await getPlatformNotificationList() });
+        return;
+      }
+      if (req.method === "POST") {
+        const body = req.body as { targetType?: string; targetCompanyId?: string; targetUserId?: string; title?: string; message?: string; ctaLabel?: string; ctaUrl?: string };
+        res.status(201).json(await publishPlatformNotification({ adminId: admin.adminId, targetType: body.targetType ?? "", targetCompanyId: body.targetCompanyId, targetUserId: body.targetUserId, title: body.title ?? "", message: body.message ?? "", ctaLabel: body.ctaLabel, ctaUrl: body.ctaUrl }));
+        return;
+      }
+      res.status(405).json({ error: "Method not allowed" });
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: "Failed to manage notifications." });
+    }
+    return;
+  }
+  if (action === "audit") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    res.status(200).json({ logs: await getPlatformAuditLogList() });
+    return;
+  }
   res.status(404).json({ error: "Not found" });
+}
+
+async function handleNotifications(req: VercelRequest, res: VercelResponse) {
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const company = await getCompanyById(auth.companyId);
+  if (!company) {
+    res.status(404).json({ error: "Company not found." });
+    return;
+  }
+  const action = typeof req.query.action === "string" ? req.query.action : "list";
+  try {
+    if (action === "list" && req.method === "GET") {
+      res.status(200).json({ notifications: await getUserNotificationList({ userId: auth.userId, companyId: auth.companyId, accountType: company.accountType }) });
+      return;
+    }
+    if (action === "read" && req.method === "POST") {
+      const notificationId = typeof req.query.notificationId === "string" ? req.query.notificationId : "";
+      if (!notificationId) {
+        res.status(400).json({ error: "notificationId is required." });
+        return;
+      }
+      await readUserNotification(notificationId, auth.userId);
+      res.status(200).json({ ok: true });
+      return;
+    }
+    res.status(405).json({ error: "Method not allowed" });
+  } catch {
+    res.status(500).json({ error: "Failed to load notifications." });
+  }
 }
 
 // Liveness/readiness endpoint. Checks the three external dependencies this

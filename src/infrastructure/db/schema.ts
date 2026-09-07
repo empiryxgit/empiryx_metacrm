@@ -1970,6 +1970,34 @@ export const platformAuditLogs = crm.table("platform_audit_logs", {
   createdAtIdx: index("ix_platform_audit_logs_created_at").on(t.createdAt),
 }));
 
+export const platformNotifications = crm.table("platform_notifications", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  createdBy: uuid("created_by").notNull().references(() => platformAdmins.id, { onDelete: "restrict" }),
+  targetType: text("target_type").notNull(), // global | individual | agency | company | user
+  targetCompanyId: uuid("target_company_id").references(() => companies.id, { onDelete: "cascade" }),
+  targetUserId: uuid("target_user_id").references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  ctaLabel: text("cta_label"),
+  ctaUrl: text("cta_url"),
+  publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  companyIdx: index("ix_platform_notifications_company_id").on(t.targetCompanyId),
+  userIdx: index("ix_platform_notifications_user_id").on(t.targetUserId),
+  publishedIdx: index("ix_platform_notifications_published_at").on(t.publishedAt),
+}));
+
+export const platformNotificationReads = crm.table("platform_notification_reads", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  notificationId: uuid("notification_id").notNull().references(() => platformNotifications.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  readAt: timestamp("read_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  notificationUserIdx: uniqueIndex("ux_platform_notification_reads_notification_user").on(t.notificationId, t.userId),
+  userIdx: index("ix_platform_notification_reads_user_id").on(t.userId),
+}));
+
 // ---------------------------------------------------------------------------
 // Billing - Razorpay overage orders (extra campaign/client capacity bought
 // on top of a plan's base allowance - see companies.extraCampaignSlots/

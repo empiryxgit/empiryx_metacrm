@@ -1,6 +1,6 @@
-import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { agencyClients, billingOrders, campaigns, companies, leads, platformAdmins, platformAuditLogs, sessions, users } from "../schema";
+import { agencyClients, billingOrders, campaigns, companies, leads, platformAdmins, platformAuditLogs, platformNotificationReads, platformNotifications, sessions, users } from "../schema";
 
 export async function getPlatformAdminByEmail(email: string) {
   const db = await getDb();
@@ -118,4 +118,68 @@ export async function updatePlatformCompanyStatus(input: { adminId: string; comp
     reason: input.reason ?? null,
   });
   return { ...company, status: input.status };
+}
+
+export async function createPlatformNotification(input: {
+  adminId: string;
+  targetType: string;
+  targetCompanyId?: string;
+  targetUserId?: string;
+  title: string;
+  message: string;
+  ctaLabel?: string;
+  ctaUrl?: string;
+}) {
+  const db = await getDb();
+  const [row] = await db.insert(platformNotifications).values({ ...input, createdBy: input.adminId, targetCompanyId: input.targetCompanyId ?? null, targetUserId: input.targetUserId ?? null }).returning();
+  return row;
+}
+
+export async function listPlatformNotifications() {
+  const db = await getDb();
+  return db.select().from(platformNotifications).orderBy(desc(platformNotifications.publishedAt)).limit(100);
+}
+
+export async function listUserNotifications(input: { userId: string; companyId: string; accountType: string }) {
+  const db = await getDb();
+  return db
+    .select({
+      id: platformNotifications.id,
+      title: platformNotifications.title,
+      message: platformNotifications.message,
+      ctaLabel: platformNotifications.ctaLabel,
+      ctaUrl: platformNotifications.ctaUrl,
+      publishedAt: platformNotifications.publishedAt,
+      readAt: platformNotificationReads.readAt,
+    })
+    .from(platformNotifications)
+    .leftJoin(platformNotificationReads, and(eq(platformNotificationReads.notificationId, platformNotifications.id), eq(platformNotificationReads.userId, input.userId)))
+    .where(or(
+      eq(platformNotifications.targetType, "global"),
+      and(eq(platformNotifications.targetType, "company"), eq(platformNotifications.targetCompanyId, input.companyId)),
+      and(eq(platformNotifications.targetType, input.accountType), eq(platformNotifications.targetCompanyId, input.companyId)),
+      and(eq(platformNotifications.targetType, "user"), eq(platformNotifications.targetUserId, input.userId)),
+    ))
+    .orderBy(desc(platformNotifications.publishedAt))
+    .limit(50);
+}
+
+export async function markPlatformNotificationRead(notificationId: string, userId: string) {
+  const db = await getDb();
+  await db.insert(platformNotificationReads).values({ notificationId, userId }).onConflictDoNothing();
+}
+
+export async function listPlatformAuditLogs() {
+  const db = await getDb();
+  return db.select({
+    id: platformAuditLogs.id,
+    action: platformAuditLogs.action,
+    entityType: platformAuditLogs.entityType,
+    entityId: platformAuditLogs.entityId,
+    previousValue: platformAuditLogs.previousValue,
+    newValue: platformAuditLogs.newValue,
+    reason: platformAuditLogs.reason,
+    createdAt: platformAuditLogs.createdAt,
+    adminEmail: platformAdmins.email,
+  }).from(platformAuditLogs).innerJoin(platformAdmins, eq(platformAdmins.id, platformAuditLogs.adminId)).orderBy(desc(platformAuditLogs.createdAt)).limit(200);
 }

@@ -486,8 +486,31 @@ const App = (() => {
       settingsLinks,
     });
     wireShellInteractions();
+    loadNotifications();
     loadBranchSwitcher(me);
     loadAgencyContextSwitcher(me);
+  }
+
+  async function loadNotifications() {
+    const menu = document.getElementById("notifMenu");
+    const button = document.getElementById("notifBtn");
+    if (!menu || !button) return;
+    try {
+      const result = await apiJson("/api/notifications");
+      const notifications = result.notifications || [];
+      const unread = notifications.filter((notification) => !notification.readAt).length;
+      button.setAttribute("aria-label", unread ? `Notifications (${unread} unread)` : "Notifications");
+      menu.innerHTML = `<div class="dropdown-title">Notifications${unread ? ` <span>(${unread} unread)</span>` : ""}</div>${notifications.length ? notifications.slice(0, 5).map((notification) => `<button type="button" class="dropdown-notification ${notification.readAt ? "" : "unread"}" data-notification-id="${escapeHtml(notification.id)}"><strong>${escapeHtml(notification.title)}</strong><span>${escapeHtml(notification.message)}</span>${notification.ctaLabel ? `<em>${escapeHtml(notification.ctaLabel)}</em>` : ""}</button>`).join("") : `<div class="dropdown-empty">You're all caught up</div>`}`;
+      menu.querySelectorAll("[data-notification-id]").forEach((notificationButton) => notificationButton.addEventListener("click", async () => {
+        const notificationId = notificationButton.dataset.notificationId;
+        await apiJson(`/api/notifications/${encodeURIComponent(notificationId)}/read`, { method: "POST" });
+        const item = notifications.find((notification) => notification.id === notificationId);
+        if (item?.ctaUrl) window.location.href = item.ctaUrl;
+        else await loadNotifications();
+      }));
+    } catch {
+      menu.innerHTML = `<div class="dropdown-title">Notifications</div><div class="dropdown-empty">Notifications unavailable</div>`;
+    }
   }
 
   /** Mirrors the desktop nav's groups exactly (see renderNav above), just

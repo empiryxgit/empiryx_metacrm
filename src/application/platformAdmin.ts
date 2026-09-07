@@ -1,6 +1,6 @@
 import { AuthError } from "./auth";
 import { verifyPassword } from "../infrastructure/auth/password";
-import { getPlatformAdminByEmail, getPlatformCompany, getPlatformSummary, listPlatformCompanies, touchPlatformAdminLogin, updatePlatformCompanyStatus } from "../infrastructure/db/repositories/platformAdmin";
+import { createPlatformNotification, getPlatformAdminByEmail, getPlatformCompany, getPlatformSummary, listPlatformAuditLogs, listPlatformCompanies, listPlatformNotifications, listUserNotifications, markPlatformNotificationRead, touchPlatformAdminLogin, updatePlatformCompanyStatus } from "../infrastructure/db/repositories/platformAdmin";
 import { signPlatformAdminToken } from "../infrastructure/auth/tokens";
 
 export async function loginPlatformAdmin(input: { email: string; password: string }) {
@@ -38,4 +38,29 @@ export async function setPlatformCompanyStatus(input: { adminId: string; company
   const result = await updatePlatformCompanyStatus(input);
   if (!result) throw new AuthError("Customer account not found.", 404);
   return result;
+}
+
+export async function publishPlatformNotification(input: Parameters<typeof createPlatformNotification>[0]) {
+  if (!input.title.trim() || !input.message.trim()) throw new AuthError("Title and message are required.", 400);
+  if (!["global", "individual", "agency", "company", "user"].includes(input.targetType)) throw new AuthError("Invalid notification target.", 400);
+  return createPlatformNotification({ ...input, title: input.title.trim(), message: input.message.trim() });
+}
+
+export async function getPlatformNotificationList() {
+  const rows = await listPlatformNotifications();
+  return rows.map((row) => ({ ...row, publishedAt: row.publishedAt.toISOString(), createdAt: row.createdAt.toISOString() }));
+}
+
+export async function getUserNotificationList(input: { userId: string; companyId: string; accountType: string }) {
+  const rows = await listUserNotifications(input);
+  return rows.map((row) => ({ ...row, publishedAt: row.publishedAt.toISOString(), readAt: row.readAt?.toISOString() ?? null }));
+}
+
+export async function readUserNotification(notificationId: string, userId: string) {
+  await markPlatformNotificationRead(notificationId, userId);
+}
+
+export async function getPlatformAuditLogList() {
+  const rows = await listPlatformAuditLogs();
+  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
 }

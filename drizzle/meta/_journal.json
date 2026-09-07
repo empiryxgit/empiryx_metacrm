@@ -232,6 +232,13 @@
       "when": 1788799085564,
       "tag": "0032_platform_audit_logs",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788799085565,
+      "tag": "0033_platform_notifications",
+      "breakpoints": true
     }
   ]
 }
