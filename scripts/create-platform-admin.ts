@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { hashPassword } from "../src/infrastructure/auth/password";
 import { getDb } from "../src/infrastructure/db/client";
 import { platformAdmins } from "../src/infrastructure/db/schema";
