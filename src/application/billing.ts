@@ -36,7 +36,7 @@ import {
   type OverageKind,
   type PurchaseKind,
 } from "../domain/billing";
-import { resolveEntitlementState, effectiveCampaignLimit, effectiveClientLimit, type EntitlementState } from "../domain/trial";
+import { resolveEntitlementState, effectiveCampaignLimit, effectiveClientLimit, isEntitlementBlocked, type EntitlementState } from "../domain/trial";
 import {
   getCompanyById,
   applyOverageCapacityPurchase,
@@ -111,6 +111,36 @@ export async function resolvePoolRootCompanyId(companyId: string): Promise<{ roo
   }
 
   return { rootCompanyId: companyId, accountType: "individual" };
+}
+
+/**
+ * Phase 16 (Meta lead synchronization) - "Only active and authorized
+ * campaigns are processed." Called at the very start of every lead-
+ * processing worker (src/application/processLead.ts,
+ * src/application/metaSync/processMetaLeadEvent.ts,
+ * src/application/metaSync/processWhatsAppMessageEvent.ts) before any
+ * Graph API call or DB write, so a lead arriving for a trial_expired or
+ * subscription_expired account is never inserted.
+ *
+ * Deliberately a single ACCOUNT-level check, not a per-campaign
+ * authorization column: the campaign LIMIT during trial is already pinned
+ * to exactly 1 (see effectiveCampaignLimit in src/domain/trial.ts, applied
+ * by getCampaignLimitStatus) - there is never a scenario where a trialing
+ * account has one authorized campaign and a second, unauthorized one
+ * whose leads must be told apart. Once the account itself is blocked, ALL
+ * of its campaigns stop ingesting; while trialing or genuinely subscribed,
+ * every one of its (already limit-enforced) campaigns ingests normally.
+ *
+ * Fails OPEN (returns false - never blocks) if the company row can't be
+ * resolved at all - a data-integrity gap here must never silently drop a
+ * legitimate tenant's leads; getCampaignLimitStatus's own 404 on a missing
+ * company is a separate, already-handled failure mode elsewhere.
+ */
+export async function isLeadIngestionBlocked(companyId: string): Promise<boolean> {
+  const { rootCompanyId } = await resolvePoolRootCompanyId(companyId);
+  const rootCompany = await getCompanyById(rootCompanyId);
+  if (!rootCompany) return false;
+  return isEntitlementBlocked(resolveEntitlementState(rootCompany));
 }
 
 /** Extra slots only count while the paid-for cycle is still in the future -

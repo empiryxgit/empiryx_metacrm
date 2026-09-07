@@ -33,6 +33,7 @@ import { leadExistsByMetaLeadId, logEvent } from "../../infrastructure/db/reposi
 import {
   getMetaLeadEventById,
   insertMetaSyncLead,
+  markMetaLeadEventBlocked,
   markMetaLeadEventCompleted,
   markMetaLeadEventDuplicate,
   markMetaLeadEventProcessing,
@@ -44,14 +45,24 @@ import { resolveLeadFields } from "./resolveLeadFields";
 import { RetryableProcessingError } from "../processLead";
 import { LeadPlatform } from "../../domain/types";
 import { flagConnectionIfAuthError } from "./metaConnectionService";
+import { isLeadIngestionBlocked } from "../billing";
 
-export type ProcessMetaLeadEventOutcome = "processed" | "duplicate";
+export type ProcessMetaLeadEventOutcome = "processed" | "duplicate" | "blocked";
 
 export async function processMetaLeadEvent(
   leadEventId: string,
   metaLeadId: string,
   tenantId: string,
 ): Promise<ProcessMetaLeadEventOutcome> {
+  // Phase 16 (trial/subscription entitlement) - checked first, before the
+  // Redis claim, same posture as processLead.ts. See isLeadIngestionBlocked's
+  // own doc comment in src/application/billing.ts.
+  if (await isLeadIngestionBlocked(tenantId)) {
+    await markMetaLeadEventBlocked(leadEventId);
+    await logEvent({ eventType: "Blocked", detail: `Account entitlement blocked (trial/subscription expired): ${metaLeadId}` });
+    return "blocked";
+  }
+
   // Fast-path dedupe via Redis - a miss just means "check Postgres", never
   // treated as proof of non-existence (same contract as processLead.ts).
   const claimed = await tryClaimLeadId(metaLeadId);

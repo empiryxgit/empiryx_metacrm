@@ -184,6 +184,20 @@ export async function markMetaLeadEventDuplicate(id: string) {
     .where(eq(metaLeadEvents.id, id));
 }
 
+/** BLOCKED - Phase 16 (trial/subscription entitlement, see
+ * isLeadIngestionBlocked in src/application/billing.ts): a legitimate,
+ * non-failure terminal outcome, same posture as markMetaLeadEventDuplicate
+ * above - the event genuinely arrived and was correctly captured, but the
+ * tenant's account is currently trial_expired/subscription_expired, so no
+ * lead is created from it. Never retried. */
+export async function markMetaLeadEventBlocked(id: string) {
+  const db = await getDb();
+  await db
+    .update(metaLeadEvents)
+    .set({ status: "blocked", processedAt: new Date(), updatedAt: new Date() })
+    .where(eq(metaLeadEvents.id, id));
+}
+
 /**
  * RETRYING - THIS attempt failed, but it is not the end of the story:
  * QStash still has retry attempts left (see publishTenantLeadReceived's

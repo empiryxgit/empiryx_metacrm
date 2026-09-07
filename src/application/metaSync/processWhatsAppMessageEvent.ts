@@ -41,14 +41,16 @@ import {
   getMetaLeadRouteByMetaAdId,
   getWhatsappMessageEventById,
   insertWhatsappLead,
+  markWhatsappMessageEventBlocked,
   markWhatsappMessageEventCompleted,
   markWhatsappMessageEventDuplicate,
   markWhatsappMessageEventProcessing,
   markWhatsappMessageEventRetrying,
 } from "../../infrastructure/db/repositories/whatsapp";
 import { RetryableProcessingError } from "../processLead";
+import { isLeadIngestionBlocked } from "../billing";
 
-export type ProcessWhatsAppMessageEventOutcome = "processed" | "duplicate";
+export type ProcessWhatsAppMessageEventOutcome = "processed" | "duplicate" | "blocked";
 
 interface WhatsappReferral {
   source_id?: string; // the Click-to-WhatsApp ad's OWN Meta id
@@ -68,6 +70,12 @@ export async function processWhatsAppMessageEvent(
   tenantId: string,
 ): Promise<ProcessWhatsAppMessageEventOutcome> {
   const metaLeadId = leadIdempotencyKey(waMessageId);
+
+  if (await isLeadIngestionBlocked(tenantId)) {
+    await markWhatsappMessageEventBlocked(messageEventId);
+    await logEvent({ eventType: "Blocked", detail: `Account entitlement blocked (trial/subscription expired): ${waMessageId}` });
+    return "blocked";
+  }
 
   // Fast-path dedupe via Redis - a miss just means "check Postgres", never
   // treated as proof of non-existence (same contract as processLead.ts /

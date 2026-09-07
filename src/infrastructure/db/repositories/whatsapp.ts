@@ -350,6 +350,18 @@ export async function markWhatsappMessageEventDuplicate(id: string) {
     .where(eq(whatsappMessageEvents.id, id));
 }
 
+/** BLOCKED - same Phase 16 entitlement rule as markMetaLeadEventBlocked in
+ * metaLeadEvents.ts: a legitimate, non-failure terminal outcome for a
+ * message that arrived while the tenant's account was
+ * trial_expired/subscription_expired. Never retried. */
+export async function markWhatsappMessageEventBlocked(id: string) {
+  const db = await getDb();
+  await db
+    .update(whatsappMessageEvents)
+    .set({ status: "blocked", processedAt: new Date(), updatedAt: new Date() })
+    .where(eq(whatsappMessageEvents.id, id));
+}
+
 export async function markWhatsappMessageEventCompleted(id: string) {
   const db = await getDb();
   await db

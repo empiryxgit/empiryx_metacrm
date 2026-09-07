@@ -1052,15 +1052,21 @@ export const metaLeadEvents = crm.table(
     campaignId: text("campaign_id"),
     rawPayload: jsonb("raw_payload").notNull(),
     // Phase 14 status vocabulary - "received" | "enqueued" | "processing" |
-    // "completed" | "duplicate" | "retrying" | "failed" - not a DB enum,
-    // same convention as every other status column in this schema.
-    // "retrying" means this attempt failed but QStash retries remain;
-    // "failed" is the terminal state, set only once by the dead-letter
-    // callback when retries are exhausted. "enqueued" and "duplicate" are
-    // two additional internal states beyond the user-facing
-    // RECEIVED/PROCESSING/COMPLETED/FAILED/RETRYING model: "enqueued" is
-    // load-bearing for the reconciliation sweep (getUnenqueuedMetaLeadEvents),
-    // and "duplicate" is a legitimate non-failure terminal outcome.
+    // "completed" | "duplicate" | "retrying" | "failed" | "blocked" - not a
+    // DB enum, same convention as every other status column in this
+    // schema. "retrying" means this attempt failed but QStash retries
+    // remain; "failed" is the terminal state, set only once by the
+    // dead-letter callback when retries are exhausted. "enqueued" and
+    // "duplicate" are two additional internal states beyond the
+    // user-facing RECEIVED/PROCESSING/COMPLETED/FAILED/RETRYING model:
+    // "enqueued" is load-bearing for the reconciliation sweep
+    // (getUnenqueuedMetaLeadEvents), and "duplicate" is a legitimate
+    // non-failure terminal outcome. "blocked" (Phase 16 - trial/
+    // subscription entitlement, see isLeadIngestionBlocked in
+    // src/application/billing.ts) is the same kind of legitimate
+    // non-failure terminal outcome as "duplicate": the event was correctly
+    // captured, but the tenant's account was trial_expired/
+    // subscription_expired at processing time, so no lead was created.
     status: text("status").notNull().default("received"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp("processed_at", { withTimezone: true }),
@@ -1433,7 +1439,8 @@ export const whatsappMessageEvents = crm.table(
     referral: jsonb("referral"),
     rawPayload: jsonb("raw_payload").notNull(),
     // Same status vocabulary as meta_lead_events - "received" | "enqueued" |
-    // "processing" | "completed" | "duplicate" | "retrying" | "failed".
+    // "processing" | "completed" | "duplicate" | "retrying" | "failed" |
+    // "blocked" (Phase 16 - trial/subscription entitlement).
     status: text("status").notNull().default("received"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     processedAt: timestamp("processed_at", { withTimezone: true }),

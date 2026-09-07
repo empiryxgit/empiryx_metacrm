@@ -7,11 +7,12 @@ import { getLeadDetails, MetaApiError } from "../infrastructure/meta/graphClient
 import { releaseLeadIdClaim, tryClaimLeadId } from "../infrastructure/cache/redis";
 import { insertLead, leadExistsByMetaLeadId, logEvent } from "../infrastructure/db/repositories";
 import { getCampaign, getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
+import { isLeadIngestionBlocked } from "./billing";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { LeadPlatform } from "../domain/types";
 import type { MetaLeadDetails } from "../domain/types";
 
-export type ProcessLeadOutcome = "processed" | "duplicate";
+export type ProcessLeadOutcome = "processed" | "duplicate" | "blocked";
 
 export class RetryableProcessingError extends Error {}
 
@@ -22,6 +23,17 @@ export async function processLead(
   companyId: string,
   crmCampaignId: string,
 ): Promise<ProcessLeadOutcome> {
+  // Phase 16 (trial/subscription entitlement) - checked before anything
+  // else, including the Redis claim: a blocked account's lead is never
+  // even provisionally claimed, so it can't leave a stale claim behind.
+  // See isLeadIngestionBlocked's own doc comment in src/application/billing.ts
+  // for why this is a single account-level check rather than a
+  // per-campaign one.
+  if (await isLeadIngestionBlocked(companyId)) {
+    await logEvent({ rawEventId, eventType: "Blocked", detail: `Account entitlement blocked (trial/subscription expired): ${metaLeadId}` });
+    return "blocked";
+  }
+
   // Fast-path dedupe via Redis. A miss just means "check Postgres" - never
   // treated as proof of non-existence.
   const claimed = await tryClaimLeadId(metaLeadId);
