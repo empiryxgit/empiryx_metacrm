@@ -10,7 +10,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
-import { requireAuth, requirePermission } from "../src/infrastructure/auth/context";
+import { requireAuth, requirePermission, requirePlatformAdmin } from "../src/infrastructure/auth/context";
+import { PLATFORM_ADMIN_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../src/infrastructure/auth/tokens";
+import { loginPlatformAdmin, getPlatformDashboard } from "../src/application/platformAdmin";
+import { AuthError } from "../src/application/auth";
 import { getIntegrationCounts, getLastReconciliationRun } from "../src/infrastructure/db/repositories";
 import { PERMISSIONS, PERMISSION_CATALOG } from "../src/domain/permissions";
 
@@ -23,9 +26,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return handleMetrics(req, res);
     case "permissions":
       return handlePermissions(req, res);
+    case "platform-admin":
+      return handlePlatformAdmin(req, res);
     default:
       res.status(404).json({ error: "Not found" });
   }
+}
+
+async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
+  const action = typeof req.query.action === "string" ? req.query.action : "";
+  if (action === "login") {
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    const body = req.body as { email?: string; password?: string };
+    if (!body?.email || !body.password) {
+      res.status(400).json({ error: "Email and password are required." });
+      return;
+    }
+    try {
+      const result = await loginPlatformAdmin({ email: body.email, password: body.password });
+      res.setHeader("Set-Cookie", `${PLATFORM_ADMIN_COOKIE_NAME}=${result.token};${cookieOptions(30 * 60)}`);
+      res.status(200).json({ admin: result.admin });
+    } catch (err) {
+      if (err instanceof Error && "status" in err) {
+        res.status(Number((err as AuthError).status)).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: "Failed to sign in." });
+    }
+    return;
+  }
+  if (action === "logout") {
+    res.setHeader("Set-Cookie", `${PLATFORM_ADMIN_COOKIE_NAME}=;${clearCookieOptions()}`);
+    res.status(200).json({ ok: true });
+    return;
+  }
+  if (action === "dashboard") {
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    try {
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+      res.status(200).json(await getPlatformDashboard(search));
+    } catch {
+      res.status(500).json({ error: "Failed to load platform dashboard." });
+    }
+    return;
+  }
+  res.status(404).json({ error: "Not found" });
 }
 
 // Liveness/readiness endpoint. Checks the three external dependencies this

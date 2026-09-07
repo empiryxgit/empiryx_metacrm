@@ -18,6 +18,9 @@
     { "source": "/api/health", "destination": "/api/system?resource=health" },
     { "source": "/api/monitoring/metrics", "destination": "/api/system?resource=metrics" },
     { "source": "/api/permissions", "destination": "/api/system?resource=permissions" },
+    { "source": "/api/platform-admin/login", "destination": "/api/system?resource=platform-admin&action=login" },
+    { "source": "/api/platform-admin/logout", "destination": "/api/system?resource=platform-admin&action=logout" },
+    { "source": "/api/platform-admin/dashboard", "destination": "/api/system?resource=platform-admin&action=dashboard" },
 
     { "source": "/api/auth/register", "destination": "/api/auth/handler?action=register" },
     { "source": "/api/auth/login", "destination": "/api/auth/handler?action=login" },

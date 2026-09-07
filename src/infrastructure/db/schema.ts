@@ -1938,6 +1938,22 @@ export const reconciliationRuns = crm.table("reconciliation_runs", {
   notes: text("notes"),
 });
 
+/** Platform operators are deliberately independent from customer users.
+ * They do not belong to a company, agency, or client relationship. */
+export const platformAdmins = crm.table("platform_admins", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  fullName: text("full_name").notNull(),
+  status: text("status").notNull().default("active"),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }),
+}, (t) => ({
+  emailIdx: uniqueIndex("ux_platform_admins_email").on(t.email),
+  statusIdx: index("ix_platform_admins_status").on(t.status),
+}));
+
 // ---------------------------------------------------------------------------
 // Billing - Razorpay overage orders (extra campaign/client capacity bought
 // on top of a plan's base allowance - see companies.extraCampaignSlots/

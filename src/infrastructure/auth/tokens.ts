@@ -136,6 +136,33 @@ export function hashOnboardingToken(token: string): string {
 
 export const ACCESS_COOKIE_NAME = "mla_access";
 export const REFRESH_COOKIE_NAME = "mla_refresh";
+export const PLATFORM_ADMIN_COOKIE_NAME = "mla_platform_admin";
+
+export interface PlatformAdminTokenClaims {
+  sub: string;
+  scope: "platform_admin";
+  email: string;
+  fullName: string;
+}
+
+export async function signPlatformAdminToken(claims: PlatformAdminTokenClaims): Promise<string> {
+  return new SignJWT({ ...claims })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(claims.sub)
+    .setIssuedAt()
+    .setExpirationTime("30m")
+    .sign(getSecret());
+}
+
+export async function verifyPlatformAdminToken(token: string): Promise<PlatformAdminTokenClaims | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
+    if (payload.scope !== "platform_admin") return null;
+    return payload as unknown as PlatformAdminTokenClaims;
+  } catch {
+    return null;
+  }
+}
 // Which client company an AGENCY user is currently "managing" (the client
 // switcher - see src/application/agencyClientContext.ts). Deliberately a
 // SEPARATE plain cookie, not a JWT claim: it is pure UI-session state (which

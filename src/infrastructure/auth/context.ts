@@ -3,12 +3,16 @@
 // is done explicitly here rather than relying on req.cookies.
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { ACCESS_COOKIE_NAME, verifyAccessToken, type AccessTokenClaims } from "./tokens";
+import { ACCESS_COOKIE_NAME, PLATFORM_ADMIN_COOKIE_NAME, verifyAccessToken, verifyPlatformAdminToken, type AccessTokenClaims, type PlatformAdminTokenClaims } from "./tokens";
 import type { PermissionCode } from "../../domain/permissions";
 import { isAccountLockedOut } from "../../application/billing";
 
 export interface AuthContext extends AccessTokenClaims {
   userId: string;
+}
+
+export interface PlatformAdminContext extends PlatformAdminTokenClaims {
+  adminId: string;
 }
 
 export function parseCookies(req: VercelRequest): Record<string, string> {
@@ -42,6 +46,16 @@ export async function requireAuth(req: VercelRequest, res: VercelResponse): Prom
     return null;
   }
   return auth;
+}
+
+export async function requirePlatformAdmin(req: VercelRequest, res: VercelResponse): Promise<PlatformAdminContext | null> {
+  const cookies = parseCookies(req);
+  const claims = cookies[PLATFORM_ADMIN_COOKIE_NAME] ? await verifyPlatformAdminToken(cookies[PLATFORM_ADMIN_COOKIE_NAME]) : null;
+  if (!claims) {
+    res.status(401).json({ error: "Platform administrator authentication required." });
+    return null;
+  }
+  return { ...claims, adminId: claims.sub };
 }
 
 export function hasPermission(auth: AuthContext, code: PermissionCode): boolean {
