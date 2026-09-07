@@ -13,6 +13,7 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
   <header class="admin-head"><div><h1>Platform Administration</h1><p>System-wide visibility across independent customer accounts.</p></div><button class="btn" id="logout">Sign out</button></header>
   <section class="stats" id="stats"></section>
   <section class="card"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div></section>
+  <section class="card" id="detail" style="display:none"></section>
 </main>
 <script>
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>\"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[char]));
@@ -25,7 +26,26 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
     if (!response.ok) throw new Error(data.error || "Unable to load dashboard.");
     const summary = data.summary;
     stats.innerHTML = [["Users",summary.users],["Customer accounts",summary.companies],["Agencies",summary.agencies],["Agency clients",summary.clients],["Active subscriptions",summary.activeSubscriptions],["Active trials",summary.activeTrials],["Expired trials",summary.expiredTrials],["Expired subscriptions",summary.expiredSubscriptions]].map(([label,value]) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("");
-    content.innerHTML = data.companies.length ? `<div class="table-wrap"><table class="admin-table"><thead><tr><th>Account</th><th>Type</th><th>Status</th><th>Trial / subscription</th><th>Usage</th><th>Registered</th></tr></thead><tbody>${data.companies.map((company) => `<tr><td><strong>${escapeHtml(company.name)}</strong><br><small>${escapeHtml(company.slug)}</small></td><td><span class="pill">${escapeHtml(company.accountType)}</span></td><td>${escapeHtml(company.status)}</td><td>${escapeHtml(company.subscriptionStatus)}<br><small>${company.subscriptionStatus === "trialing" ? `${date(company.trialEndsAt)} trial end` : date(company.subscriptionExpiresAt)}</small></td><td>${company.accountType === "agency" ? `${company.clientCount} clients · ` : ""}${company.campaignCount} campaigns · ${company.leadCount} leads</td><td>${date(company.createdAt)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="state-block"><p class="state-title">No accounts found</p></div>`;
+    content.innerHTML = data.companies.length ? `<div class="table-wrap"><table class="admin-table"><thead><tr><th>Account</th><th>Type</th><th>Status</th><th>Trial / subscription</th><th>Usage</th><th>Registered</th><th></th></tr></thead><tbody>${data.companies.map((company) => `<tr><td><strong>${escapeHtml(company.name)}</strong><br><small>${escapeHtml(company.slug)}</small></td><td><span class="pill">${escapeHtml(company.accountType)}</span></td><td>${escapeHtml(company.status)}</td><td>${escapeHtml(company.subscriptionStatus)}<br><small>${company.subscriptionStatus === "trialing" ? `${date(company.trialEndsAt)} trial end` : date(company.subscriptionExpiresAt)}</small></td><td>${company.accountType === "agency" ? `${company.clientCount} clients · ` : ""}${company.campaignCount} campaigns · ${company.leadCount} leads</td><td>${date(company.createdAt)}</td><td><button class="btn" data-company-id="${escapeHtml(company.id)}">View</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="state-block"><p class="state-title">No accounts found</p></div>`;
+    content.querySelectorAll("[data-company-id]").forEach((button) => button.addEventListener("click", () => loadDetail(button.dataset.companyId)));
+  }
+  async function loadDetail(companyId) {
+    const response = await fetch(`/api/platform-admin/companies/${encodeURIComponent(companyId)}`);
+    const data = await response.json();
+    if (response.status === 401) { window.location.href = "/admin/login.html"; return; }
+    if (!response.ok) throw new Error(data.error || "Unable to load account.");
+    const company = data.company;
+    detail.style.display = "block";
+    detail.innerHTML = `<h2>${escapeHtml(company.name)}</h2><p><strong>${escapeHtml(company.accountType)}</strong> · ${escapeHtml(company.subscriptionStatus)} · ${escapeHtml(company.status)}</p><p>Registered: ${date(company.createdAt)} · Trial ends: ${date(company.trialEndsAt)} · Subscription ends: ${date(company.subscriptionExpiresAt)}</p><p>${data.users.length} users · ${data.payments.length} payment orders${data.agency ? ` · Agency relationship: ${escapeHtml(data.agency.relationshipStatus)}` : ""}</p><button class="btn" id="statusAction">${company.status === "suspended" ? "Activate account" : "Suspend account"}</button>`;
+    document.getElementById("statusAction").addEventListener("click", async () => {
+      const nextStatus = company.status === "suspended" ? "active" : "suspended";
+      const reason = window.prompt(`Reason for ${nextStatus === "active" ? "activating" : "suspending"} this account:`);
+      if (reason === null || !reason.trim()) return;
+      const update = await fetch(`/api/platform-admin/companies/${encodeURIComponent(companyId)}`, { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ status:nextStatus, reason:reason.trim() }) });
+      if (!update.ok) { const error = await update.json(); throw new Error(error.error || "Unable to update account."); }
+      await load();
+      await loadDetail(companyId);
+    });
   }
   searchBtn.addEventListener("click", () => load().catch((err) => { content.textContent = err.message; }));
   search.addEventListener("keydown", (event) => { if (event.key === "Enter") load().catch((err) => { content.textContent = err.message; }); });

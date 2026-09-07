@@ -1,6 +1,6 @@
-import { and, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { agencyClients, billingOrders, campaigns, companies, leads, platformAdmins, users } from "../schema";
+import { agencyClients, billingOrders, campaigns, companies, leads, platformAdmins, platformAuditLogs, sessions, users } from "../schema";
 
 export async function getPlatformAdminByEmail(email: string) {
   const db = await getDb();
@@ -79,4 +79,43 @@ export async function getPlatformSummary() {
     expiredSubscriptions: value(expiredSubscriptions),
     recentPayments: recentOrders,
   };
+}
+
+export async function getPlatformCompany(companyId: string) {
+  const db = await getDb();
+  const [company] = await db.select().from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company) return null;
+
+  const [companyUsers, companyOrders, agencyLink] = await Promise.all([
+    db.select({ id: users.id, email: users.email, fullName: users.fullName, status: users.status, createdAt: users.createdAt }).from(users).where(eq(users.companyId, companyId)).orderBy(desc(users.createdAt)),
+    db.select({ id: billingOrders.id, kind: billingOrders.kind, amountInPaise: billingOrders.amountInPaise, currency: billingOrders.currency, status: billingOrders.status, cycle: billingOrders.cycle, createdAt: billingOrders.createdAt, razorpayPaymentId: billingOrders.razorpayPaymentId }).from(billingOrders).where(eq(billingOrders.companyId, companyId)).orderBy(desc(billingOrders.createdAt)).limit(20),
+    db.select({ agencyCompanyId: agencyClients.agencyCompanyId, relationshipStatus: agencyClients.status }).from(agencyClients).where(eq(agencyClients.clientCompanyId, companyId)).limit(1),
+  ]);
+
+  return { company, users: companyUsers, payments: companyOrders, agency: agencyLink[0] ?? null };
+}
+
+export async function updatePlatformCompanyStatus(input: { adminId: string; companyId: string; status: "active" | "suspended"; reason?: string }) {
+  const db = await getDb();
+  const [company] = await db.select({ id: companies.id, status: companies.status }).from(companies).where(eq(companies.id, input.companyId)).limit(1);
+  if (!company) return null;
+  if (company.status === input.status) return company;
+
+  await db.update(companies).set({ status: input.status, updatedAt: new Date() }).where(eq(companies.id, input.companyId));
+  if (input.status === "suspended") {
+    const companyUsers = await db.select({ id: users.id }).from(users).where(eq(users.companyId, input.companyId));
+    if (companyUsers.length) {
+      await db.update(sessions).set({ revokedAt: new Date() }).where(inArray(sessions.userId, companyUsers.map((user) => user.id)));
+    }
+  }
+  await db.insert(platformAuditLogs).values({
+    adminId: input.adminId,
+    action: input.status === "suspended" ? "ACCOUNT_SUSPENDED" : "ACCOUNT_ACTIVATED",
+    entityType: "company",
+    entityId: input.companyId,
+    previousValue: { status: company.status },
+    newValue: { status: input.status },
+    reason: input.reason ?? null,
+  });
+  return { ...company, status: input.status };
 }

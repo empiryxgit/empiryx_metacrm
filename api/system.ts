@@ -12,7 +12,7 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
 import { requireAuth, requirePermission, requirePlatformAdmin } from "../src/infrastructure/auth/context";
 import { PLATFORM_ADMIN_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../src/infrastructure/auth/tokens";
-import { loginPlatformAdmin, getPlatformDashboard } from "../src/application/platformAdmin";
+import { getPlatformCompanyDetail, getPlatformDashboard, loginPlatformAdmin, setPlatformCompanyStatus } from "../src/application/platformAdmin";
 import { AuthError } from "../src/application/auth";
 import { getIntegrationCounts, getLastReconciliationRun } from "../src/infrastructure/db/repositories";
 import { PERMISSIONS, PERMISSION_CATALOG } from "../src/domain/permissions";
@@ -75,6 +75,39 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
       res.status(200).json(await getPlatformDashboard(search));
     } catch {
       res.status(500).json({ error: "Failed to load platform dashboard." });
+    }
+    return;
+  }
+  if (action === "company") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    const companyId = typeof req.query.companyId === "string" ? req.query.companyId : "";
+    if (!companyId) {
+      res.status(400).json({ error: "companyId is required." });
+      return;
+    }
+    try {
+      if (req.method === "GET") {
+        res.status(200).json(await getPlatformCompanyDetail(companyId));
+        return;
+      }
+      if (req.method === "PATCH") {
+        const body = req.body as { status?: string; reason?: string };
+        if (body?.status !== "active" && body?.status !== "suspended") {
+          res.status(400).json({ error: "status must be active or suspended." });
+          return;
+        }
+        res.status(200).json(await setPlatformCompanyStatus({ adminId: admin.adminId, companyId, status: body.status, reason: body.reason?.trim() }));
+        return;
+      }
+      res.status(405).json({ error: "Method not allowed" });
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[platform-admin/company] Failed:", err);
+      res.status(500).json({ error: "Failed to manage customer account." });
     }
     return;
   }

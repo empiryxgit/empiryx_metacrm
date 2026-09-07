@@ -1,6 +1,7 @@
 import {
   createAgencyFixedRoles,
   createCompany,
+  getCompanyById,
   createOwnerRole,
   createUser,
   emailExists,
@@ -313,6 +314,11 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
   // and return the exact same generic error either way.
   const valid = await verifyPassword(input.password, user?.passwordHash ?? NO_SUCH_USER_DUMMY_HASH);
   if (!user || user.status !== "active" || !valid) {
+    throw new AuthError("Invalid email or password.", 401);
+  }
+
+  const company = await getCompanyById(user.companyId);
+  if (!company || company.status !== "active") {
     throw new AuthError("Invalid email or password.", 401);
   }
 

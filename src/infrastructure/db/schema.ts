@@ -1954,6 +1954,22 @@ export const platformAdmins = crm.table("platform_admins", {
   statusIdx: index("ix_platform_admins_status").on(t.status),
 }));
 
+export const platformAuditLogs = crm.table("platform_audit_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  adminId: uuid("admin_id").notNull().references(() => platformAdmins.id, { onDelete: "restrict" }),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: uuid("entity_id").notNull(),
+  previousValue: jsonb("previous_value"),
+  newValue: jsonb("new_value"),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  adminIdx: index("ix_platform_audit_logs_admin_id").on(t.adminId),
+  entityIdx: index("ix_platform_audit_logs_entity").on(t.entityType, t.entityId),
+  createdAtIdx: index("ix_platform_audit_logs_created_at").on(t.createdAt),
+}));
+
 // ---------------------------------------------------------------------------
 // Billing - Razorpay overage orders (extra campaign/client capacity bought
 // on top of a plan's base allowance - see companies.extraCampaignSlots/
