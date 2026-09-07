@@ -192,7 +192,9 @@
   .step p{ font-size:13.5px; line-height:1.6; color:var(--text-secondary); margin:0; }
 
   /* ---------- Pricing ---------- */
-  .audience-tabs{ display:flex; gap:6px; background:var(--surface-sunken); border:1px solid var(--border); border-radius:999px; padding:6px; max-width:420px; margin:0 auto 48px; }
+  #pricing{ padding:64px 0; }
+  #pricing .section-head{ margin-bottom:28px; }
+  .audience-tabs{ display:flex; gap:6px; background:var(--surface-sunken); border:1px solid var(--border); border-radius:999px; padding:6px; max-width:420px; margin:0 auto 28px; }
   .audience-tab{
     flex:1; text-align:center; padding:12px 18px; border-radius:999px; font-size:14.5px; font-weight:700;
     color:var(--text-secondary); cursor:pointer; border:none; background:transparent; font-family:inherit;
@@ -202,59 +204,53 @@
   .audience-tab.active{ background:var(--brand-dark); color:#fff; box-shadow:var(--shadow-sm); }
   .audience-panel + .audience-panel{ margin-top:0; }
 
-  .pricing-includes{ margin-bottom:56px; }
-  .pricing-includes-head{ text-align:center; margin:0 0 28px; }
-  .pricing-includes-head h3{ font-size:18px; font-weight:800; color:var(--text-primary); margin:0 0 6px; }
-  .pricing-includes-head p{ font-size:14px; color:var(--text-secondary); margin:0; }
-  .includes-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
-  .include-card{
-    display:flex; gap:14px; align-items:flex-start; background:var(--surface); border:1px solid var(--border);
-    border-radius:var(--radius-md); padding:18px;
+  /* ---------- Compact pricing card: features + billing side by side ---------- */
+  .pricing-card{
+    display:grid; grid-template-columns:1.15fr 1fr; background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius-lg); box-shadow:var(--shadow-md); overflow:hidden;
   }
-  .include-ic{
-    flex-shrink:0; width:36px; height:36px; border-radius:10px; background:var(--brand-primary-soft); color:var(--brand-primary-hover);
-    display:flex; align-items:center; justify-content:center;
+  .pricing-card-features{ padding:28px 32px; border-right:1px solid var(--border); }
+  .pricing-card-features h3{ font-size:15px; font-weight:800; margin:0 0 2px; color:var(--text-primary); }
+  .pricing-card-features > p{ font-size:12.5px; color:var(--text-muted); margin:0 0 16px; }
+  .check-list{ list-style:none; margin:0 0 18px; padding:0; display:grid; grid-template-columns:repeat(2,1fr); gap:9px 20px; }
+  .check-list li{ display:flex; gap:7px; align-items:flex-start; font-size:12.5px; line-height:1.48; color:var(--text-secondary); }
+  .check-list li svg{ flex-shrink:0; margin-top:3px; color:#1a8a5a; }
+  .check-list li strong{ color:var(--text-primary); font-weight:700; }
+
+  .trial-strip{
+    display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; background:var(--brand-primary-soft);
+    border-radius:var(--radius-md); padding:12px 16px; font-size:12.5px; color:var(--text-primary); line-height:1.4;
   }
-  .include-card h4{ font-size:13.5px; font-weight:700; margin:0 0 4px; color:var(--text-primary); }
-  .include-card p{ font-size:12.5px; line-height:1.5; color:var(--text-secondary); margin:0; }
-
-  .trial-banner{
-    display:flex; align-items:center; justify-content:space-between; gap:28px; flex-wrap:wrap;
-    background:linear-gradient(135deg, var(--brand-primary) 0%, #E86A28 100%);
-    border-radius:var(--radius-lg); padding:36px 40px; color:#fff; margin-bottom:48px; box-shadow:var(--shadow-lg);
+  .trial-strip-badge{
+    font-size:10px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--brand-primary-hover);
+    background:#fff; border-radius:999px; padding:4px 9px; flex-shrink:0;
   }
-  .trial-banner-badge{ display:inline-flex; align-items:center; gap:8px; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; background:rgba(255,255,255,.18); border-radius:999px; padding:6px 14px; margin:0 0 12px; }
-  .trial-banner h3{ font-size:22px; font-weight:800; margin:0 0 8px; letter-spacing:-0.01em; }
-  .trial-banner p{ font-size:14.5px; color:rgba(255,255,255,.9); margin:0; max-width:460px; line-height:1.55; }
-  .trial-banner-cta{ display:flex; flex-direction:column; align-items:flex-end; gap:10px; flex-shrink:0; }
-  .trial-banner-price{ font-size:28px; font-weight:800; text-align:right; }
-  .trial-banner-price span{ font-size:12.5px; font-weight:600; opacity:.85; display:block; margin-top:2px; }
+  .trial-strip a{ margin-left:auto; font-weight:700; color:var(--brand-primary-hover); white-space:nowrap; text-decoration:none; }
+  .trial-strip a:hover{ text-decoration:underline; }
 
-  .plan-picker-head{ text-align:center; margin:0 0 24px; }
-  .plan-picker-head h3{ font-size:20px; font-weight:800; margin:0 0 8px; color:var(--text-primary); }
-  .plan-picker-head p{ font-size:14.5px; color:var(--text-secondary); margin:0; }
+  .pricing-card-plan{ padding:28px 32px; display:flex; flex-direction:column; justify-content:center; }
 
-  .plan-tabs{ display:flex; gap:6px; background:var(--surface-sunken); border:1px solid var(--border); border-radius:999px; padding:6px; max-width:640px; margin:0 auto 32px; }
+  .plan-tabs{ display:flex; gap:6px; background:var(--surface-sunken); border:1px solid var(--border); border-radius:999px; padding:6px; margin:0 0 20px; }
   .plan-tab{
-    flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; text-align:center; padding:9px 8px;
-    border-radius:999px; font-size:13.5px; font-weight:700; color:var(--text-secondary); cursor:pointer;
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; text-align:center; padding:9px 6px;
+    border-radius:999px; font-size:12.5px; font-weight:700; color:var(--text-secondary); cursor:pointer;
     transition:background .15s ease, color .15s ease; border:none; background:transparent; font-family:inherit;
   }
   .plan-tab:hover:not(.active){ color:var(--text-primary); }
   .plan-tab.active{ background:var(--brand-dark); color:#fff; box-shadow:var(--shadow-sm); }
-  .plan-tab .tab-badge{ font-size:9.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--brand-primary-hover); }
+  .plan-tab .tab-badge{ font-size:9px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--brand-primary-hover); }
   .plan-tab.active .tab-badge{ color:#FFC79A; }
 
-  .plan-result{ max-width:460px; margin:0 auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:36px 32px; text-align:center; box-shadow:var(--shadow-md); }
+  .plan-result{ text-align:center; }
   .plan-result .plan-price-row{ display:flex; align-items:baseline; justify-content:center; gap:8px; flex-wrap:wrap; }
-  .plan-original{ font-size:16px; color:var(--text-muted); text-decoration:line-through; }
-  .plan-price{ font-size:36px; font-weight:800; color:var(--text-primary); letter-spacing:-0.01em; }
-  .plan-period{ font-size:13px; color:var(--text-muted); margin:8px 0 0; }
+  .plan-original{ font-size:15px; color:var(--text-muted); text-decoration:line-through; }
+  .plan-price{ font-size:32px; font-weight:800; color:var(--text-primary); letter-spacing:-0.01em; }
+  .plan-period{ font-size:12.5px; color:var(--text-muted); margin:6px 0 0; }
   .plan-effective{ color:var(--brand-primary-hover); font-weight:600; }
-  .plan-save{ display:inline-flex; font-size:11px; font-weight:700; color:#1a8a5a; background:#E7F6EE; border-radius:999px; padding:3px 10px; margin:14px 0 0; }
+  .plan-save{ display:inline-flex; font-size:10.5px; font-weight:700; color:#1a8a5a; background:#E7F6EE; border-radius:999px; padding:3px 10px; margin:10px 0 0; }
   .plan-save[hidden], .plan-original[hidden]{ display:none; }
-  .plan-result-campaigns{ font-size:13px; color:var(--text-secondary); line-height:1.55; margin:20px 0 24px; padding-top:20px; border-top:1px solid var(--border); }
-  .plan-result .btn{ width:100%; max-width:280px; }
+  .plan-result-campaigns{ font-size:12px; color:var(--text-secondary); line-height:1.5; margin:14px 0 16px; padding-top:14px; border-top:1px solid var(--border); }
+  .plan-result .btn{ width:100%; }
 
   /* ---------- FAQ ---------- */
   .faq-list{ max-width:780px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
@@ -307,7 +303,8 @@
     .steps{ grid-template-columns:repeat(2,1fr); gap:32px 18px; }
     .step-line{ display:none; }
     .industries-wrap{ margin:0 16px; }
-    .includes-grid{ grid-template-columns:repeat(2,1fr); }
+    .pricing-card{ grid-template-columns:1fr; }
+    .pricing-card-features{ border-right:none; border-bottom:1px solid var(--border); }
   }
   @media (max-width: 720px){
     .nav-links{ display:none; }
@@ -317,6 +314,7 @@
     h1.hero-h{ font-size:34px; }
     .hero{ padding:44px 0 56px; }
     section{ padding:60px 0; }
+    #pricing{ padding:44px 0; }
     .feat-grid{ grid-template-columns:1fr; }
     .ind-grid{ grid-template-columns:1fr; }
     .industries-wrap{ padding:44px 0; margin:0; border-radius:0; }
@@ -327,14 +325,12 @@
     .foot-grid{ flex-direction:column; }
     .hero-note{ display:none; }
     .mobile-panel.open{ display:flex; }
-    .includes-grid{ grid-template-columns:1fr; }
-    .trial-banner{ flex-direction:column; align-items:flex-start; padding:28px; }
-    .trial-banner-cta{ align-items:flex-start; width:100%; }
-    .trial-banner-price{ text-align:left; }
-    .trial-banner-price span{ text-align:left; }
+    .pricing-card-features{ padding:22px 20px; }
+    .pricing-card-plan{ padding:22px 20px; }
+    .check-list{ grid-template-columns:1fr; }
+    .trial-strip a{ margin-left:0; }
     .plan-tabs{ flex-wrap:wrap; border-radius:18px; }
     .plan-tab{ flex:1 1 45%; }
-    .plan-result{ padding:28px 22px; }
   }
 </style>
 </head>
@@ -609,134 +605,81 @@
 
       <!-- ============ INDIVIDUAL ============ -->
       <div class="audience-panel" id="panelIndividual" data-audience-panel>
-        <div class="pricing-includes">
-          <div class="pricing-includes-head">
+        <div class="pricing-card">
+          <div class="pricing-card-features">
             <h3>Included in every Individual plan</h3>
-            <p>No feature gating, no hidden tiers — this is what you get whether you're on the free trial or the yearly plan.</p>
-          </div>
-          <div class="includes-grid">
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
-              <div><h4>Automatic Meta sync</h4><p>Connect once — campaigns, ad sets, forms, and leads sync from Facebook &amp; Instagram automatically.</p></div>
+            <p>No feature gating, no hidden tiers — same on the free trial and every paid cycle.</p>
+            <ul class="check-list">
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Automatic Meta sync</strong> — campaigns, forms &amp; leads sync from Facebook &amp; Instagram.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Unlimited lead capture</strong> — captured &amp; de-duplicated automatically, zero manual entry.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Unified sales pipeline</strong> — one shared pipeline, first click to closed deal.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Branches &amp; team roles</strong> — split leads by location/team, fine-grained permissions.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Built-in reliability</strong> — failed leads retry automatically, full delivery log.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Public capture forms</strong> — your own forms flow into the same pipeline as Meta ads.</span></li>
+            </ul>
+            <div class="trial-strip">
+              <span class="trial-strip-badge">15-Day Free Trial</span>
+              <span>1 live campaign + its leads, everything above included, free.</span>
+              <a href="/register.html">Start free trial →</a>
             </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Unlimited lead capture</h4><p>Every submission is captured and de-duplicated automatically — zero manual entry, ever.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="7" height="16" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="4" width="7" height="10" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Unified sales pipeline</h4><p>One shared pipeline your whole team works from — first click to closed deal.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.8"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
-              <div><h4>Branches &amp; team roles</h4><p>Split leads by location or team, with fine-grained role-based permissions.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-              <div><h4>Built-in reliability</h4><p>Every lead is retried on failure and never silently dropped, with a full delivery log.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 8h18" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Public capture forms</h4><p>Publish your own lead forms — they flow into the exact same pipeline as your Meta ads.</p></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="trial-banner">
-          <div>
-            <span class="trial-banner-badge">15-Day Free Trial</span>
-            <h3>Try RUTA with 1 live campaign</h3>
-            <p>Connect one Meta campaign and watch every lead it generates land straight into your pipeline — free for 15 days, everything above included.</p>
-          </div>
-          <div class="trial-banner-cta">
-            <div class="trial-banner-price">Free<span>1 campaign + its leads</span></div>
-            <a href="/register.html" class="btn btn-dark btn-lg">Start free trial →</a>
-          </div>
-        </div>
-
-        <div class="plan-picker">
-          <div class="plan-picker-head">
-            <h3>Ready for more? Pick your billing cycle</h3>
-            <p>Same 5 campaigns, same functionality above, on every plan below — only the price changes.</p>
           </div>
 
-          <div class="plan-tabs" role="tablist" aria-label="Individual billing cycle" data-plan-tabs="individual">
-            <button class="plan-tab active" type="button" data-plan="monthly" role="tab" aria-selected="true">Monthly</button>
-            <button class="plan-tab" type="button" data-plan="quarterly" role="tab" aria-selected="false">Quarterly<span class="tab-badge">Save 10%</span></button>
-            <button class="plan-tab" type="button" data-plan="halfyearly" role="tab" aria-selected="false">Half-Yearly<span class="tab-badge">Most Popular</span></button>
-            <button class="plan-tab" type="button" data-plan="yearly" role="tab" aria-selected="false">Yearly<span class="tab-badge">Best Value</span></button>
-          </div>
-
-          <div class="plan-result">
-            <div class="plan-price-row">
-              <span class="plan-original" id="idvPlanOriginal" hidden></span>
-              <span class="plan-price" id="idvPlanPrice">₹2,500</span>
+          <div class="pricing-card-plan">
+            <div class="plan-tabs" role="tablist" aria-label="Individual billing cycle" data-plan-tabs="individual">
+              <button class="plan-tab active" type="button" data-plan="monthly" role="tab" aria-selected="true">Monthly</button>
+              <button class="plan-tab" type="button" data-plan="quarterly" role="tab" aria-selected="false">Quarterly<span class="tab-badge">Save 10%</span></button>
+              <button class="plan-tab" type="button" data-plan="halfyearly" role="tab" aria-selected="false">Half-Yearly<span class="tab-badge">Most Popular</span></button>
+              <button class="plan-tab" type="button" data-plan="yearly" role="tab" aria-selected="false">Yearly<span class="tab-badge">Best Value</span></button>
             </div>
-            <div class="plan-period" id="idvPlanPeriod">billed every month</div>
-            <span class="plan-save" id="idvPlanSave" hidden></span>
-            <div class="plan-result-campaigns">5 Meta ad campaigns · unlimited leads · same full functionality shown above</div>
-            <a href="/register.html" class="btn btn-primary btn-lg" id="idvPlanCta">Choose Monthly</a>
+
+            <div class="plan-result">
+              <div class="plan-price-row">
+                <span class="plan-original" id="idvPlanOriginal" hidden></span>
+                <span class="plan-price" id="idvPlanPrice">₹2,500</span>
+              </div>
+              <div class="plan-period" id="idvPlanPeriod">billed every month</div>
+              <span class="plan-save" id="idvPlanSave" hidden></span>
+              <div class="plan-result-campaigns">5 Meta ad campaigns · unlimited leads · same full functionality shown above</div>
+              <a href="/register.html" class="btn btn-primary btn-lg" id="idvPlanCta">Choose Monthly</a>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- ============ AGENCY ============ -->
       <div class="audience-panel" id="panelAgency" data-audience-panel hidden>
-        <div class="pricing-includes">
-          <div class="pricing-includes-head">
+        <div class="pricing-card">
+          <div class="pricing-card-features">
             <h3>Included in every Agency plan</h3>
-            <p>Everything in the Individual plan, plus the tools built specifically for running multiple clients from one login.</p>
-          </div>
-          <div class="includes-grid">
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="4" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="8" height="6" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="13" y="14" width="8" height="6" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Client-wise campaigns</h4><p>Every campaign broken out by client, filterable by client, status, and platform — nothing mixed across accounts.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 2v20M2 12h20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Aggregate lead reporting</h4><p>One report rolling up leads across every client you manage, alongside each client's own numbers.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="7" height="16" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="4" width="7" height="10" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Agency Dashboard &amp; KPIs</h4><p>Total clients, active clients, active campaigns, and agency-wide conversion rate — one view across your whole client book.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.8"/><path d="M5 20c0-3.9 3.1-6.5 7-6.5s7 2.6 7 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></div>
-              <div><h4>Client onboarding, your way</h4><p>Invite an existing company as a client, or generate a self-serve onboarding link — no manual setup per client.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M17 8V6a5 5 0 0 0-10 0v2M5 8h14v13H5V8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
-              <div><h4>Switch into any client's CRM</h4><p>Jump into any client's own workspace from one login — no separate accounts or passwords to juggle.</p></div>
-            </div>
-            <div class="include-card">
-              <div class="include-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/></svg></div>
-              <div><h4>Every access logged for audit</h4><p>Every time an agency user views or acts on a client's data, it's automatically recorded for audit.</p></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="plan-picker">
-          <div class="plan-picker-head">
-            <h3>Pick your billing cycle</h3>
-            <p>Same 5 clients, 10 campaigns total, and same functionality above, on every plan below — only the price changes.</p>
+            <p>Everything in Individual, plus the tools built for running multiple clients from one login.</p>
+            <ul class="check-list">
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Client-wise campaigns</strong> — filterable by client, status &amp; platform, nothing mixed.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Aggregate lead reporting</strong> — one rollup across every client, plus each client's own numbers.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Agency Dashboard &amp; KPIs</strong> — clients, campaigns &amp; conversion rate across your book.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Client onboarding, your way</strong> — invite a company, or share a self-serve link.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Switch into any client's CRM</strong> — one login, no separate accounts to juggle.</span></li>
+              <li><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span><strong>Every access logged for audit</strong> — client-data views &amp; actions recorded automatically.</span></li>
+            </ul>
           </div>
 
-          <div class="plan-tabs" role="tablist" aria-label="Agency billing cycle" data-plan-tabs="agency">
-            <button class="plan-tab active" type="button" data-plan="monthly" role="tab" aria-selected="true">Monthly</button>
-            <button class="plan-tab" type="button" data-plan="quarterly" role="tab" aria-selected="false">Quarterly<span class="tab-badge">Save 10%</span></button>
-            <button class="plan-tab" type="button" data-plan="halfyearly" role="tab" aria-selected="false">Half-Yearly<span class="tab-badge">Most Popular</span></button>
-            <button class="plan-tab" type="button" data-plan="yearly" role="tab" aria-selected="false">Yearly<span class="tab-badge">Best Value</span></button>
-          </div>
-
-          <div class="plan-result">
-            <div class="plan-price-row">
-              <span class="plan-original" id="agyPlanOriginal" hidden></span>
-              <span class="plan-price" id="agyPlanPrice">₹6,999</span>
+          <div class="pricing-card-plan">
+            <div class="plan-tabs" role="tablist" aria-label="Agency billing cycle" data-plan-tabs="agency">
+              <button class="plan-tab active" type="button" data-plan="monthly" role="tab" aria-selected="true">Monthly</button>
+              <button class="plan-tab" type="button" data-plan="quarterly" role="tab" aria-selected="false">Quarterly<span class="tab-badge">Save 10%</span></button>
+              <button class="plan-tab" type="button" data-plan="halfyearly" role="tab" aria-selected="false">Half-Yearly<span class="tab-badge">Most Popular</span></button>
+              <button class="plan-tab" type="button" data-plan="yearly" role="tab" aria-selected="false">Yearly<span class="tab-badge">Best Value</span></button>
             </div>
-            <div class="plan-period" id="agyPlanPeriod">billed every month</div>
-            <span class="plan-save" id="agyPlanSave" hidden></span>
-            <div class="plan-result-campaigns">5 clients · 10 campaigns total · same full Agency functionality shown above</div>
-            <a href="/register.html" class="btn btn-primary btn-lg" id="agyPlanCta">Choose Monthly</a>
+
+            <div class="plan-result">
+              <div class="plan-price-row">
+                <span class="plan-original" id="agyPlanOriginal" hidden></span>
+                <span class="plan-price" id="agyPlanPrice">₹6,999</span>
+              </div>
+              <div class="plan-period" id="agyPlanPeriod">billed every month</div>
+              <span class="plan-save" id="agyPlanSave" hidden></span>
+              <div class="plan-result-campaigns">5 clients · 10 campaigns total · same full Agency functionality shown above</div>
+              <a href="/register.html" class="btn btn-primary btn-lg" id="agyPlanCta">Choose Monthly</a>
+            </div>
           </div>
         </div>
       </div>
