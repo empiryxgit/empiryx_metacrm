@@ -245,7 +245,7 @@
           </span>
         </div>
         <div class="client-card-actions">
-          <button class="btn" type="button" data-enter="${c.id}"${c.status === "active" || c.status === "suspended" ? "" : " disabled title=\"Available once the client accepts\""}>Open CRM</button>
+          <button class="btn" type="button" data-enter="${c.id}"${c.status === "active" || c.status === "suspended" ? "" : " disabled title=\"Available once the client accepts\""}>Open LMS</button>
           <button class="btn secondary" type="button" data-open="${c.id}">Details</button>
         </div>
       </div>`).join("");
@@ -266,7 +266,7 @@
         try {
           await App.enterClient(btn.dataset.enter);
         } catch (err) {
-          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's CRM.")}</div>`;
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's LMS.")}</div>`;
           btn.disabled = false;
           btn.textContent = original;
         }

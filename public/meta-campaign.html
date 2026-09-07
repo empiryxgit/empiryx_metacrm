@@ -25,14 +25,14 @@
          (or several Meta campaigns to the same one), never edit the Meta
          campaign itself (name/status come from the sync).
          ===================================================================== -->
-    <h2 class="section-title">Map to CRM campaign</h2>
+    <h2 class="section-title">Map to LMS campaign</h2>
     <div class="card">
       <div id="mappingStateDesc" class="hint" style="margin:0 0 14px"></div>
-      <label for="crmCampaignSelect">CRM campaign</label>
+      <label for="crmCampaignSelect">LMS campaign</label>
       <select id="crmCampaignSelect" disabled>
         <option value="">Unmapped</option>
       </select>
-      <div class="hint">Leads from this Meta campaign will be attributed to the CRM campaign you choose here, and will inherit its branch. Don't see the right one? <a href="/campaigns.html">Create a CRM campaign first</a>, then come back here.</div>
+      <div class="hint">Leads from this Meta campaign will be attributed to the LMS campaign you choose here, and will inherit its branch. Don't see the right one? <a href="/campaigns.html">Create an LMS campaign first</a>, then come back here.</div>
       <div style="margin-top:14px; display:flex; gap:10px">
         <button class="btn" type="button" id="saveMappingBtn" style="display:none">Save mapping</button>
         <button class="btn secondary" type="button" id="unmapBtn" style="display:none">Unmap</button>
@@ -78,7 +78,7 @@
     if (metaCampaign.crmCampaignId) {
       desc.textContent = `Currently mapped to "${metaCampaign.crmCampaignName}". Leads route to ${metaCampaign.branchId ? "its branch" : "all branches (company-wide)"}.`;
     } else {
-      desc.textContent = "Not mapped yet - leads from this Meta campaign are still captured, just without a CRM campaign or branch attached.";
+      desc.textContent = "Not mapped yet - leads from this Meta campaign are still captured, just without an LMS campaign or branch attached.";
     }
 
     if (!canManageCampaign) {
@@ -104,7 +104,7 @@
     banner.innerHTML = "";
     const crmCampaignId = document.getElementById("crmCampaignSelect").value;
     if (!crmCampaignId) {
-      banner.innerHTML = `<div class="banner error">Choose a CRM campaign, or use "Unmap" below to clear an existing mapping.</div>`;
+      banner.innerHTML = `<div class="banner error">Choose an LMS campaign, or use "Unmap" below to clear an existing mapping.</div>`;
       return;
     }
     const btn = document.getElementById("saveMappingBtn");

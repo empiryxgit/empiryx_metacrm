@@ -51,7 +51,7 @@
   function renderWelcome(preview) {
     card.innerHTML = `
       <h1>Welcome to ${App.escapeHtml(preview.agencyName)}</h1>
-      <p class="sub">${App.escapeHtml(preview.agencyName)} has invited you to use the CRM.</p>
+      <p class="sub">${App.escapeHtml(preview.agencyName)} has invited you to use the LMS.</p>
       <button class="btn full" type="button" id="acceptBtn">Accept Invitation</button>
       <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
     document.getElementById("acceptBtn").addEventListener("click", () => renderCreateAccount(preview));

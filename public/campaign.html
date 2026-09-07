@@ -177,7 +177,7 @@
     switch (migration.recommendation) {
       case "ready_to_map":
         pill = `<span class="pill active">✓ Ready to migrate</span>`;
-        message = `${App.escapeHtml(migration.matchedPageName)} is already connected via the new Meta integration and is actively capturing leads for this Page. Map its synced Meta campaign(s) to this CRM campaign in ${mapLink} below to fully switch over. ${safetyNote}`;
+        message = `${App.escapeHtml(migration.matchedPageName)} is already connected via the new Meta integration and is actively capturing leads for this Page. Map its synced Meta campaign(s) to this LMS campaign in ${mapLink} below to fully switch over. ${safetyNote}`;
         break;
       case "select_page_required":
         pill = `<span class="pill pending">Almost there</span>`;

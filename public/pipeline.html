@@ -638,7 +638,7 @@
     }).join("");
     const ownerOptions = `<option value="">Unassigned</option>` +
       owners.map(o => `<option value="${o.id}" ${isUpdate && lead.ownerId === o.id ? "selected" : ""}>${App.escapeHtml(o.fullName)}</option>`).join("");
-    const title = isEdit ? "Edit details" : isUpdate ? "Add to CRM" : "Add Customer";
+    const title = isEdit ? "Edit details" : isUpdate ? "Add to LMS" : "Add Customer";
     const subtitle = isEdit
       ? "Update this lead's stage, owner, follow-up date and notes."
       : isUpdate
@@ -732,7 +732,7 @@
       if (sourceField) dynOpts.disabledFields = [sourceField.key];
     }
     const bodyHtml = FormRenderer.renderFields(internalFormFields, valuesFromLead(internalFormFields, lead), dynOpts);
-    const title = isEdit ? "Edit details" : isUpdate ? "Add to CRM" : "Add Customer";
+    const title = isEdit ? "Edit details" : isUpdate ? "Add to LMS" : "Add Customer";
     const subtitle = isEdit
       ? "Update this lead's stage, owner, follow-up date and notes."
       : isUpdate
@@ -897,7 +897,7 @@
               <span class="choice-tile-desc">Mark as lost — no further action needed.</span>
             </button>
             <button type="button" class="choice-tile" id="niAddToCrm">
-              <span class="choice-tile-title">Add to CRM</span>
+              <span class="choice-tile-title">Add to LMS</span>
               <span class="choice-tile-desc">Keep working this person as a customer and fill in more details.</span>
             </button>
           </div>

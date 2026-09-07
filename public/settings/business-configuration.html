@@ -34,7 +34,7 @@
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">Business Configuration</h1>
-        <p class="page-sub">Choose an optional industry template for Leads, Pipeline and Forms — or run on the plain Core CRM. Nothing here is required.</p>
+        <p class="page-sub">Choose an optional industry template for Leads, Pipeline and Forms — or run on the plain Core LMS. Nothing here is required.</p>
       </div>
     </div>
 
@@ -220,7 +220,7 @@
 
   function renderFields(){
     const list = document.getElementById("fieldsList");
-    list.innerHTML = customConfig.fields.map(fieldRowHtml).join("") || `<p class="hint">No custom fields — Name, Phone, Email and the standard CRM fields are always included.</p>`;
+    list.innerHTML = customConfig.fields.map(fieldRowHtml).join("") || `<p class="hint">No custom fields — Name, Phone, Email and the standard LMS fields are always included.</p>`;
 
     list.querySelectorAll("[data-field-key]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].key = el.value.trim(); }));
     list.querySelectorAll("[data-field-label]").forEach((el, i) => el.addEventListener("change", () => { customConfig.fields[i].label = el.value; }));

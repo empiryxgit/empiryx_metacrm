@@ -208,7 +208,7 @@
         try {
           await App.enterClient(btn.dataset.enter);
         } catch (err) {
-          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's CRM.")}</div>`;
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's LMS.")}</div>`;
           btn.disabled = false;
           btn.textContent = original;
         }

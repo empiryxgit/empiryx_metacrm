@@ -40,7 +40,7 @@
            header comment for why admin/settings never is) - so it's
            unaffected by this change. -->
       <div class="page-head-actions" id="headActions" style="display:none">
-        <button class="btn" type="button" id="openCrmBtn">Open CRM Dashboard</button>
+        <button class="btn" type="button" id="openCrmBtn">Open LMS Dashboard</button>
       </div>
     </div>
 
@@ -120,7 +120,7 @@
             </div>
           </div>
           <div class="detail-row"><span class="detail-label">Company Name</span><span class="detail-value" id="settingsName"></span></div>
-          <div class="detail-row"><span class="detail-label">CRM Template</span><span class="detail-value" id="settingsTemplate"></span></div>
+          <div class="detail-row"><span class="detail-label">LMS Template</span><span class="detail-value" id="settingsTemplate"></span></div>
           <div class="detail-row"><span class="detail-label">Client Since</span><span class="detail-value" id="settingsCreatedAt"></span></div>
 
           <div class="relationship-actions" id="relationshipActions"></div>
@@ -267,7 +267,7 @@
     } catch (err) {
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       btn.disabled = false;
-      btn.textContent = "Open CRM Dashboard";
+      btn.textContent = "Open LMS Dashboard";
     }
   }
   document.getElementById("openCrmBtn").addEventListener("click", openCrmDashboard);

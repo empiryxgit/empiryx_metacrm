@@ -609,7 +609,7 @@
       const summary = withInteractions.whatsappAdInteractions;
       if (!summary || !summary.available) return;
       const identifiableLeads = (data.leadApproaches || []).find(a => a.key === "whatsapp")?.count ?? 0;
-      note.textContent = `WhatsApp ad interactions: ${summary.conversationsStarted} conversations started (Meta's own aggregate ad metric, not individual people) — ${identifiableLeads} became identifiable leads in the CRM.`;
+      note.textContent = `WhatsApp ad interactions: ${summary.conversationsStarted} conversations started (Meta's own aggregate ad metric, not individual people) — ${identifiableLeads} became identifiable leads in the LMS.`;
       note.hidden = false;
     } catch (err) {
       console.warn("Failed to load WhatsApp ad interaction summary", err);

@@ -53,7 +53,7 @@
       <div class="builder-col builder-col-palette">
         <div class="builder-col-title">Field types</div>
         <div id="paletteFieldTypes"></div>
-        <div class="builder-col-title" style="margin-top:18px">CRM fields</div>
+        <div class="builder-col-title" style="margin-top:18px">LMS fields</div>
         <div id="paletteCrmFields"></div>
         <p class="hint" style="margin-top:14px">Click to add, or drag onto the form.</p>
       </div>
@@ -292,7 +292,7 @@
       <div class="builder-field-row-head">
         <span class="drag-handle ${locked ? "locked" : ""}" title="${locked ? "Locked in place on the default form" : "Drag to reorder"}">${locked ? "🔒" : "⋮⋮"}</span>
         <span class="builder-field-type-badge">${App.escapeHtml(FIELD_TYPE_LABELS[field.fieldType] || field.fieldType)}</span>
-        ${field.mappingType === "system" ? '<span class="pill system">CRM field</span>' : ""}
+        ${field.mappingType === "system" ? '<span class="pill system">LMS field</span>' : ""}
         ${field.required ? '<span class="pill failed">Required</span>' : ""}
         ${locked ? '<span class="pill pending">Locked</span>' : ""}
         <span class="builder-field-row-actions">
@@ -398,7 +398,7 @@
           <label>Label</label>
           <input value="${App.escapeHtml(field.label)}" disabled />
           ${field.mappingType === "system"
-            ? `<p class="hint">CRM field — maps to <code>${App.escapeHtml(field.systemField)}</code>.</p>`
+            ? `<p class="hint">LMS field — maps to <code>${App.escapeHtml(field.systemField)}</code>.</p>`
             : `<label style="margin-top:10px">Field key</label><input value="${App.escapeHtml(field.key)}" disabled />`}
           ${(field.options || []).length ? `<label style="margin-top:10px">Options</label><p class="hint">${field.options.map(App.escapeHtml).join(", ")}</p>` : ""}
           <label class="checkbox-option" style="margin-top:10px"><input type="checkbox" disabled ${field.required ? "checked" : ""}/> Required</label>
@@ -432,7 +432,7 @@
         <input id="set_label" value="${App.escapeHtml(field.label)}" />
 
         ${isSystem
-          ? `<p class="hint">CRM field — maps to <code>${App.escapeHtml(field.systemField)}</code>, choices are always this company's live data.</p>`
+          ? `<p class="hint">LMS field — maps to <code>${App.escapeHtml(field.systemField)}</code>, choices are always this company's live data.</p>`
           : `<label for="set_key">Field key</label><input id="set_key" value="${App.escapeHtml(field.key)}" /><p class="hint">Stored under this key in the customer's custom fields.</p>`}
 
         <label for="set_placeholder">Placeholder</label>
@@ -655,7 +655,7 @@
         </div>
         <div>
           <label>Form type</label>
-          <input value="${form.type === "public" ? "Public (external lead capture)" : "Internal (used inside the CRM)"}" disabled />
+          <input value="${form.type === "public" ? "Public (external lead capture)" : "Internal (used inside the LMS)"}" disabled />
         </div>
       </div>
       <div class="grid-2">
@@ -848,7 +848,7 @@
     const industryKey = me?.company?.industry;
     fields = defaultFormFieldsForIndustry(industryKey);
     document.getElementById("metaName").value = `${template?.name || form.name} - Add Customer`;
-    document.getElementById("metaDescription").value = "Default internal form used by Add Customer and Not Interested → Add to CRM on the Pipeline board.";
+    document.getElementById("metaDescription").value = "Default internal form used by Add Customer and Not Interested → Add to LMS on the Pipeline board.";
     selectedKey = null;
     renderAll();
     showBanner(`Fields reset to the original default form. Click "${saveLabel}" to make it live.`, "success");
