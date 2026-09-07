@@ -44,6 +44,8 @@ import { getMetaCampaignByMetaCampaignId } from "../infrastructure/db/repositori
 import { publishLeadReceived, publishTenantLeadReceived, publishWhatsappMessageReceived } from "../infrastructure/queue/qstash";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { refreshExpiringMetaTokens } from "./metaSync/metaTokenRefreshService";
+import { reconcileCapacityDowngrade } from "./billing";
+import { listPoolRootCompanyIds } from "../infrastructure/db/repositories/organizations";
 import { flagConnectionIfAuthError } from "./metaSync/metaConnectionService";
 import { LeadPlatform } from "../domain/types";
 
@@ -94,6 +96,18 @@ export interface ReconciliationSummary {
   tokensChecked: number;
   tokensRefreshed: number;
   tokensRefreshFailed: number;
+  // Phase 14 - capacity downgrade reconciliation (see
+  // reconcileCapacityDowngrade in billing.ts). rootCompaniesChecked is
+  // every pool-root company (Individual or Agency, never a claimed client)
+  // this sweep evaluated; the two "...MarkedInactive" counts are how many
+  // campaigns/client relationships were newly paused/suspended this run
+  // specifically because they were excess beyond a shrunk effective limit
+  // (almost always a paid extra-capacity cycle expiring) - a company with
+  // nothing to downgrade contributes 0 to both, same as every other
+  // steady-state company on every sweep.
+  rootCompaniesChecked: number;
+  campaignsMarkedInactive: number;
+  clientsMarkedInactive: number;
   errors: number;
 }
 
@@ -342,6 +356,28 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
   // surfaces it separately instead.
   const tokenRefreshResult = await refreshExpiringMetaTokens();
 
+  // Phase 14 - see reconcileCapacityDowngrade's own doc comment in
+  // billing.ts for the full design. One failure here is logged and
+  // skipped (bumping `errors`, same treatment as every other per-item
+  // failure in this sweep) rather than aborting the whole run - a
+  // capacity-downgrade bug must never be able to take down lead
+  // reconciliation for every other tenant.
+  let rootCompaniesChecked = 0;
+  let campaignsMarkedInactive = 0;
+  let clientsMarkedInactive = 0;
+  const rootCompanyIds = await listPoolRootCompanyIds();
+  for (const rootCompanyId of rootCompanyIds) {
+    rootCompaniesChecked++;
+    try {
+      const result = await reconcileCapacityDowngrade(rootCompanyId);
+      campaignsMarkedInactive += result.campaignsPaused;
+      clientsMarkedInactive += result.clientsSuspended;
+    } catch (err) {
+      errors++;
+      console.error(`[reconciliation] Capacity downgrade check failed for company ${rootCompanyId}:`, err);
+    }
+  }
+
   return {
     campaignsScanned: activeCampaigns.length,
     formsScanned,
@@ -358,6 +394,9 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
     tokensChecked: tokenRefreshResult.checked,
     tokensRefreshed: tokenRefreshResult.refreshed,
     tokensRefreshFailed: tokenRefreshResult.failed,
+    rootCompaniesChecked,
+    campaignsMarkedInactive,
+    clientsMarkedInactive,
     errors,
   };
 }

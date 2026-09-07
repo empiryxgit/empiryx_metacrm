@@ -92,6 +92,28 @@ export async function setAgencyClientStatus(agencyCompanyId: string, clientCompa
  * it needs each authorized client's own template to build a cross-client
  * "Status" (pipeline stage) filter option list without a second query per
  * client. */
+/** Every company that is its own entitlement "pool root" - i.e. every
+ * Individual/Agency company that is NOT currently a claimed client of some
+ * agency (see resolvePoolRootCompanyId in src/application/billing.ts). A
+ * claimed client's own companies.accountType is "individual" - architec-
+ * turally identical to a standalone Individual account (see
+ * registrationFlows.test.ts) - so this can't be filtered by accountType
+ * alone; it excludes anything currently claimed via agency_clients instead.
+ * Drives reconcileCapacityDowngrade's reconciliation sweep (billing.ts) -
+ * only a pool root ever has its own trial/subscription/extra-capacity state
+ * to downgrade against; a claimed client never does. */
+export async function listPoolRootCompanyIds(): Promise<string[]> {
+  const db = await getDb();
+  const claimedRows = await db
+    .select({ clientCompanyId: agencyClients.clientCompanyId })
+    .from(agencyClients)
+    .where(inArray(agencyClients.status, CLAIMED_AGENCY_CLIENT_STATUSES));
+  const claimedIds = new Set(claimedRows.map((r) => r.clientCompanyId));
+
+  const allCompanyRows = await db.select({ id: companies.id }).from(companies);
+  return allCompanyRows.map((r) => r.id).filter((id) => !claimedIds.has(id));
+}
+
 export async function listClaimedClientOrganizations(agencyCompanyId: string) {
   const db = await getDb();
   return db
