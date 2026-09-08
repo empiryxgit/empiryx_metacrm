@@ -4,17 +4,27 @@
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Platform Administration</title>
 <link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
 <style>
 body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margin:0 auto;padding:28px 20px}.admin-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:24px}.admin-head h1{margin:0 0 6px}.admin-head p{margin:0;color:var(--text-muted);font-size:13px}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}.stat{padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:10px}.stat-label{font-size:12px;color:var(--text-muted)}.stat-value{font-size:25px;font-weight:800;margin-top:5px}.toolbar{display:flex;gap:10px;margin-bottom:14px}.toolbar input{max-width:320px;margin:0}.table-wrap{overflow-x:auto}.admin-table{width:100%;border-collapse:collapse;min-width:900px}.admin-table th,.admin-table td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left;font-size:12.5px}.admin-table th{font-size:11px;text-transform:uppercase;color:var(--text-muted)}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--brand-primary-soft);color:var(--brand-primary-hover);font-size:11px;font-weight:700}@media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.admin-head{display:block}.admin-head button{margin-top:14px}}
 </style>
 </head>
 <body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a class="active" href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/notifications.html">Notifications</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/index.html#subscriptions">Subscriptions</a><a href="/admin/index.html#packages">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
 <main class="admin-wrap">
   <header class="admin-head"><div><h1>Platform Administration</h1><p>System-wide visibility across independent customer accounts.</p></div><div><a class="btn" href="/admin/notifications.html">Notifications</a> <a class="btn" href="/admin/audit.html">Audit logs</a> <button class="btn" id="logout">Sign out</button></div></header>
   <section class="stats" id="stats"></section>
-  <section class="card"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div></section>
+  <section class="card" id="customers"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div></section>
+  <div id="subscriptions"></div>
+  <div id="packages"></div>
   <section class="card" id="detail" style="display:none"></section>
 </main>
+</div>
 <script>
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>\"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[char]));
   const date = (value) => value ? new Date(value).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" }) : "-";
@@ -50,6 +60,7 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
   searchBtn.addEventListener("click", () => load().catch((err) => { content.textContent = err.message; }));
   search.addEventListener("keydown", (event) => { if (event.key === "Enter") load().catch((err) => { content.textContent = err.message; }); });
   logout.addEventListener("click", async () => { await fetch("/api/platform-admin/logout", { method:"POST" }); window.location.href = "/admin/login.html"; });
+  topLogout.addEventListener("click", async () => { await fetch("/api/platform-admin/logout", { method:"POST" }); window.location.href = "/admin/login.html"; });
   load().catch((err) => { content.textContent = err.message; });
 </script>
 </body>

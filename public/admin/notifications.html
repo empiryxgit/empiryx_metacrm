@@ -1,8 +1,36 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>Platform Notifications</title><link rel="stylesheet" href="/assets/app.css" /><style>body{background:var(--surface-sunken,#f6f4f0)}.wrap-admin{max-width:900px;margin:0 auto;padding:28px 20px}.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.head h1{margin:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{padding:20px}.full{grid-column:1/-1}label{display:block;font-size:12px;font-weight:700;margin:12px 0 5px}input,textarea,select{width:100%;box-sizing:border-box}textarea{min-height:100px}.notice{padding:12px 0;border-bottom:1px solid var(--border)}.notice:last-child{border-bottom:0}.notice small{color:var(--text-muted)}@media(max-width:700px){.grid{grid-template-columns:1fr}.full{grid-column:auto}}</style></head>
-<body><main class="wrap-admin"><header class="head"><h1>Platform Notifications</h1><a class="btn" href="/admin/index.html">Back to dashboard</a></header><div id="message"></div><div class="grid"><section class="card"><h2 class="section-title">Publish notification</h2><form id="form"><label for="targetType">Audience</label><select id="targetType"><option value="global">All users</option><option value="individual">Individual accounts</option><option value="agency">Agency accounts</option><option value="company">One company</option><option value="user">One user</option></select><label for="targetId">Company or user ID</label><input id="targetId" placeholder="Required for company/user targets" /><label for="title">Title</label><input id="title" required /><label for="body">Message</label><textarea id="body" required></textarea><label for="ctaLabel">CTA label</label><input id="ctaLabel" placeholder="View plans" /><label for="ctaUrl">CTA URL</label><input id="ctaUrl" placeholder="/subscription.html" /><button class="btn" style="margin-top:16px" type="submit">Publish</button></form></section><section class="card"><h2 class="section-title">Recent notifications</h2><div id="list">Loading...</div></section></div></main><script>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Notifications</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
+<style>
+.wrap-admin{max-width:900px;margin:0 auto;padding:28px 20px}.head{margin-bottom:20px}.head h1{margin:0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.card{padding:20px}label{display:block;font-size:12px;font-weight:700;margin:12px 0 5px}input,textarea,select{width:100%;box-sizing:border-box}textarea{min-height:100px}.notice{padding:12px 0;border-bottom:1px solid var(--border)}.notice:last-child{border-bottom:0}.notice small{color:var(--text-muted)}@media(max-width:700px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a class="active" href="/admin/notifications.html">Notifications</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/index.html#subscriptions">Subscriptions</a><a href="/admin/index.html#packages">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
+<main class="wrap-admin">
+  <header class="head"><h1>Platform Notifications</h1></header>
+  <div id="message"></div>
+  <div class="grid">
+    <section class="card"><h2 class="section-title">Publish notification</h2><form id="form"><label for="targetType">Audience</label><select id="targetType"><option value="global">All users</option><option value="individual">Individual accounts</option><option value="agency">Agency accounts</option><option value="company">One company</option><option value="user">One user</option></select><label for="targetId">Company or user ID</label><input id="targetId" placeholder="Required for company/user targets" /><label for="title">Title</label><input id="title" required /><label for="body">Message</label><textarea id="body" required></textarea><label for="ctaLabel">CTA label</label><input id="ctaLabel" placeholder="View plans" /><label for="ctaUrl">CTA URL</label><input id="ctaUrl" placeholder="/subscription.html" /><button class="btn" style="margin-top:16px" type="submit">Publish</button></form></section>
+    <section class="card"><h2 class="section-title">Recent notifications</h2><div id="list">Loading...</div></section>
+  </div>
+</main>
+</div>
+<script>
 const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-async function load(){const r=await fetch("/api/platform-admin/notifications");const d=await r.json();if(r.status===401){location.href="/admin/login.html";return}list.innerHTML=(d.notifications||[]).map(n=>`<div class="notice"><strong>${esc(n.title)}</strong><br><small>${esc(n.targetType)} · ${new Date(n.publishedAt).toLocaleString()}</small><p>${esc(n.message)}</p></div>`).join("")||"<p class=hint>No notifications published.</p>"}
-form.addEventListener("submit",async(e)=>{e.preventDefault();const target=targetType.value;const payload={targetType:target,targetCompanyId:["company","individual","agency"].includes(target)?targetId.value||undefined:undefined,targetUserId:target==="user"?targetId.value||undefined:undefined,title:title.value,message:body.value,ctaLabel:ctaLabel.value||undefined,ctaUrl:ctaUrl.value||undefined};const r=await fetch("/api/platform-admin/notifications",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const d=await r.json();message.innerHTML=r.ok?"<div class=\"banner success\">Notification published.</div>":`<div class="banner error">${esc(d.error||"Failed")}</div>`;if(r.ok){form.reset();load()}});load();
-</script></body></html>
+async function load(){const r=await fetch("/api/platform-admin/notifications");const d=await r.json();if(r.status===401){location.href="/admin/login.html";return}if(!r.ok){list.textContent=d.error||"Unable to load notifications.";return}list.innerHTML=(d.notifications||[]).map(n=>`<div class="notice"><strong>${esc(n.title)}</strong><br><small>${esc(n.targetType)} · ${new Date(n.publishedAt).toLocaleString()}</small><p>${esc(n.message)}</p></div>`).join("")||"<p class=hint>No notifications published.</p>"}
+form.addEventListener("submit",async(e)=>{e.preventDefault();const target=targetType.value;const payload={targetType:target,targetCompanyId:["company","individual","agency"].includes(target)?targetId.value||undefined:undefined,targetUserId:target==="user"?targetId.value||undefined:undefined,title:title.value,message:body.value,ctaLabel:ctaLabel.value||undefined,ctaUrl:ctaUrl.value||undefined};const r=await fetch("/api/platform-admin/notifications",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const d=await r.json();message.innerHTML=r.ok?"<div class=\"banner success\">Notification published.</div>":`<div class="banner error">${esc(d.error||"Failed")}</div>`;if(r.ok){form.reset();load()}});
+topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});load();
+</script>
+</body>
+</html>
