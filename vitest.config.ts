@@ -16,8 +16,9 @@ export default defineConfig({
     // whatever default pool size vitest picks, since a large number of
     // concurrent short-lived Postgres connections is exactly the kind of
     // thing worth capping deliberately for a local dev/test database.
+    pool: "forks",
     poolOptions: {
-      forks: { maxForks: 4 },
+      forks: { minForks: 1, maxForks: 4 },
     },
   },
 });

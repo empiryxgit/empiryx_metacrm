@@ -65,7 +65,7 @@ export async function getPlatformSummary() {
     db.select({ count: sql<number>`count(*)` }).from(companies).where(eq(companies.subscriptionStatus, "trialing")),
     db.select({ count: sql<number>`count(*)` }).from(companies).where(and(eq(companies.subscriptionStatus, "trialing"), sql`${companies.trialEndsAt} <= now()`)),
     db.select({ count: sql<number>`count(*)` }).from(companies).where(and(eq(companies.subscriptionStatus, "expired"), sql`${companies.subscriptionExpiresAt} <= now()`)),
-    db.select({ count: sql<number>`count(*)` }).from(billingOrders).where(eq(billingOrders.status, "paid")).orderBy(desc(billingOrders.createdAt)).limit(10),
+    db.select({ id: billingOrders.id, companyId: billingOrders.companyId, kind: billingOrders.kind, amountInPaise: billingOrders.amountInPaise, currency: billingOrders.currency, status: billingOrders.status, createdAt: billingOrders.createdAt }).from(billingOrders).where(eq(billingOrders.status, "paid")).orderBy(desc(billingOrders.createdAt)).limit(10),
   ]);
   const value = (result: Array<{ count: number }>) => Number(result[0]?.count ?? 0);
   return {

@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "devCommand": null,
   "functions": {
     "api/webhooks/meta/handler.ts": { "maxDuration": 60 },
     "api/internal/handler.ts": { "maxDuration": 60 },

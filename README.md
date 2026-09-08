@@ -313,7 +313,7 @@ npx @upstash/qstash-cli dev
 # copy the printed QSTASH_TOKEN / signing keys into .env
 
 # 4. Start the app (separate terminal)
-npm run dev             # vercel dev, defaults to http://localhost:3000
+npm run start:dev   # or: npx vercel dev, defaults to http://localhost:3000
 ```
 
 Meta and QStash both need to reach your machine over HTTPS. Use a tunnel (`ngrok http 3000` or `cloudflared tunnel --url http://localhost:3000`) and set `PUBLIC_BASE_URL` to the tunnel URL before testing real webhook deliveries end-to-end.
