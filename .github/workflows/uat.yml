@@ -1,0 +1,101 @@
+name: UAT CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - UAT
+      - uat
+  workflow_dispatch:
+
+concurrency:
+  group: uat-deployment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate & Test (UAT)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run Test Suite
+        run: npm test
+
+  deploy-uat:
+    name: Deploy to UAT Environment
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: UAT
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run UAT Database Migrations
+        env:
+          MIGRATE_DATABASE_URL: ${{ secrets.UAT_MIGRATE_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+        run: npx tsx scripts/migrate.ts
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information (UAT / Preview)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+
+      - name: Build Project Artifacts (UAT)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --token=$VERCEL_TOKEN
+
+      - name: Deploy to Vercel UAT
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          DEPLOY_URL=$(vercel deploy --prebuilt --token=$VERCEL_TOKEN)
+          echo "deployment-url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          echo "Deployed UAT build to $DEPLOY_URL"
+
+      - name: Assign Custom UAT Domain / Alias (Optional)
+        if: ${{ vars.UAT_CUSTOM_DOMAIN != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          UAT_CUSTOM_DOMAIN: ${{ vars.UAT_CUSTOM_DOMAIN }}
+        run: |
+          vercel alias set ${{ steps.deploy.outputs.deployment-url }} $UAT_CUSTOM_DOMAIN --token=$VERCEL_TOKEN
+
+      - name: Setup UAT QStash Schedules
+        if: ${{ secrets.UAT_QSTASH_TOKEN != '' && (vars.UAT_PUBLIC_BASE_URL != '' || steps.deploy.outputs.deployment-url != '') }}
+        env:
+          QSTASH_TOKEN: ${{ secrets.UAT_QSTASH_TOKEN }}
+          PUBLIC_BASE_URL: ${{ vars.UAT_PUBLIC_BASE_URL || steps.deploy.outputs.deployment-url }}
+          CRON_SECRET: ${{ secrets.UAT_CRON_SECRET }}
+        run: npx tsx scripts/setup-schedules.ts
