@@ -18,6 +18,7 @@ concurrency:
 jobs:
   validate:
     name: Validate & Test (UAT)
+    if: github.ref == 'refs/heads/UAT' || github.ref == 'refs/heads/uat'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -40,6 +41,7 @@ jobs:
 
   deploy-uat:
     name: Deploy to UAT Environment
+    if: github.ref == 'refs/heads/UAT' || github.ref == 'refs/heads/uat'
     needs: validate
     runs-on: ubuntu-latest
     environment:

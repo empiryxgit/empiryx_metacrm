@@ -17,6 +17,7 @@ concurrency:
 jobs:
   validate:
     name: Validate & Test (Production)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -39,6 +40,7 @@ jobs:
 
   deploy-production:
     name: Deploy to Production
+    if: github.ref == 'refs/heads/main'
     needs: validate
     runs-on: ubuntu-latest
     environment:
