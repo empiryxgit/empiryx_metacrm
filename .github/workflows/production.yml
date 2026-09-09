@@ -70,25 +70,30 @@ jobs:
 
       - name: Pull Vercel Environment Information (Production)
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
-            echo "::error::VERCEL_TOKEN is empty or not found in GitHub Secrets. Please add VERCEL_TOKEN to your GitHub Repository/Environment Secrets."
+            echo "::error::VERCEL_TOKEN is empty! Checked secrets: VERCEL_TOKEN, PROD_VERCEL_TOKEN, VERCEL_AUTH_TOKEN."
+            echo "Please add VERCEL_TOKEN to GitHub Repository/Environment Secrets."
             exit 1
           fi
           vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
 
       - name: Build Project Artifacts (Production)
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
         run: vercel build --prod --token="$VERCEL_TOKEN"
 
       - name: Deploy to Vercel Production
         id: deploy
         env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
         run: |
           DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
           echo "deployment-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
