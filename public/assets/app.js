@@ -89,30 +89,31 @@ const App = (() => {
     const state = entitlement.entitlement;
     const isAgency = entitlement.accountType === "agency";
     let cls = "info";
-    let message = "";
+    let title = "";
+    let detail = "";
     let ctaLabel = null;
 
     if (state.kind === "trialing") {
       cls = state.daysRemaining <= 3 ? "warning" : "info";
-      const parts = [
-        isAgency ? "Agency Trial Active" : "Free Trial Active",
-        `${state.daysRemaining} day${state.daysRemaining === 1 ? "" : "s"} remaining`,
-      ];
-      if (isAgency && entitlement.clients) parts.push(`Clients: ${entitlement.clients.used} of ${entitlement.clients.limit}`);
-      parts.push(`Campaigns: ${entitlement.campaigns.used} of ${entitlement.campaigns.limit}`);
-      message = parts.join(" · ");
+      title = isAgency ? "Agency Trial Active" : "Free Trial Active";
+      const detailParts = [`${state.daysRemaining} day${state.daysRemaining === 1 ? "" : "s"} remaining`];
+      if (isAgency && entitlement.clients) detailParts.push(`Clients: ${entitlement.clients.used} of ${entitlement.clients.limit}`);
+      detailParts.push(`Campaigns: ${entitlement.campaigns.used} of ${entitlement.campaigns.limit}`);
+      detail = detailParts.join(" · ");
       ctaLabel = isAgency ? "Upgrade Agency Plan" : "Upgrade Plan";
     } else if (state.kind === "trial_expired") {
       cls = "error";
-      message = isAgency
-        ? "Your Agency free trial has ended. Subscribe to continue managing your clients and campaigns."
-        : "Your 15-day free trial has ended. Subscribe to a plan to continue managing your leads.";
+      title = isAgency ? "Your Agency free trial has ended" : "Your 15-day free trial has ended";
+      detail = isAgency
+        ? "Subscribe to continue managing your clients and campaigns."
+        : "Subscribe to a plan to continue managing your leads.";
       ctaLabel = isAgency ? "View Agency Plans & Subscribe" : "View Plans & Subscribe";
     } else if (state.kind === "subscription_expired") {
       cls = "error";
-      message = isAgency
-        ? "Your Agency subscription has ended. Renew to continue managing your clients and campaigns."
-        : "Your subscription has ended. Renew to continue managing your leads.";
+      title = isAgency ? "Your Agency subscription has ended" : "Your subscription has ended";
+      detail = isAgency
+        ? "Renew to continue managing your clients and campaigns."
+        : "Renew to continue managing your leads.";
       ctaLabel = "Renew Plan";
     } else {
       // "subscribed" - nothing to show.
@@ -125,7 +126,11 @@ const App = (() => {
     banner.className = `banner ${cls}`;
     banner.style.margin = "14px 0 0";
     banner.innerHTML = `
-      <span style="flex:1">${escapeHtml(message)}</span>
+      <span class="banner-icon">${BANNER_ICONS[cls] || BANNER_ICONS.info}</span>
+      <span class="banner-body">
+        <span class="banner-title">${escapeHtml(title)}</span>
+        ${detail ? `<span class="banner-detail">${escapeHtml(detail)}</span>` : ""}
+      </span>
       ${ctaLabel ? `<button type="button" class="btn sm" id="trialBannerCta">${escapeHtml(ctaLabel)}</button>` : ""}
     `;
     if (!existing) {
@@ -136,7 +141,6 @@ const App = (() => {
     const cta = document.getElementById("trialBannerCta");
     if (cta) cta.onclick = () => { window.location.href = "/subscription.html"; };
   }
-
   /** Called at the top of every protected page. Redirects to /login.html if not
    * authenticated, or to /onboarding.html if the company hasn't finished
    * onboarding yet (unless the page itself IS the onboarding page). */
@@ -187,6 +191,15 @@ const App = (() => {
   // user menu, rendered once into <nav id="topnav">, plus a mobile drawer
   // appended to <body>. Every page calls App.renderNav(me, activeHref).
   // ---------------------------------------------------------------------
+
+  // Status icons for .banner (16x16, stroke-based, currentColor) - same
+  // visual language as NAV_ICONS below. Used by renderTrialBanner()'s
+  // info/warning/error states.
+  const BANNER_ICONS = {
+    info: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="7.25" stroke="currentColor" stroke-width="1.4"/><path d="M10 9.3v4M10 6.8h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+    warning: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 3.3 17.3 16H2.7L10 3.3Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 8.3v3.4M10 13.8h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+    error: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="10" cy="10" r="7.25" stroke="currentColor" stroke-width="1.4"/><path d="M10 6.5v4M10 13.2h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+  };
 
   const BRAND_MARK_SVG = `<svg class="brand-mark" width="20" height="20" viewBox="0 0 28 28" fill="none" aria-hidden="true">
       <circle cx="6" cy="20" r="3" fill="currentColor" />
