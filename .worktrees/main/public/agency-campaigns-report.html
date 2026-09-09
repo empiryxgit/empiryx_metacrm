@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agency Campaigns — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Agency Campaigns</h1>
+        <p class="page-sub">Every campaign across every client you manage.</p>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <!-- See getAgencyCampaignsReport in src/application/agency.ts - the
+         campaign-centric sibling of the Leads report (agency-leads-
+         report.html): same authorization discipline, every filter
+         independently re-checked against the caller's own resolved client
+         access on the server, never trusted at face value. clientName is
+         attached server-side (a cross-client view needs it, unlike the
+         plain per-tenant Campaigns page) so it's shown as its own column
+         here rather than folded into the campaign name. -->
+    <div class="dash-section">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Campaigns</p>
+            <p class="dash-card-sub" id="campaignsReportSub">Loading…</p>
+          </div>
+        </div>
+
+        <div class="board-toolbar">
+          <div class="field-inline">
+            <label for="cr_client">Client</label>
+            <select id="cr_client"><option value="">All clients</option></select>
+          </div>
+          <div class="field-inline">
+            <label for="cr_status">Status</label>
+            <select id="cr_status">
+              <option value="">All statuses</option>
+              <option value="draft">Draft</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          <div class="field-inline">
+            <label for="cr_platform">Platform</label>
+            <select id="cr_platform">
+              <option value="">All platforms</option>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
+          <div class="board-toolbar-right">
+            <button class="btn secondary sm" type="button" id="cr_clearFilters">Clear filters</button>
+          </div>
+        </div>
+
+        <div id="campaignsReportBanner"></div>
+
+        <div class="table-wrap" id="campaignsReportTableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Campaign</th>
+                <th>Client</th>
+                <th>Platform</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="campaignsReportBody"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  let me = null;
+
+  function statusLabel(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  async function load() {
+    document.getElementById("banner").innerHTML = "";
+    me = await App.requireAuth();
+    if (!me) return;
+
+    document.getElementById("topnav").style.display = "flex";
+    App.renderNav(me, "/agency-campaigns-report.html");
+
+    await loadCampaignsReport();
+  }
+
+  // Rebuilds the Client filter's options from the last successful fetch -
+  // same "keep the current value only if it's still a valid option, reset
+  // to 'All clients' otherwise" instinct as agency-leads-report.html's own
+  // populateLeadsReportOptions, so a client this caller lost access to
+  // mid-session can never stay silently selected.
+  function populateCampaignsReportOptions(filters) {
+    const select = document.getElementById("cr_client");
+    const current = select.value;
+    select.innerHTML = `<option value="">All clients</option>` +
+      filters.clients.map((c) => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
+    select.value = filters.clients.some((c) => c.id === current) ? current : "";
+  }
+
+  function renderCampaignsReport(report) {
+    document.getElementById("campaignsReportSub").textContent =
+      report.campaigns.length === 0 ? "No campaigns to report on" : `${report.campaigns.length} campaign${report.campaigns.length === 1 ? "" : "s"}`;
+    const body = document.getElementById("campaignsReportBody");
+    if (report.campaigns.length === 0) {
+      body.innerHTML = `<tr><td colspan="4" class="empty">No campaigns match these filters.</td></tr>`;
+      return;
+    }
+    body.innerHTML = report.campaigns.map((c) => `
+      <tr>
+        <td>${App.escapeHtml(c.name)}</td>
+        <td>${App.escapeHtml(c.clientName)}</td>
+        <td>${App.escapeHtml(c.platform)}</td>
+        <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
+      </tr>`).join("");
+  }
+
+  async function loadCampaignsReport() {
+    document.getElementById("campaignsReportBanner").innerHTML = "";
+    const params = new URLSearchParams();
+    const clientId = document.getElementById("cr_client").value;
+    const status = document.getElementById("cr_status").value;
+    const platform = document.getElementById("cr_platform").value;
+    if (clientId) params.set("clientId", clientId);
+    if (status) params.set("status", status);
+    if (platform) params.set("platform", platform);
+
+    try {
+      const query = params.toString();
+      const report = await App.apiJson(`/api/agency/campaigns${query ? "?" + query : ""}`);
+      populateCampaignsReportOptions(report.filters);
+      renderCampaignsReport(report);
+    } catch (err) {
+      document.getElementById("campaignsReportBanner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  ["cr_client", "cr_status", "cr_platform"].forEach((id) => {
+    document.getElementById(id).addEventListener("change", () => loadCampaignsReport());
+  });
+  document.getElementById("cr_clearFilters").addEventListener("click", () => {
+    ["cr_client", "cr_status", "cr_platform"].forEach((id) => { document.getElementById(id).value = ""; });
+    loadCampaignsReport();
+  });
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Set up your workspace — RUTA Lead Management System</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="auth-shell">
+    <div class="auth-card wizard-card" id="wizardCard">
+      <div id="loadingState" style="text-align:center; padding:20px 0; color:var(--text-muted); font-size:13px">Loading your setup…</div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// First-time setup - INDIVIDUAL USERS ONLY (an agency or agency-onboarded-
+// client company's onboarding is always already COMPLETED by the time it
+// could ever reach this page - see src/domain/onboarding.ts's own header
+// comment - so the only way here is either a fresh Individual signup, or a
+// direct visit while setup is still in progress).
+//
+// Deliberately a SINGLE screen: Business Name + Mobile Number, then straight
+// to the Dashboard - "make it simple" per the explicit request that trimmed
+// this down from the original 6-screen wizard (CRM Basics, Pipeline, Lead
+// Source, and Meta Connection all used to be separate screens here). Those
+// steps still exist server-side (src/domain/onboarding.ts's ONBOARDING_STEPS
+// - left untouched, together with every one of its 218 passing tests, so
+// this simplification is a pure front-end change) - finishRemainingSteps()
+// below silently walks the company through them with safe defaults (Lead
+// terminology, the recommended pipeline, no pre-selected lead sources) the
+// user is never shown, rather than asking them anything. Facebook/Instagram
+// connection is no longer decided here either - it always shows up as a
+// pending item on the Dashboard's own setup checklist instead (see
+// dashboard.html's renderSetupChecklist), which is exactly where "remaining
+// steps" are meant to be finished from now on.
+//
+// This page is still state-driven off GET /api/onboarding/wizard/status
+// (src/application/onboardingWizard.ts's getOnboardingContext) - a save
+// failure mid-chain can never corrupt or lose what the user already
+// submitted, it just resumes silently from wherever the server says next.
+// ---------------------------------------------------------------------------
+
+const card = document.getElementById("wizardCard");
+let ctx = null; // last-known OnboardingContext from the server
+
+function esc(s) {
+  return App.escapeHtml(s);
+}
+
+function wizardShell(innerHtml) {
+  card.innerHTML = `<div id="banner"></div>${innerHtml}`;
+}
+
+function showError(message) {
+  const banner = document.getElementById("banner");
+  if (banner) banner.innerHTML = `<div class="banner error">${esc(message)}</div>`;
+}
+
+/** Calls a wizard step-submission endpoint, re-renders from the fresh
+ * context it returns on success, or shows an inline error WITHOUT losing
+ * whatever the user already typed - a failed save must never look like
+ * lost work. */
+async function submitStep(path, body, submitBtn, onSuccess) {
+  showError("");
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.dataset.originalText = submitBtn.dataset.originalText || submitBtn.textContent;
+    submitBtn.textContent = "Saving…";
+  }
+  try {
+    ctx = await App.apiJson(path, { method: "POST", body });
+    (onSuccess || render)();
+  } catch (err) {
+    showError(err.message || "We couldn't save this - your details are safe, please try again.");
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = submitBtn.dataset.originalText;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The one screen the user actually sees.
+// ---------------------------------------------------------------------------
+
+function renderBusinessProfile() {
+  const c = ctx.company;
+  const resuming = ctx.status === "IN_PROGRESS";
+  wizardShell(`
+    <h1>${resuming ? "Welcome back!" : "Welcome to RUTA 👋"}</h1>
+    <p class="sub">${resuming
+      ? "Let's finish getting your account ready - just a couple of details."
+      : "Just a couple of details and you're on your way to your dashboard."}</p>
+    <form id="stepForm">
+      <label for="businessName">Business name</label>
+      <input id="businessName" value="${esc(c.name)}" required />
+
+      <label for="phoneNumber">Mobile number</label>
+      <input id="phoneNumber" type="tel" placeholder="Your mobile number" />
+      <div class="hint">Already on file - only fill this in if it's changed.</div>
+
+      <div class="wizard-actions">
+        <button class="btn full" type="submit">Continue to Dashboard</button>
+      </div>
+    </form>
+  `);
+
+  document.getElementById("stepForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitStep("/api/onboarding/wizard/business-profile", {
+      businessName: document.getElementById("businessName").value.trim(),
+      phoneNumber: document.getElementById("phoneNumber").value.trim(),
+    }, e.submitter, () => finishRemainingSteps(ctx.step));
+  });
+}
+
+function showFinishing(message) {
+  wizardShell(`<div style="text-align:center; padding:30px 0; color:var(--text-muted); font-size:13px">${esc(message)}</div>`);
+}
+
+function showFinishingError(message) {
+  wizardShell(`
+    <div class="banner error">${esc(message)}</div>
+    <div class="wizard-actions">
+      <button class="btn full" id="retryBtn">Try Again</button>
+    </div>
+  `);
+  document.getElementById("retryBtn").addEventListener("click", () => finishRemainingSteps(ctx.step));
+}
+
+/** Silently walks the company through every step this simplified flow no
+ * longer shows the user - CRM Basics (defaults to "Lead"), Pipeline (the
+ * recommended one), Lead Source and Meta Connection (both skipped, since
+ * neither is asked here anymore), then Review's own completeWizard() - and
+ * lands on the Dashboard. `fromStep` is wherever the company's stored resume
+ * pointer already is (normally CRM_BASICS, right after Business Profile was
+ * just submitted; only ever something later than that if a previous visit
+ * was interrupted partway through this exact chain). Each call re-derives
+ * the next step from what the server actually returns, never assumes it, so
+ * an interruption anywhere just resumes cleanly on the next visit. */
+async function finishRemainingSteps(fromStep) {
+  showFinishing("Setting up your account…");
+  try {
+    let step = fromStep;
+    if (step === "CRM_BASICS") {
+      ctx = await App.apiJson("/api/onboarding/wizard/crm-basics", { method: "POST", body: {} });
+      step = ctx.step;
+    }
+    if (step === "PIPELINE") {
+      ctx = await App.apiJson("/api/onboarding/wizard/pipeline", { method: "POST", body: { choice: "recommended" } });
+      step = ctx.step;
+    }
+    if (step === "LEAD_SOURCE") {
+      ctx = await App.apiJson("/api/onboarding/wizard/skip", { method: "POST", body: { step: "LEAD_SOURCE" } });
+      step = ctx.step;
+    }
+    if (step === "META_CONNECTION") {
+      ctx = await App.apiJson("/api/onboarding/wizard/skip", { method: "POST", body: { step: "META_CONNECTION" } });
+      step = ctx.step;
+    }
+    if (step === "REVIEW") {
+      ctx = await App.apiJson("/api/onboarding/wizard/complete", { method: "POST", body: {} });
+    }
+    window.location.href = "/dashboard.html";
+  } catch (err) {
+    showFinishingError(err.message || "We couldn't finish setting up your account - please try again.");
+  }
+}
+
+function render() {
+  if (!ctx) return;
+  if (ctx.status === "COMPLETED") {
+    window.location.href = "/dashboard.html";
+    return;
+  }
+  if (ctx.status === "NOT_STARTED" || ctx.step === "BUSINESS_PROFILE") {
+    renderBusinessProfile();
+    return;
+  }
+  // Business Profile is already submitted (the only screen this flow shows)
+  // - nothing left to ask, just finish the rest with defaults.
+  finishRemainingSteps(ctx.step);
+}
+
+(async () => {
+  const me = await App.requireAuth({ allowIncompleteOnboarding: true });
+  if (!me) return;
+  try {
+    ctx = await App.apiJson("/api/onboarding/wizard/status");
+    render();
+  } catch (err) {
+    card.innerHTML = `<div class="banner error">${esc(err.message || "Couldn't load your setup - please refresh.")}</div>`;
+  }
+})();
+</script>
+</body>
+</html>

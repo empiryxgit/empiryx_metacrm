@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Accept Invitation — RUTA Lead Management System</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<!-- Public landing + self-registration page for a "Generate Onboarding
+     Link" invite (Agency Dashboard -> Clients -> Add Client -> Generate
+     Onboarding Link, see generateOnboardingLink in
+     src/application/agencyOnboarding.ts). Reached via
+     https://.../onboarding/agency/{token} - vercel.json rewrites that path
+     to this static page with the token carried as a query param instead
+     (?token=...), the same way every other dynamic route in this project
+     turns a path segment into one - see vercel.json's own comment on why.
+     No session exists here and none is required: the token itself, never
+     an id, is the only thing that authorizes anything on this page - the
+     visitor is never asked which agency invited them (there's no field for
+     it anywhere below); every request that matters
+     (getOnboardingLinkPreview, completeAgencyOnboarding) resolves the
+     agency purely from the token itself.
+
+     Two screens, matching the flow this page was built from:
+       1. Welcome ("Welcome to {agency}" + Accept Invitation) - a deliberate
+          pause before collecting anything, so the link doesn't drop a
+          stranger straight into a form with no idea who's asking or why.
+       2. Create Your Account (Company Name / Contact Name / Email / Mobile
+          / Password) - the actual registration. -->
+<body>
+  <div class="auth-shell">
+    <div class="auth-card wide" id="card">
+      <p class="state-desc">Loading invitation…</p>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const token = new URLSearchParams(window.location.search).get("token");
+  const card = document.getElementById("card");
+  let currentPreview = null;
+
+  function renderInvalid(message) {
+    card.innerHTML = `
+      <h1>Invitation not available</h1>
+      <p class="sub">${App.escapeHtml(message || "This invitation link is invalid, has expired, or has already been used.")}</p>
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
+  }
+
+  // Screen 1 - Welcome.
+  function renderWelcome(preview) {
+    card.innerHTML = `
+      <h1>Welcome to ${App.escapeHtml(preview.agencyName)}</h1>
+      <p class="sub">${App.escapeHtml(preview.agencyName)} has invited you to use the LMS.</p>
+      <button class="btn full" type="button" id="acceptBtn">Accept Invitation</button>
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
+    document.getElementById("acceptBtn").addEventListener("click", () => renderCreateAccount(preview));
+  }
+
+  // Screen 2 - Create Your Account. Company Name / Email default to what
+  // the agency typed in when generating the link (Client Name / Contact
+  // Email) - editable, not binding, same as before: whatever the person
+  // completing this form actually submits is what gets created, not the
+  // agency's guess. Note there is no "which agency" field here at all -
+  // the token alone determines that server-side.
+  function renderCreateAccount(preview) {
+    card.innerHTML = `
+      <h1>Create Your Account</h1>
+      <div id="banner"></div>
+      <form id="onboardForm">
+        <label for="companyName">Company Name</label>
+        <input id="companyName" required autocomplete="organization" value="${App.escapeHtml(preview.clientName)}" />
+
+        <label for="fullName">Contact Name</label>
+        <input id="fullName" required autocomplete="name" />
+
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="email" value="${App.escapeHtml(preview.contactEmail)}" />
+
+        <label for="mobile">Mobile</label>
+        <input id="mobile" type="tel" required autocomplete="tel" />
+
+        <label for="password">Password</label>
+        <input id="password" type="password" required minlength="10" autocomplete="new-password" />
+        <div class="hint">At least 10 characters.</div>
+
+        <button class="btn full" type="submit" id="submitBtn">Create Account</button>
+      </form>
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>`;
+
+    document.getElementById("onboardForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const banner = document.getElementById("banner");
+      const submitBtn = document.getElementById("submitBtn");
+      banner.innerHTML = "";
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Creating…";
+      try {
+        // Client Organization Created -> Linked to Agency -> Client
+        // Dashboard: this one call does the first two (see
+        // completeAgencyOnboarding in src/application/agencyOnboarding.ts -
+        // it creates the company and links it to whichever agency the
+        // token names, "active", with no further accept step needed) and
+        // also logs the new owner straight in, so the redirect below lands
+        // on an already-signed-in dashboard rather than a login screen.
+        await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}/complete`, {
+          method: "POST",
+          body: {
+            companyName: document.getElementById("companyName").value.trim(),
+            ownerName: document.getElementById("fullName").value.trim(),
+            ownerEmail: document.getElementById("email").value.trim(),
+            phoneNumber: document.getElementById("mobile").value.trim(),
+            password: document.getElementById("password").value,
+          },
+        });
+        window.location.href = "/dashboard.html";
+      } catch (err) {
+        banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Create Account";
+      }
+    });
+  }
+
+  async function load() {
+    if (!token) {
+      renderInvalid("No invitation token was provided.");
+      return;
+    }
+    try {
+      currentPreview = await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}`);
+      renderWelcome(currentPreview);
+    } catch (err) {
+      renderInvalid(err.message);
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Integrations — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <p style="margin:0 0 10px"><a href="/settings.html" style="font-size:12.5px; color:var(--text-muted)">← Settings</a></p>
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Integrations</h1>
+        <p class="page-sub">Connect third-party lead sources to your company.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Integration</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="3" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  (async () => {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings/integrations.html");
+
+    const rows = document.getElementById("rows");
+
+    if (!App.hasPermission(me, "integrations.manage")) {
+      rows.innerHTML = `<tr><td colspan="3">
+        <div class="state-block">
+          <p class="state-title">You don't have access</p>
+          <p class="state-desc">Ask an admin for the "Connect and manage the Meta integration" permission.</p>
+        </div>
+      </td></tr>`;
+      return;
+    }
+
+    let statusLabel = '<span class="pill">Not connected</span>';
+    try {
+      const { connection } = await App.apiJson("/api/integrations/meta/status");
+      if (connection && connection.status === "active") {
+        statusLabel = '<span class="pill active">Connected</span>';
+      } else if (connection && connection.status === "error") {
+        statusLabel = '<span class="pill error">Needs attention</span>';
+      }
+    } catch (err) {
+      statusLabel = '<span class="pill">Unable to load status</span>';
+    }
+
+    rows.innerHTML = `
+      <tr onclick="window.location.href='/settings/integrations/meta-status.html'" style="cursor:pointer">
+        <td><strong>Meta</strong><div class="hint" style="margin-top:2px">Facebook &amp; Instagram Lead Ads</div></td>
+        <td>${statusLabel}</td>
+        <td><a href="/settings/integrations/meta-status.html">View status →</a></td>
+      </tr>
+    `;
+  })();
+</script>
+</body>
+</html>

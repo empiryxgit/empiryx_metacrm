@@ -1,0 +1,901 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dashboard — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-sub">Here's what's happening with your customers and sales.</p>
+      </div>
+      <div class="page-head-actions" style="gap:10px">
+        <div class="field-inline" id="branchFilterField" style="display:none; width:170px"></div>
+        <div class="range-picker">
+          <div class="segmented" id="rangeToggle" role="tablist" aria-label="Date range">
+            <button type="button" data-range="today" role="tab">Today</button>
+            <button type="button" data-range="7d" role="tab">7 Days</button>
+            <button type="button" data-range="30d" role="tab">30 Days</button>
+            <button type="button" data-range="custom" role="tab">Custom</button>
+          </div>
+          <div class="range-custom" id="rangeCustom" style="display:none">
+            <input type="date" id="rangeFrom" />
+            <span style="color:var(--text-muted); font-size:12px">to</span>
+            <input type="date" id="rangeTo" />
+            <button class="btn secondary sm" type="button" id="rangeApply">Apply</button>
+          </div>
+        </div>
+        <span class="status-updated" id="refreshedAt">Loading…</span>
+        <button class="refresh-btn" id="refreshBtn" type="button" aria-label="Refresh dashboard">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+    <div id="inviteBanner"></div>
+    <div id="setupChecklist"></div>
+    <div id="dashboardBody">
+
+      <div class="kpi-grid" id="kpiGrid"></div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Lead List</p>
+              <p class="dash-card-sub" id="leadListRangeLabel"></p>
+            </div>
+            <a href="/pipeline.html" class="dash-card-link">View all in Pipeline</a>
+          </div>
+          <div class="table-wrap" id="leadListTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Contact</th>
+                  <th>Source</th>
+                  <th>Stage</th>
+                  <th>Campaign</th>
+                  <th>Owner</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="leadListBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+            </table>
+          </div>
+          <p class="hint" id="leadListMore" style="margin:8px 2px 0; display:none"></p>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Lead Performance</p>
+              <p class="dash-card-sub" id="chartRangeLabel"></p>
+            </div>
+            <div class="chart-legend" id="chartLegend"></div>
+          </div>
+          <div class="chart-svg-wrap" id="chartWrap"></div>
+        </div>
+      </div>
+
+      <div class="dash-two-col even">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Pipeline Overview</p>
+              <p class="dash-card-sub">Live snapshot — click a stage to open it in Pipeline</p>
+            </div>
+          </div>
+          <div class="funnel" id="funnel"></div>
+        </div>
+
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Where your customers come from</p>
+              <p class="dash-card-sub" id="sourceRangeLabel"></p>
+            </div>
+          </div>
+          <div class="donut-row" id="sourceBody"></div>
+        </div>
+
+        <!-- WhatsApp Lead Capture feature (Phase 21) - minimal "Leads by
+             Approach" breakdown (Instant Form / WhatsApp / ...), the same
+             cohort/shape as "Where your customers come from" above, reusing
+             its own donut renderer. -->
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">How leads reach you</p>
+              <p class="dash-card-sub" id="leadApproachRangeLabel"></p>
+            </div>
+          </div>
+          <div class="donut-row" id="leadApproachBody"></div>
+          <!-- "Meta Campaign Destination Detection" reframing, Phase 17 -
+               Advertising Interaction vs identifiable Lead. Only shown when
+               the tenant actually has WhatsApp-routed ads (see
+               maybeLoadAdInteractions below) - a tenant with none never
+               sees an empty/loading row here. Deliberately a plain,
+               separate line, never merged into the donut above: an
+               "interaction" is an aggregate Meta metric, not a person, and
+               must never be readable as a Lead count. -->
+          <p class="dash-card-sub" id="adInteractionNote" hidden></p>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Campaign Performance</p>
+              <p class="dash-card-sub" id="campaignRangeLabel"></p>
+            </div>
+          </div>
+          <div class="table-wrap" id="campaignTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campaign</th>
+                  <th>Branch</th>
+                  <th class="sortable" data-sort="leads">Leads <span class="sort-arrow">↓</span></th>
+                  <th class="sortable" data-sort="qualified">Qualified <span class="sort-arrow">↓</span></th>
+                  <th class="sortable" data-sort="won">Won <span class="sort-arrow">↓</span></th>
+                  <th class="sortable" data-sort="conversionRate">Conversion <span class="sort-arrow">↓</span></th>
+                </tr>
+              </thead>
+              <tbody id="campaignBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-two-col even" style="margin-bottom:0">
+        <div class="dash-card">
+          <div class="dash-card-head"><p class="dash-card-title">Recent Activity</p></div>
+          <div class="activity-list" id="activityList"></div>
+        </div>
+
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <p class="dash-card-title">Upcoming Follow-ups</p>
+            <a href="/pipeline.html" class="dash-card-link">View all</a>
+          </div>
+          <div class="followup-list" id="followupList"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  // -------------------------------------------------------------------
+  // Sample data - used ONLY when /api/auth/me itself can't be reached at
+  // all (a fully disconnected standalone preview). Any real, logged-in
+  // session always renders from /api/dashboard - see load() below.
+  // -------------------------------------------------------------------
+  const MOCK = {
+    range: { key: "7d", days: 7 },
+    template: {
+      milestoneLabel: "Site Visits",
+      stages: [
+        { key: "new", label: "New Inquiry" }, { key: "contacted", label: "Contacted" },
+        { key: "qualified", label: "Qualified" }, { key: "site_visit", label: "Site Visit" },
+        { key: "negotiation", label: "Negotiation" }, { key: "won", label: "Won", isWon: true },
+        { key: "lost", label: "Lost", isClosed: true },
+      ],
+    },
+    kpis: {
+      totalLeads: { value: 248, previous: 220, deltaPct: 12.7 },
+      newLeads: { value: 64, previous: 51, deltaPct: 25.5 },
+      qualified: { value: 31, previous: 28, deltaPct: 10.7 },
+      milestone: { label: "Site Visits", value: 18, previous: 15, deltaPct: 20 },
+      won: { value: 8, previous: 6, deltaPct: 33.3 },
+      conversionRate: { value: 12.5, previous: 11.8, deltaPoints: 0.7 },
+    },
+    chart: Array.from({ length: 14 }).map((_, i) => ({
+      date: new Date(Date.now() - (13 - i) * 86400000).toISOString(),
+      new: 3 + Math.round(Math.sin(i) * 2 + 3), qualified: 1 + Math.round(Math.sin(i) * 1 + 1), won: i % 3 === 0 ? 1 : 0,
+    })),
+    funnel: [
+      { key: "new", label: "New Inquiry", count: 124 }, { key: "contacted", label: "Contacted", count: 82 },
+      { key: "qualified", label: "Qualified", count: 48 }, { key: "site_visit", label: "Site Visit", count: 27 },
+      { key: "negotiation", label: "Negotiation", count: 15 }, { key: "won", label: "Won", count: 8, isWon: true },
+    ],
+    sources: [
+      { key: "meta_lead_ads", label: "Meta Lead Ads", count: 38, percent: 59.4 },
+      { key: "website", label: "Website", count: 12, percent: 18.8 },
+      { key: "referral", label: "Referral", count: 8, percent: 12.5 },
+      { key: "whatsapp", label: "WhatsApp", count: 6, percent: 9.4 },
+    ],
+    campaigns: [
+      { id: "mock-1", name: "Project Acstya", branchName: "Ahmedabad", leads: 84, qualified: 31, won: 7, conversionRate: 8.3 },
+      { id: "mock-2", name: "Diwali Offer", branchName: null, leads: 52, qualified: 19, won: 4, conversionRate: 7.7 },
+    ],
+    leads: [
+      { id: "mock-1", fullName: "Rahul Patel", email: "rahul.patel@example.com", phoneNumber: "+919812345678", sourceLabel: "Meta Lead Ads", stageKey: "qualified", stageLabel: "Qualified", isWon: false, isLost: false, campaignName: "Project Acstya", ownerName: "Mitul", createdAt: new Date(Date.now() - 20 * 60000).toISOString() },
+      { id: "mock-2", fullName: "Priya Menon", email: null, phoneNumber: "+919876500000", sourceLabel: "Website", stageKey: "site_visit", stageLabel: "Site Visit", isWon: false, isLost: false, campaignName: null, ownerName: "Mitul", createdAt: new Date(Date.now() - 90 * 60000).toISOString() },
+      { id: "mock-3", fullName: "Amit Shah", email: "amit.shah@example.com", phoneNumber: null, sourceLabel: "Referral", stageKey: "won", stageLabel: "Won", isWon: true, isLost: false, campaignName: "Diwali Offer", ownerName: null, createdAt: new Date(Date.now() - 3 * 3600000).toISOString() },
+    ],
+    leadsTotal: 3,
+    activity: [
+      { text: "Rahul Patel moved to Qualified", timestamp: new Date(Date.now() - 20 * 60000).toISOString() },
+      { text: "Amit Shah added as customer", timestamp: new Date(Date.now() - 90 * 60000).toISOString() },
+      { text: "Project Acstya generated 5 new leads", timestamp: new Date(Date.now() - 3 * 3600000).toISOString() },
+    ],
+    followUps: [
+      { id: "mock-1", name: "Rahul Patel", stage: "Qualified", nextFollowUpAt: new Date(Date.now() + 3 * 3600000).toISOString(), owner: "Mitul" },
+      { id: "mock-2", name: "Priya Menon", stage: "Site Visit", nextFollowUpAt: new Date(Date.now() + 26 * 3600000).toISOString(), owner: "Mitul" },
+    ],
+  };
+
+  const CHART_SERIES = [
+    { key: "new", label: "New leads", color: "var(--brand-primary)" },
+    { key: "qualified", label: "Qualified", color: "var(--brand-dark)" },
+    { key: "won", label: "Won", color: "var(--success)" },
+  ];
+  let chartVisible = new Set(["new", "qualified", "won"]);
+  let campaignRows = [];
+  let campaignSort = { field: "leads", dir: "desc" };
+  let rangeKey = "7d";
+  let customFrom = "";
+  let customTo = "";
+
+  function fmtRelative(iso) {
+    if (!iso) return "";
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.round(diffMs / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return mins + "m ago";
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return hours + "h ago";
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function fmtFollowUp(iso) {
+    const d = new Date(iso);
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    const isTomorrow = d.toDateString() === tomorrow.toDateString();
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (isToday) return "Today, " + time;
+    if (isTomorrow) return "Tomorrow, " + time;
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ", " + time;
+  }
+
+  // ---- KPIs -------------------------------------------------------------
+  function deltaBadge(deltaPct) {
+    if (deltaPct === null || deltaPct === undefined) return `<span class="kpi-delta new">New</span>`;
+    if (deltaPct === 0) return `<span class="kpi-delta flat">No change</span>`;
+    const up = deltaPct > 0;
+    const arrow = up
+      ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 8.5V1.5M5 1.5 1.5 5M5 1.5 8.5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      : `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1.5v7M5 8.5 1.5 5M5 8.5 8.5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    return `<span class="kpi-delta ${up ? "up" : "down"}">${arrow}${Math.abs(deltaPct)}%</span>`;
+  }
+
+  function rangeNoteLabel() {
+    if (rangeKey === "today") return "yesterday";
+    if (rangeKey === "7d") return "7 days";
+    if (rangeKey === "30d") return "30 days";
+    return "the prior period";
+  }
+
+  function renderKpis(kpis, template) {
+    const note = "vs previous " + rangeNoteLabel();
+    const cards = [
+      { label: "Total Leads", value: kpis.totalLeads.value, delta: deltaBadge(kpis.totalLeads.deltaPct), note: "vs " + rangeNoteLabel() + " ago" },
+      { label: "New Leads", value: kpis.newLeads.value, delta: deltaBadge(kpis.newLeads.deltaPct), note },
+      { label: "Qualified Leads", value: kpis.qualified.value, delta: deltaBadge(kpis.qualified.deltaPct), note },
+      // Only shown when the company's industry template actually defines a
+      // milestone stage (e.g. Site Visits for Real Estate) - template.
+      // milestoneLabel is "" for the General/Custom templates (see
+      // industryTemplates.ts's own comment: "the dashboard simply omits
+      // that KPI card rather than rendering an empty-labeled one"). Omitted
+      // here via a falsy `label` rather than always pushed, so a company
+      // with no industry-specific milestone never sees a blank-labeled "0"
+      // tile - see the bug this fixes: it used to render one anyway.
+      template.milestoneLabel
+        ? { label: template.milestoneLabel, value: kpis.milestone.value, delta: deltaBadge(kpis.milestone.deltaPct), note }
+        : null,
+      { label: "Won", value: kpis.won.value, tone: "success", delta: deltaBadge(kpis.won.deltaPct), note },
+      {
+        label: "Conversion Rate", value: kpis.conversionRate.value + "%",
+        delta: `<span class="kpi-delta ${kpis.conversionRate.deltaPoints > 0 ? "up" : kpis.conversionRate.deltaPoints < 0 ? "down" : "flat"}">${kpis.conversionRate.deltaPoints > 0 ? "+" : ""}${kpis.conversionRate.deltaPoints} pts</span>`,
+        note,
+      },
+    ].filter(Boolean);
+    document.getElementById("kpiGrid").innerHTML = cards.map(c => `
+      <div class="kpi-card ${c.tone ? "is-" + c.tone : ""}">
+        <div class="kpi-label">${App.escapeHtml(c.label)}</div>
+        <div class="kpi-value">${typeof c.value === "number" ? c.value.toLocaleString() : c.value}</div>
+        ${c.delta}
+        <div class="kpi-note">${c.note}</div>
+      </div>`).join("");
+  }
+
+  // ---- Chart --------------------------------------------------------------
+  function renderChartLegend() {
+    document.getElementById("chartLegend").innerHTML = CHART_SERIES.map(s => `
+      <button type="button" class="chart-legend-item ${chartVisible.has(s.key) ? "" : "off"}" data-series="${s.key}">
+        <span class="dot" style="background:${s.color}"></span>${App.escapeHtml(s.label)}
+      </button>`).join("");
+    document.querySelectorAll(".chart-legend-item").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.series;
+        if (chartVisible.has(key)) chartVisible.delete(key); else chartVisible.add(key);
+        renderChartLegend();
+        renderChart(window.__lastChartData || []);
+      });
+    });
+  }
+
+  function renderChart(buckets) {
+    window.__lastChartData = buckets;
+    const wrap = document.getElementById("chartWrap");
+    if (!buckets.length) {
+      wrap.innerHTML = `<div class="chart-empty">No data for this period yet.</div>`;
+      return;
+    }
+    const height = 220;
+    const padding = { top: 14, right: 14, bottom: 26, left: 30 };
+    const pxPerPoint = buckets.length > 20 ? 34 : 52;
+    const width = Math.max(560, buckets.length * pxPerPoint);
+    const innerW = width - padding.left - padding.right;
+    const innerH = height - padding.top - padding.bottom;
+
+    const activeSeries = CHART_SERIES.filter(s => chartVisible.has(s.key));
+    const maxVal = Math.max(1, ...buckets.flatMap(b => activeSeries.map(s => b[s.key] || 0)));
+    const niceMax = Math.ceil(maxVal / 4) * 4 || 4;
+
+    const xAt = (i) => padding.left + (buckets.length === 1 ? innerW / 2 : (i / (buckets.length - 1)) * innerW);
+    const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
+
+    const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => {
+      const y = padding.top + innerH * (1 - f);
+      const val = Math.round(niceMax * f);
+      return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="10" fill="var(--text-muted)" text-anchor="end">${val}</text>`;
+    }).join("");
+
+    const labelEvery = Math.ceil(buckets.length / 8) || 1;
+    const xLabels = buckets.map((b, i) => {
+      if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
+      const d = new Date(b.date);
+      const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="10" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+    }).join("");
+
+    const seriesSvg = activeSeries.map(s => {
+      const points = buckets.map((b, i) => [xAt(i), yAt(b[s.key] || 0)]);
+      const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+      const areaPath = linePath + ` L${xAt(buckets.length - 1).toFixed(1)},${(padding.top + innerH).toFixed(1)} L${xAt(0).toFixed(1)},${(padding.top + innerH).toFixed(1)} Z`;
+      const dots = points.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${s.color}" />`).join("");
+      return `<path d="${areaPath}" fill="${s.color}" opacity="0.07" />
+              <path d="${linePath}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+              ${dots}`;
+    }).join("");
+
+    wrap.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Lead performance chart">
+      ${gridLines}${xLabels}${seriesSvg}
+    </svg>`;
+  }
+
+  // ---- Funnel ---------------------------------------------------------
+  function renderFunnel(funnel) {
+    const max = Math.max(1, ...funnel.map(f => f.count));
+    document.getElementById("funnel").innerHTML = funnel.map(f => `
+      <div class="funnel-row ${f.isWon ? "is-won" : f.isClosed ? "is-lost" : ""}" data-stage="${f.key}">
+        <div class="funnel-label">${App.escapeHtml(f.label)}</div>
+        <div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:${Math.max(3, Math.round((f.count / max) * 100))}%"></div></div>
+        <div class="funnel-count">${f.count.toLocaleString()}</div>
+      </div>`).join("");
+    document.querySelectorAll(".funnel-row").forEach(row => {
+      row.addEventListener("click", () => {
+        window.location.href = "/pipeline.html?stage=" + encodeURIComponent(row.dataset.stage);
+      });
+    });
+  }
+
+  // ---- Lead source donut ------------------------------------------------
+  const DONUT_COLORS = ["var(--brand-primary)", "var(--brand-dark)", "var(--success)", "var(--warning)", "#8B6F47", "var(--text-muted)"];
+  // containerId defaults to the original "Where your customers come from"
+  // card so every pre-existing call site keeps working unchanged; the new
+  // "How leads reach you" card (Phase 21) passes its own id to reuse this
+  // same donut+legend rendering rather than duplicating it.
+  function renderSources(sources, containerId = "sourceBody") {
+    const body = document.getElementById(containerId);
+    if (!sources.length) {
+      body.innerHTML = `<div class="chart-empty">No leads in this period yet.</div>`;
+      return;
+    }
+    const total = sources.reduce((sum, s) => sum + s.count, 0);
+    let cumulative = 0;
+    const stops = sources.map((s, i) => {
+      const color = DONUT_COLORS[i % DONUT_COLORS.length];
+      const start = (cumulative / total) * 360;
+      cumulative += s.count;
+      const end = (cumulative / total) * 360;
+      return `${color} ${start.toFixed(2)}deg ${end.toFixed(2)}deg`;
+    }).join(", ");
+    body.innerHTML = `
+      <div class="donut" style="background:conic-gradient(${stops})">
+        <div class="donut-center"><span class="n">${total.toLocaleString()}</span><span class="l">total</span></div>
+      </div>
+      <div class="donut-legend">
+        ${sources.map((s, i) => `
+          <div class="donut-legend-item">
+            <span class="dot" style="background:${DONUT_COLORS[i % DONUT_COLORS.length]}"></span>
+            <span class="label">${App.escapeHtml(s.label)}</span>
+            <span class="cnt">${s.count}</span>
+            <span class="pct">${s.percent}%</span>
+          </div>`).join("")}
+      </div>`;
+  }
+
+  // ---- Lead list (date-range scoped - see api/dashboard/index.ts's own
+  // comment on `leadList`). Re-fetched and re-rendered on every range
+  // change exactly like every other section on this page - no separate
+  // fetch/state of its own, see renderAll/fetchAndRender below. ----------
+  function fmtLeadDate(iso) {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+  function stagePillClass(row) {
+    return row.isWon ? "processed" : row.isLost ? "failed" : "pending";
+  }
+  function renderLeadList(leadsList, total) {
+    const body = document.getElementById("leadListBody");
+    if (!leadsList.length) {
+      // Rich empty-state CTA (PHASE 16) rather than a bare "no data" line -
+      // the same message either way (this section is always period-scoped,
+      // so there's no way to tell "brand-new account" from "quiet week"
+      // from here alone), but a brand-new account genuinely has nowhere
+      // else on this page to learn what to do next.
+      body.innerHTML = `<tr><td colspan="7" class="empty">
+        No leads in this period yet. <a href="/pipeline.html">+ Add a customer</a> to get started.
+      </td></tr>`;
+      document.getElementById("leadListMore").style.display = "none";
+      return;
+    }
+    body.innerHTML = leadsList.map(l => `
+      <tr>
+        <td>${App.escapeHtml(l.fullName || "Unnamed lead")}</td>
+        <td>${App.escapeHtml(l.email || l.phoneNumber || "—")}</td>
+        <td>${App.escapeHtml(l.sourceLabel)}</td>
+        <td><span class="pill ${stagePillClass(l)}">${App.escapeHtml(l.stageLabel)}</span></td>
+        <td>${l.campaignName ? App.escapeHtml(l.campaignName) : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${l.ownerName ? App.escapeHtml(l.ownerName) : '<span style="color:var(--text-muted)">Unassigned</span>'}</td>
+        <td>${fmtLeadDate(l.createdAt)}</td>
+      </tr>`).join("");
+    const more = document.getElementById("leadListMore");
+    if (total > leadsList.length) {
+      more.textContent = `Showing the latest ${leadsList.length} of ${total} leads in this period — view all in Pipeline.`;
+      more.style.display = "";
+    } else {
+      more.style.display = "none";
+    }
+  }
+
+  // ---- Campaign performance table ---------------------------------------
+  function renderCampaigns() {
+    const body = document.getElementById("campaignBody");
+    if (!campaignRows.length) {
+      body.innerHTML = `<tr><td colspan="6" class="empty">No campaign leads in this period yet.</td></tr>`;
+      return;
+    }
+    const sorted = [...campaignRows].sort((a, b) => {
+      const dir = campaignSort.dir === "asc" ? 1 : -1;
+      return a[campaignSort.field] > b[campaignSort.field] ? dir : a[campaignSort.field] < b[campaignSort.field] ? -dir : 0;
+    });
+    body.innerHTML = sorted.map(c => `
+      <tr>
+        <td><span class="campaign-name-link" data-campaign="${c.id}">${App.escapeHtml(c.name)}</span></td>
+        <td>${c.branchName ? App.escapeHtml(c.branchName) : '<span style="color:var(--text-muted)">All branches</span>'}</td>
+        <td>${c.leads}</td>
+        <td>${c.qualified}</td>
+        <td>${c.won}</td>
+        <td>${c.conversionRate}%</td>
+      </tr>`).join("");
+    document.querySelectorAll("[data-campaign]").forEach(el => {
+      el.addEventListener("click", () => { window.location.href = "/campaign.html?id=" + encodeURIComponent(el.dataset.campaign); });
+    });
+    document.querySelectorAll("th.sortable").forEach(th => {
+      th.classList.toggle("active", th.dataset.sort === campaignSort.field);
+      th.querySelector(".sort-arrow").textContent = campaignSort.field === th.dataset.sort ? (campaignSort.dir === "asc" ? "↑" : "↓") : "↓";
+    });
+  }
+
+  document.querySelectorAll("th.sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const field = th.dataset.sort;
+      campaignSort = { field, dir: campaignSort.field === field && campaignSort.dir === "desc" ? "asc" : "desc" };
+      renderCampaigns();
+    });
+  });
+
+  // ---- Recent activity ------------------------------------------------
+  function renderActivity(activity) {
+    const list = document.getElementById("activityList");
+    if (!activity.length) {
+      list.innerHTML = `<div class="chart-empty">No recent activity.</div>`;
+      return;
+    }
+    list.innerHTML = activity.map(a => `
+      <div class="activity-item">
+        <span class="activity-dot"></span>
+        <span class="activity-text">${App.escapeHtml(a.text)}</span>
+        <span class="activity-time">${fmtRelative(a.timestamp)}</span>
+      </div>`).join("");
+  }
+
+  // ---- Upcoming follow-ups ---------------------------------------------
+  function renderFollowUps(followUps) {
+    const list = document.getElementById("followupList");
+    if (!followUps.length) {
+      list.innerHTML = `<div class="chart-empty">Nothing due — you're all caught up.</div>`;
+      return;
+    }
+    list.innerHTML = followUps.map(f => {
+      const overdue = new Date(f.nextFollowUpAt) < new Date();
+      return `<div class="followup-item">
+        <div class="followup-info">
+          <div class="followup-name">${App.escapeHtml(f.name)}</div>
+          <div class="followup-meta">${App.escapeHtml(f.stage)}${f.owner ? " · " + App.escapeHtml(f.owner) : ""}</div>
+        </div>
+        <div class="followup-when ${overdue ? "is-overdue" : ""}">${fmtFollowUp(f.nextFollowUpAt)}</div>
+      </div>`;
+    }).join("");
+  }
+
+  // ---- Load ---------------------------------------------------------------
+  function apiRangeQuery() {
+    if (rangeKey === "custom" && customFrom && customTo) {
+      return `range=custom&from=${encodeURIComponent(customFrom)}&to=${encodeURIComponent(customTo)}`;
+    }
+    return `range=${encodeURIComponent(rangeKey)}`;
+  }
+
+  function renderAll(data) {
+    renderKpis(data.kpis, data.template);
+    renderLeadList(data.leads || [], data.leadsTotal ?? (data.leads || []).length);
+    renderChartLegend();
+    renderChart(data.chart);
+    renderFunnel(data.funnel);
+    renderSources(data.sources);
+    renderSources(data.leadApproaches || [], "leadApproachBody");
+    campaignRows = data.campaigns;
+    renderCampaigns();
+    renderActivity(data.activity);
+    renderFollowUps(data.followUps);
+    const rangeLabel = rangeKey === "today" ? "today" : rangeKey === "7d" ? "the last 7 days" : rangeKey === "30d" ? "the last 30 days" : "the selected range";
+    document.getElementById("leadListRangeLabel").textContent = "Leads captured " + rangeLabel;
+    document.getElementById("chartRangeLabel").textContent = "New, qualified and won leads over " + rangeLabel;
+    document.getElementById("sourceRangeLabel").textContent = "New leads and customers, " + rangeLabel;
+    document.getElementById("leadApproachRangeLabel").textContent = "How leads were captured, " + rangeLabel;
+    document.getElementById("campaignRangeLabel").textContent = "Leads generated " + rangeLabel;
+  }
+
+  function branchQueryParam(){
+    const branchId = App.getSelectedBranchId();
+    return branchId ? `&branchId=${encodeURIComponent(branchId)}` : "";
+  }
+
+  // "Meta Campaign Destination Detection" reframing, Phase 17 - fetched as
+  // a second, progressive request (never blocks the main dashboard paint,
+  // never fetched at all for a tenant with no WhatsApp-routed ads yet - the
+  // common case). See api/dashboard/index.ts's own comment on why this is
+  // opt-in rather than baked into the default response. Failure here (Meta
+  // outage, timeout, no connection) just leaves the note hidden - never an
+  // error banner, since this is a supplementary metric, not core dashboard
+  // data.
+  async function maybeLoadAdInteractions(data) {
+    const note = document.getElementById("adInteractionNote");
+    note.hidden = true;
+    const hasWhatsappLeads = (data.leadApproaches || []).some(a => a.key === "whatsapp" && a.count > 0);
+    if (!hasWhatsappLeads) return;
+    try {
+      const withInteractions = await App.apiJson(`/api/dashboard?${apiRangeQuery()}${branchQueryParam()}&includeAdInteractions=true`);
+      const summary = withInteractions.whatsappAdInteractions;
+      if (!summary || !summary.available) return;
+      const identifiableLeads = (data.leadApproaches || []).find(a => a.key === "whatsapp")?.count ?? 0;
+      note.textContent = `WhatsApp ad interactions: ${summary.conversationsStarted} conversations started (Meta's own aggregate ad metric, not individual people) — ${identifiableLeads} became identifiable leads in the LMS.`;
+      note.hidden = false;
+    } catch (err) {
+      console.warn("Failed to load WhatsApp ad interaction summary", err);
+    }
+  }
+
+  // Just the "fetch + render the numbers" half of load() below, with no
+  // auth/nav work - this is what a branch-switch reacts to (see
+  // App.onBranchChange near the bottom), so switching branches never
+  // re-triggers App.renderNav() (which would re-populate the branch
+  // switcher and could re-fire the very event this responds to).
+  async function fetchAndRender() {
+    const refreshBtn = document.getElementById("refreshBtn");
+    refreshBtn.classList.add("is-loading");
+    document.getElementById("banner").innerHTML = "";
+    try {
+      const data = await App.apiJson(`/api/dashboard?${apiRangeQuery()}${branchQueryParam()}`);
+      document.getElementById("dashboardBody").style.display = "";
+      renderAll(data);
+      void maybeLoadAdInteractions(data); // fire-and-forget, never blocks the main render
+      document.getElementById("refreshedAt").textContent = "Updated " + new Date().toLocaleTimeString();
+      if (currentMe) renderSetupChecklist(currentMe, data);
+    } catch (err) {
+      document.getElementById("dashboardBody").style.display = "none";
+      document.getElementById("banner").innerHTML = `
+        <div class="state-block">
+          <p class="state-title">Unable to load dashboard data</p>
+          <p class="state-desc">${App.escapeHtml(err.message || "Something went wrong.")}</p>
+          <div class="state-actions"><button class="btn secondary" id="retryBtn" type="button">Try again</button></div>
+        </div>`;
+      document.getElementById("retryBtn")?.addEventListener("click", load);
+      document.getElementById("refreshedAt").textContent = "";
+      refreshBtn.classList.remove("is-loading");
+      return;
+    }
+    refreshBtn.classList.remove("is-loading");
+  }
+
+  let branchFilterMounted = false;
+  let currentMe = null;
+
+  // ---------------------------------------------------------------------
+  // Setup checklist widget (PHASE 17) - a non-blocking, dismissible
+  // nudge shown on the dashboard for Individual accounts that just came
+  // through the guided onboarding wizard, until every item is real. Every
+  // checkmark is derived from ACTUAL account state (never a fabricated
+  // "getting started" progress bar) - see each item's own `done` check
+  // below. Dismissal is a per-browser localStorage preference, NOT server
+  // state - deliberately different from the wizard's own progress
+  // (src/domain/onboarding.ts), which must survive a browser switch/close;
+  // this widget only ever appears AFTER onboarding is already COMPLETED,
+  // so there is nothing here a lost dismissal preference could ever trap
+  // a user behind - worst case, it just reappears once on a new browser.
+  // ---------------------------------------------------------------------
+  function checklistDismissKey(companyId) {
+    return `ruta_setup_checklist_dismissed_${companyId}`;
+  }
+
+  async function renderSetupChecklist(me, dashboardData) {
+    const slot = document.getElementById("setupChecklist");
+    if (!slot) return;
+
+    // Agency and client companies never went through this wizard (see
+    // src/domain/onboarding.ts's own header comment) - this widget is
+    // Individual-only, same scope boundary as the wizard itself.
+    if (me.company.accountType !== "individual") {
+      slot.innerHTML = "";
+      return;
+    }
+
+    const dismissKey = checklistDismissKey(me.company.id);
+    try {
+      if (localStorage.getItem(dismissKey) === "1") {
+        slot.innerHTML = "";
+        return;
+      }
+    } catch {
+      // Storage unavailable (private browsing, blocked cookies) - just
+      // never persist the dismissal; showing the widget every load is a
+      // safe fallback, never a broken one.
+    }
+
+    let wizard = null;
+    let meta = null;
+    let userList = null;
+    try {
+      [wizard, meta, userList] = await Promise.all([
+        App.apiJson("/api/onboarding/wizard/status").catch(() => null),
+        App.apiJson("/api/integrations/meta/status").catch(() => null),
+        App.apiJson("/api/admin/users").catch(() => null),
+      ]);
+    } catch {
+      wizard = null;
+    }
+    if (!wizard) {
+      slot.innerHTML = "";
+      return;
+    }
+
+    const totalLeads = dashboardData?.kpis?.totalLeads?.value ?? dashboardData?.leadsTotal ?? 0;
+    // `href` is the page a pending item's row links to so the user can go
+    // complete it directly from here, per the reported request ("any
+    // pending steps will have url... where user will click on it").
+    // Always-done items (business profile, pipeline) never render as
+    // pending so their `href` is irrelevant and left null.
+    //
+    // No "Lead sources configured" item - the simplified onboarding flow
+    // (onboarding.html) no longer asks about lead sources at all, and there
+    // is no editor page anywhere in the app to complete it from, so it would
+    // sit pending forever. Facebook/Instagram connection is no longer gated
+    // on isMetaConnectionApplicable either, for the same reason - that used
+    // to mean "the user said they get leads from Facebook/Instagram," but
+    // the onboarding flow doesn't ask that anymore, so this now always shows
+    // for an Individual account, exactly where "remaining steps" (like
+    // connecting Meta) belong now that onboarding itself is a single step.
+    const items = [
+      { label: "Business profile set up", done: true, href: null },
+      { label: "Sales pipeline ready", done: true, href: null },
+      {
+        // Review finding - "connected" alone (OAuth done) used to mark this
+        // done, even with no Page/Instagram/Ad Account ever selected - the
+        // exact "I thought Meta was configured" confusion reported against
+        // this checklist. Now matches meta-status.html's own definition of
+        // fully set up: the connection is healthy AND at least one asset
+        // has actually been picked, so this only checks off once there's
+        // nothing left for the user to do on the Meta side.
+        label: "Facebook / Instagram connected",
+        done: Boolean(
+          meta?.connection?.status === "active" &&
+          (meta.pages?.some((p) => p.isSelected) || meta.instagramAccounts?.some((i) => i.isSelected) || meta.adAccounts?.some((a) => a.isSelected))
+        ),
+        href: "/settings/integrations/meta-status.html",
+      },
+      {
+        label: `First ${(wizard.company.leadTerminology || "lead").toLowerCase()} added`,
+        done: Number(totalLeads) > 0,
+        href: "/pipeline.html",
+      },
+      { label: "Invite a team member", done: Boolean(userList?.users?.length > 1), href: "/admin/users.html" },
+    ];
+
+    if (items.every((i) => i.done)) {
+      slot.innerHTML = "";
+      return;
+    }
+
+    slot.innerHTML = `
+      <div class="card" style="margin-bottom:16px; position:relative; padding-right:40px">
+        <button type="button" id="dismissChecklistBtn" aria-label="Dismiss setup checklist"
+          style="position:absolute; top:14px; right:14px; background:none; border:none; cursor:pointer; color:var(--text-muted); font-size:18px; line-height:1; padding:2px">×</button>
+        <p class="dash-card-title" style="margin-bottom:12px">Finish setting up your account</p>
+        <div style="display:flex; flex-direction:column; gap:9px">
+          ${items.map((i) => {
+            const clickable = !i.done && i.href;
+            const rowStyle = `display:flex; align-items:center; gap:9px; font-size:13px; color:${i.done ? "var(--text-muted)" : "var(--text-primary)"}`;
+            const rowAttrs = clickable
+              ? ` href="${App.escapeHtml(i.href)}" style="${rowStyle}; text-decoration:none; cursor:pointer"`
+              : ` style="${rowStyle}"`;
+            const tag = clickable ? "a" : "div";
+            return `
+            <${tag}${rowAttrs}>
+              <span style="width:18px; height:18px; border-radius:50%; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center; font-size:11px;
+                ${i.done ? "background:var(--success-soft); color:var(--success)" : "border:1.5px solid var(--border-strong)"}">${i.done ? "✓" : ""}</span>
+              <span style="${i.done ? "text-decoration:line-through" : ""}">${App.escapeHtml(i.label)}</span>
+              ${clickable ? `<span style="margin-left:auto; color:var(--text-muted); font-size:12px">&rsaquo;</span>` : ""}
+            </${tag}>
+          `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+    document.getElementById("dismissChecklistBtn")?.addEventListener("click", () => {
+      try { localStorage.setItem(dismissKey, "1"); } catch {}
+      slot.innerHTML = "";
+    });
+  }
+
+  // A separate banner slot from #banner above (never cleared by
+  // fetchAndRender's own refresh cycle) - "ABC Digital wants to manage your
+  // account" for a company an agency has invited via Invite Client (see
+  // inviteExistingClient in src/application/agency.ts). Harmless no-op for
+  // an account with no pending invite, and for an agency account itself
+  // (an agency's own company can't be invited as someone's client - see
+  // that function's own accountType check - so this just always renders
+  // nothing there).
+  async function checkPendingAgencyInvite() {
+    let result;
+    try {
+      result = await App.apiJson("/api/agency/invites/pending");
+    } catch {
+      return;
+    }
+    const invite = result?.invite;
+    const slot = document.getElementById("inviteBanner");
+    if (!invite) {
+      slot.innerHTML = "";
+      return;
+    }
+    slot.innerHTML = `
+      <div class="banner info" style="justify-content:space-between; flex-wrap:wrap; gap:10px">
+        <span><strong>${App.escapeHtml(invite.agencyName)}</strong> has invited you to become their client.</span>
+        <span style="display:flex; gap:8px">
+          <button class="btn secondary sm" type="button" id="declineInviteBtn">Decline</button>
+          <button class="btn sm" type="button" id="acceptInviteBtn">Accept</button>
+        </span>
+      </div>`;
+    document.getElementById("acceptInviteBtn").addEventListener("click", () => respondToInvite(invite.agencyCompanyId, true));
+    document.getElementById("declineInviteBtn").addEventListener("click", () => respondToInvite(invite.agencyCompanyId, false));
+  }
+
+  async function respondToInvite(agencyCompanyId, accept) {
+    try {
+      await App.apiJson("/api/agency/invites/respond", { method: "POST", body: { agencyCompanyId, accept } });
+      await checkPendingAgencyInvite();
+    } catch (err) {
+      document.getElementById("inviteBanner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  async function load() {
+    const refreshBtn = document.getElementById("refreshBtn");
+    refreshBtn.classList.add("is-loading");
+    document.getElementById("banner").innerHTML = "";
+
+    // Distinguish "no backend reachable at all" (standalone preview - show
+    // sample data) from "backend reachable but not logged in" (redirect).
+    let me;
+    try {
+      me = await App.apiJson("/api/auth/me");
+    } catch (err) {
+      if (err.message && err.message.includes("Not authenticated")) {
+        window.location.href = "/login.html?next=/dashboard.html";
+        return;
+      }
+      renderAll(MOCK);
+      document.getElementById("refreshedAt").textContent = "Sample data (offline preview)";
+      refreshBtn.classList.remove("is-loading");
+      return;
+    }
+
+    // A real, logged-in session - never fall back to sample data past this
+    // point. A fetch failure here gets a real error state, not fabricated
+    // numbers.
+    currentMe = me;
+    document.getElementById("topnav").style.display = "flex";
+    App.renderNav(me, "/dashboard.html");
+    checkPendingAgencyInvite();
+
+    // Real-data-only greeting (PHASE 16) - the user's own first name and
+    // company name, both straight from /api/auth/me. Never a fabricated
+    // "Great job this week!" type line - just a plain, accurate hello.
+    const firstName = (me.user.fullName || "").trim().split(/\s+/)[0];
+    document.querySelector(".page-sub").textContent = firstName
+      ? `Welcome back, ${firstName} — here's what's happening with your customers and sales.`
+      : "Here's what's happening with your customers and sales.";
+
+    if (!branchFilterMounted) {
+      branchFilterMounted = true;
+      App.mountBranchFilter(document.getElementById("branchFilterField"), { fieldLabel: "Branch", selectId: "branchSelectDashboard" });
+      // Registered once, before the first fetchAndRender() below, so a
+      // prior branch selection restored asynchronously by the switcher can
+      // never fire this before the listener exists.
+      App.onBranchChange(fetchAndRender);
+    }
+
+    await fetchAndRender();
+  }
+
+  document.getElementById("refreshBtn").addEventListener("click", load);
+
+  document.getElementById("rangeToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-range]");
+    if (!btn) return;
+    rangeKey = btn.dataset.range;
+    document.querySelectorAll("#rangeToggle button").forEach(b => b.classList.toggle("active", b.dataset.range === rangeKey));
+    document.getElementById("rangeCustom").style.display = rangeKey === "custom" ? "flex" : "none";
+    if (rangeKey !== "custom") load();
+  });
+  document.getElementById("rangeApply").addEventListener("click", () => {
+    customFrom = document.getElementById("rangeFrom").value;
+    customTo = document.getElementById("rangeTo").value;
+    if (customFrom && customTo) load();
+  });
+
+  document.querySelectorAll("#rangeToggle button")[1].classList.add("active"); // "7d" default
+  load();
+</script>
+</body>
+</html>

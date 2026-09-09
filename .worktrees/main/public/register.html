@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Create your account — RUTA Lead Management System</title>
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="auth-shell">
+    <div class="auth-card wide">
+      <h1 id="stepTitle">How will you use the platform?</h1>
+      <p class="sub" id="stepSub"></p>
+      <div class="steps">
+        <div class="step active" id="s1"></div>
+        <div class="step" id="s2"></div>
+      </div>
+      <div id="banner"></div>
+
+      <!-- Step 1: Account Type - "individual" | "agency", see
+           src/domain/accountType.ts for the fixed catalog this mirrors -
+           the radio VALUES stay exactly "individual"/"agency" (what the
+           backend/domain layer knows), only the visible copy below is
+           user-facing. Chosen FIRST (not last) because it determines which
+           LABELS step 2 shows - "Agency Name"/"Contact Person" only make
+           sense once we already know this is an agency. The field set
+           itself (including Mobile) is identical either way. No industry
+           selection anywhere in this flow, for either account type - see
+           step 2's own comment below on why. -->
+      <form id="step1">
+        <div class="choice-group" role="radiogroup" aria-label="How will you use the platform?">
+          <label class="choice-card">
+            <input type="radio" name="accountType" value="individual" checked />
+            <span class="choice-card-title">Individual / Business</span>
+            <span class="choice-card-desc">Manage your own LMS and leads.</span>
+          </label>
+          <label class="choice-card">
+            <input type="radio" name="accountType" value="agency" />
+            <span class="choice-card-title">Agency / Reseller</span>
+            <span class="choice-card-desc">Manage multiple clients from one platform.</span>
+          </label>
+        </div>
+        <button class="btn full" type="submit">Continue</button>
+      </form>
+
+      <!-- Step 2: Basic Information - both account types collect the same
+           five fields (Business/Organization Name, Name, Email, Mobile,
+           Password); only the labels/title/submit text differ, swapped by
+           JS based on the step 1 choice (see applyAccountType()). Mobile is
+           required for both - see RegisterInput.phoneNumber's own comment
+           in src/application/auth.ts. Industry selection has been removed
+           from registration entirely - see RegisterInput.industry's own
+           comment there; every new company defaults to "general" (plain
+           Core CRM, no industry specialization) and this form never sends
+           a value for it, for either account type. A real industry
+           template (or a custom one) can always be picked afterward from
+           Settings -> Business Configuration -> Industry/Template. -->
+      <form id="step2" style="display:none">
+        <label for="orgName" id="orgNameLabel">Business / Organization Name</label>
+        <input id="orgName" required autocomplete="organization" />
+
+        <label for="fullName" id="fullNameLabel">Name</label>
+        <input id="fullName" required autocomplete="name" />
+
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="email" />
+
+        <label for="mobile">Mobile</label>
+        <input id="mobile" type="tel" required autocomplete="tel" />
+
+        <label for="password">Password</label>
+        <input id="password" type="password" required minlength="10" autocomplete="new-password" />
+        <div class="hint">At least 10 characters.</div>
+
+        <div class="btn-row">
+          <button class="btn secondary" type="button" id="backBtn">Back</button>
+          <button class="btn full" type="submit" id="submitBtn">Create Account</button>
+        </div>
+      </form>
+
+      <div class="switch">Already have an account? <a href="/login.html">Sign in</a></div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  const step1 = document.getElementById("step1");
+  const step2 = document.getElementById("step2");
+  const banner = document.getElementById("banner");
+  const submitBtn = document.getElementById("submitBtn");
+  const mobileInput = document.getElementById("mobile");
+  let chosenAccountType = "individual";
+
+  /** Swaps step 2's labels/title/submit text for the account type chosen
+   * in step 1 - "Agency Name"/"Contact Person" for agency, "Business /
+   * Organization Name"/"Name" for individual - matching each type's own
+   * registration form exactly rather than showing one generic set of
+   * labels for both. The field SET itself (including Mobile) is the same
+   * for both - only these labels differ. */
+  function applyAccountType(accountType) {
+    chosenAccountType = accountType;
+    if (accountType === "agency") {
+      document.getElementById("stepTitle").textContent = "Create Agency Account";
+      document.getElementById("orgNameLabel").textContent = "Agency Name";
+      document.getElementById("fullNameLabel").textContent = "Contact Person";
+      submitBtn.textContent = "Create Agency Account";
+    } else {
+      document.getElementById("stepTitle").textContent = "Create Account";
+      document.getElementById("orgNameLabel").textContent = "Business / Organization Name";
+      document.getElementById("fullNameLabel").textContent = "Name";
+      submitBtn.textContent = "Create Account";
+    }
+  }
+
+  // Step 1 -> Step 2 is purely a client-side transition: nothing is sent to
+  // the server until step 2 submits, so a user who abandons partway through
+  // never leaves a half-created account behind.
+  step1.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const accountType = document.querySelector('input[name="accountType"]:checked')?.value || "individual";
+    applyAccountType(accountType);
+    document.getElementById("s1").classList.add("done");
+    document.getElementById("s2").classList.add("active");
+    document.getElementById("stepSub").textContent = "Sets up your workspace — you'll be the Owner.";
+    step1.style.display = "none";
+    step2.style.display = "block";
+  });
+
+  document.getElementById("backBtn").addEventListener("click", () => {
+    document.getElementById("s2").classList.remove("active");
+    document.getElementById("s1").classList.remove("done");
+    document.getElementById("stepTitle").textContent = "How will you use the platform?";
+    document.getElementById("stepSub").textContent = "";
+    step2.style.display = "none";
+    step1.style.display = "block";
+  });
+
+  // Step 2 - the actual registration call. Agency accounts skip onboarding
+  // entirely and go straight from "Account Created" to their own dashboard
+  // (see registerCompanyAndOwner's own comment on why). Individual accounts
+  // now start the guided first-time onboarding wizard (PHASE 3+) - redirecting
+  // straight to /onboarding.html here (rather than /dashboard.html, which
+  // would immediately bounce them there anyway via App.requireAuth()) avoids
+  // an unnecessary extra redirect hop for every brand-new individual signup.
+  step2.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    banner.innerHTML = "";
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating…";
+    try {
+      await App.apiJson("/api/auth/register", {
+        method: "POST",
+        body: {
+          companyName: document.getElementById("orgName").value.trim(),
+          fullName: document.getElementById("fullName").value.trim(),
+          email: document.getElementById("email").value.trim(),
+          password: document.getElementById("password").value,
+          accountType: chosenAccountType,
+          phoneNumber: mobileInput.value.trim(),
+        },
+      });
+      window.location.href = chosenAccountType === "agency" ? "/agency-dashboard.html" : "/onboarding.html";
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      submitBtn.disabled = false;
+      applyAccountType(chosenAccountType);
+    }
+  });
+</script>
+</body>
+</html>
