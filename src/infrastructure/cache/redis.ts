@@ -27,11 +27,12 @@
 // re-process the lead instead of just waiting out the crashed attempt's
 // stale claim.
 
+import { getEnv } from "../env";
 import { Redis } from "@upstash/redis";
 
 function getRedis(): Redis {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = getEnv("UPSTASH_REDIS_REST_URL");
+  const token = getEnv("UPSTASH_REDIS_REST_TOKEN");
   if (!url || !token) {
     throw new Error("UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN are not set. See .env.example.");
   }

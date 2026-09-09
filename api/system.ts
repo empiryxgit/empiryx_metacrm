@@ -7,6 +7,7 @@
 // (existing uptime monitors, the dashboard, and the role editor all keep
 // working with no changes).
 
+import { getEnv } from "../src/infrastructure/env";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
@@ -196,8 +197,8 @@ async function checkDatabase(): Promise<boolean> {
 
 async function checkRedis(): Promise<boolean> {
   try {
-    const url = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    const url = getEnv("UPSTASH_REDIS_REST_URL");
+    const token = getEnv("UPSTASH_REDIS_REST_TOKEN");
     if (!url || !token) return false;
     const response = await fetch(`${url}/ping`, { headers: { Authorization: `Bearer ${token}` } });
     return response.ok;
@@ -208,7 +209,7 @@ async function checkRedis(): Promise<boolean> {
 
 async function checkQStash(): Promise<boolean> {
   try {
-    const token = process.env.QSTASH_TOKEN;
+    const token = getEnv("QSTASH_TOKEN");
     if (!token) return false;
     const response = await fetch("https://qstash.upstash.io/v2/schedules", {
       headers: { Authorization: `Bearer ${token}` },

@@ -4,6 +4,7 @@
 // their SHA-256 hash is persisted (src/infrastructure/db/schema.ts#sessions),
 // so a leaked database dump alone can never be replayed as a live session.
 
+import { getEnv } from "../env";
 import { SignJWT, jwtVerify } from "jose";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -65,7 +66,7 @@ export interface AccessTokenClaims {
 }
 
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_JWT_SECRET;
+  const secret = getEnv("AUTH_JWT_SECRET");
   if (!secret) {
     throw new Error(
       "AUTH_JWT_SECRET is not set. Generate one with: node -e \"console.log(require('crypto').randomBytes(48).toString('base64'))\"",

@@ -17,6 +17,7 @@
 // shared limit, exactly the same as an agency user creating it while
 // "inside" that client.
 
+import { getEnv } from "../infrastructure/env";
 import { AuthError } from "./auth";
 import type { AccountType } from "../domain/accountType";
 import { resolveAccountType } from "../domain/accountType";
@@ -574,7 +575,7 @@ export async function createOverageOrder(input: {
     razorpayOrderId: razorpayOrder.id,
     amountInPaise,
     currency: "INR",
-    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+    keyId: getEnv("RAZORPAY_KEY_ID") ?? "",
   };
 }
 
@@ -622,7 +623,7 @@ export async function createBaseSubscriptionOrder(input: {
     razorpayOrderId: razorpayOrder.id,
     amountInPaise,
     currency: "INR",
-    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+    keyId: getEnv("RAZORPAY_KEY_ID") ?? "",
   };
 }
 

@@ -19,13 +19,14 @@
 // process.env - set as Vercel Environment Variables, never typed into this
 // codebase or handled anywhere in chat/tooling.
 
+import { getEnv } from "../env";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export class RazorpayConfigError extends Error {}
 
 function getApiCredentials(): { keyId: string; keySecret: string } {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  const keyId = getEnv("RAZORPAY_KEY_ID");
+  const keySecret = getEnv("RAZORPAY_KEY_SECRET");
   if (!keyId || !keySecret) {
     throw new RazorpayConfigError("RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET are not configured.");
   }
@@ -95,7 +96,7 @@ export function verifyRazorpayPaymentSignature(orderId: string, paymentId: strin
  * duplicated inline. MUST run against the raw, unparsed body - see
  * api/webhooks/meta/handler.ts's own file-wide `bodyParser: false`. */
 export function verifyRazorpayWebhookSignature(rawBody: string, signatureHeader: string | null | undefined): boolean {
-  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  const webhookSecret = getEnv("RAZORPAY_WEBHOOK_SECRET");
   if (!webhookSecret || !signatureHeader) return false;
   const expected = createHmac("sha256", webhookSecret).update(rawBody, "utf8").digest("hex");
   return safeHexEqual(expected, signatureHeader);

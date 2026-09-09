@@ -14,10 +14,11 @@
 // exact same Drizzle schema, so queries written against `db` behave
 // identically in dev and production.
 
+import { getEnv } from "../env";
 import * as schema from "./schema";
 
 function getConnectionString(): string {
-  const url = process.env.DATABASE_URL;
+  const url = getEnv("DATABASE_URL");
   if (!url) {
     throw new Error("DATABASE_URL is not set. See .env.example.");
   }
