@@ -5,7 +5,7 @@
   "description": "Meta Lead Ads -> CRM integration. Serverless on Vercel; Postgres (Neon) is the source of truth.",
   "scripts": {
     "start:dev": "vercel dev",
-    "build": "tsc --noEmit && tsx scripts/migrate.ts",
+    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
