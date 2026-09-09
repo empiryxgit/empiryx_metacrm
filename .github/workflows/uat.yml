@@ -7,6 +7,10 @@ on:
       - uat
   workflow_dispatch:
 
+permissions:
+  contents: read
+  deployments: write
+
 concurrency:
   group: uat-deployment-${{ github.ref }}
   cancel-in-progress: false
@@ -68,20 +72,20 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+        run: vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
 
       - name: Build Project Artifacts (UAT)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: vercel build --token=$VERCEL_TOKEN
+        run: vercel build --token="$VERCEL_TOKEN"
 
       - name: Deploy to Vercel UAT
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt --token=$VERCEL_TOKEN)
-          echo "deployment-url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
+          echo "deployment-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "Deployed UAT build to $DEPLOY_URL"
 
       - name: Assign Custom UAT Domain / Alias (Optional)
@@ -89,8 +93,9 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           UAT_CUSTOM_DOMAIN: ${{ vars.UAT_CUSTOM_DOMAIN }}
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
-          vercel alias set ${{ steps.deploy.outputs.deployment-url }} $UAT_CUSTOM_DOMAIN --token=$VERCEL_TOKEN
+          vercel alias set "$DEPLOY_URL" "$UAT_CUSTOM_DOMAIN" --token="$VERCEL_TOKEN"
 
       - name: Setup UAT QStash Schedules
         if: ${{ secrets.UAT_QSTASH_TOKEN != '' && (vars.UAT_PUBLIC_BASE_URL != '' || steps.deploy.outputs.deployment-url != '') }}
