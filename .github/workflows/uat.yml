@@ -91,18 +91,25 @@ jobs:
           echo "Deployed UAT build to $DEPLOY_URL"
 
       - name: Assign Custom UAT Domain / Alias (Optional)
-        if: ${{ vars.UAT_CUSTOM_DOMAIN != '' }}
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           UAT_CUSTOM_DOMAIN: ${{ vars.UAT_CUSTOM_DOMAIN }}
           DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
-          vercel alias set "$DEPLOY_URL" "$UAT_CUSTOM_DOMAIN" --token="$VERCEL_TOKEN"
+          if [ -n "$UAT_CUSTOM_DOMAIN" ]; then
+            vercel alias set "$DEPLOY_URL" "$UAT_CUSTOM_DOMAIN" --token="$VERCEL_TOKEN"
+          else
+            echo "No custom domain configured for UAT; skipping alias assignment."
+          fi
 
       - name: Setup UAT QStash Schedules
-        if: ${{ secrets.UAT_QSTASH_TOKEN != '' && (vars.UAT_PUBLIC_BASE_URL != '' || steps.deploy.outputs.deployment-url != '') }}
         env:
           QSTASH_TOKEN: ${{ secrets.UAT_QSTASH_TOKEN }}
           PUBLIC_BASE_URL: ${{ vars.UAT_PUBLIC_BASE_URL || steps.deploy.outputs.deployment-url }}
           CRON_SECRET: ${{ secrets.UAT_CRON_SECRET }}
-        run: npx tsx scripts/setup-schedules.ts
+        run: |
+          if [ -n "$QSTASH_TOKEN" ] && [ -n "$PUBLIC_BASE_URL" ]; then
+            npx tsx scripts/setup-schedules.ts
+          else
+            echo "QSTASH_TOKEN or PUBLIC_BASE_URL not set; skipping QStash schedules setup."
+          fi

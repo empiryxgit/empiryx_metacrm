@@ -90,9 +90,13 @@ jobs:
           echo "Deployed Production build to $DEPLOY_URL"
 
       - name: Setup Production QStash Schedules
-        if: ${{ secrets.QSTASH_TOKEN != '' && (vars.PUBLIC_BASE_URL != '' || steps.deploy.outputs.deployment-url != '') }}
         env:
           QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL || steps.deploy.outputs.deployment-url }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: npx tsx scripts/setup-schedules.ts
+        run: |
+          if [ -n "$QSTASH_TOKEN" ] && [ -n "$PUBLIC_BASE_URL" ]; then
+            npx tsx scripts/setup-schedules.ts
+          else
+            echo "QSTASH_TOKEN or PUBLIC_BASE_URL not set; skipping QStash schedules setup."
+          fi
