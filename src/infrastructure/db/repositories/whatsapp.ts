@@ -631,7 +631,7 @@ export async function deleteUserWhatsappLink(tenantId: string, userId: string): 
   const rows = await db
     .delete(userWhatsappLinks)
     .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)))
-    .returning({ id: userWhatsappLinks.id });
+    .returning();
   return rows.length > 0;
 }
 

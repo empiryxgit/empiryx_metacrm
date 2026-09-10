@@ -128,7 +128,7 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
   try {
     payload = JSON.parse(rawBody) as WhatsappWebhookPayload;
   } catch {
-    return { captured: 0, skipped: 0, toEnqueue: [] };
+    return { captured: 0, skipped: 0, toEnqueue: [], toHandleAsBot: [] };
   }
 
   let captured = 0;

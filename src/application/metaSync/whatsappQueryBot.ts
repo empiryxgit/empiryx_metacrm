@@ -73,7 +73,7 @@ async function handleOneMessage(msg: QueryBotInboundMessage): Promise<void> {
   // user is not yet linked (or is re-linking from a new phone) when they
   // send it. Everything else below requires an already-verified link.
   const linkMatch = /^link\s+([a-z0-9]{4,8})\s*$/i.exec(text);
-  if (linkMatch) return handleLinkCommand(msg, linkMatch[1].toUpperCase());
+  if (linkMatch && linkMatch[1]) return handleLinkCommand(msg, linkMatch[1].toUpperCase());
 
   const link = await getUserWhatsappLinkByPhone(msg.tenantId, msg.fromPhoneNumber);
   if (!link) return; // Router only sends linked-or-LINK messages here; defensive no-op otherwise.
@@ -137,7 +137,7 @@ function matchPattern(text: string): IntentCall | null {
   if (/^help$/i.test(t)) return { intent: "help" };
 
   const updateMatch = UPDATE_ON_RE.exec(t);
-  if (updateMatch) return { intent: "updateOnX", query: updateMatch[1].trim() };
+  if (updateMatch && updateMatch[1]) return { intent: "updateOnX", query: updateMatch[1].trim() };
 
   if (/\bmy leads?\b/i.test(t) && /\btoday\b/i.test(t)) return { intent: "myLeadsToday" };
   if (/\bpending\b/i.test(t) && /follow[\s-]?ups?/i.test(t)) return { intent: "pendingFollowUps" };
@@ -357,6 +357,7 @@ function resolvePendingSelection(text: string, ctx: PendingQueryContext): Intent
   const n = Number(text.trim());
   if (!Number.isInteger(n) || n < 1 || n > ctx.options.length) return null;
   const picked = ctx.options[n - 1];
+  if (!picked) return null;
   return { intent: "updateOnX", query: `__resolved__:${picked.kind}:${picked.id}` };
 }
 
@@ -365,8 +366,9 @@ async function handleUpdateOnX(msg: QueryBotInboundMessage, link: UserWhatsappLi
 
   // A resolved numbered-list pick skips straight to fetching that one record.
   const resolved = /^__resolved__:(lead|teammate):(.+)$/.exec(query);
-  if (resolved) {
-    const [, kind, id] = resolved;
+  if (resolved && resolved[1] && resolved[2]) {
+    const kind = resolved[1];
+    const id = resolved[2];
     if (kind === "lead") return replyLeadUpdate(msg, ctx, id);
     return replyTeammateUpdate(msg, link, ctx, id);
   }
@@ -396,7 +398,8 @@ async function handleUpdateOnX(msg: QueryBotInboundMessage, link: UserWhatsappLi
     return;
   }
   if (options.length === 1) {
-    return options[0].kind === "lead" ? replyLeadUpdate(msg, ctx, options[0].id) : replyTeammateUpdate(msg, link, ctx, options[0].id);
+    const only = options[0];
+    if (only) return only.kind === "lead" ? replyLeadUpdate(msg, ctx, only.id) : replyTeammateUpdate(msg, link, ctx, only.id);
   }
   const numbered = options.map((o, i) => `${i + 1}. ${o.label}`).join("\n");
   await setPendingQueryContext(msg.tenantId, link.userId, { options } satisfies PendingQueryContext);
