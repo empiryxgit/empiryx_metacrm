@@ -45,6 +45,18 @@ export const PERMISSIONS = {
   // clients/client-detail endpoints - a client company's own team never
   // consults this.
   AGENCY_CLIENTS_VIEW_ALL: "agency_clients.view_all",
+  // Internal WhatsApp Query Bot (see
+  // claude/whatsapp-internal-query-bot-flow.md) - without this, a linked
+  // teammate's queries are always scoped to their own data only
+  // (ownerId/createdBy = themselves), regardless of their web-app role.
+  // With it, "my leads" / "follow-ups" / "update on X" style queries can
+  // also resolve company/branch-wide and against OTHER teammates' logged
+  // activity. Deliberately off by default for every role, including Owner
+  // - WhatsApp is a weaker identity channel (no password/MFA, just
+  // possession of a phone number) than an authenticated browser session,
+  // so broad access over it is opt-in, never inherited from a role that
+  // already has company-wide web-app access.
+  WHATSAPP_BOT_BROAD_QUERY: "whatsapp_bot.broad_query",
 } as const;
 
 export type PermissionCode = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -70,6 +82,7 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.BRANCHES_MANAGE, label: "Create and manage branches", category: "Administration" },
   { code: PERMISSIONS.INTEGRATIONS_MANAGE, label: "Connect and manage the Meta integration", category: "Integrations" },
   { code: PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL, label: "See every client (not just assigned ones)", category: "Clients" },
+  { code: PERMISSIONS.WHATSAPP_BOT_BROAD_QUERY, label: "Query company/branch-wide data & other teammates' activity via the WhatsApp bot", category: "Integrations" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

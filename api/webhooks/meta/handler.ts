@@ -145,7 +145,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyMetaSignature } from "../../../src/infrastructure/meta/verifySignature";
 import { ingestWebhookPayload } from "../../../src/application/ingestWebhook";
 import { getWebhookConfigBySlug, markWebhookVerified } from "../../../src/infrastructure/db/repositories/campaigns";
-import { getAuthContext, hasPermission, requirePermission } from "../../../src/infrastructure/auth/context";
+import { getAuthContext, hasPermission, requireAuth, requirePermission } from "../../../src/infrastructure/auth/context";
 import { PERMISSIONS } from "../../../src/domain/permissions";
 import { withEffectiveCompanyContext } from "../../../src/application/agencyClientContext";
 import { createOAuthState, verifyOAuthState } from "../../../src/infrastructure/auth/oauthState";
@@ -165,6 +165,8 @@ import { runMetaSync } from "../../../src/application/metaSync/runMetaSync";
 import { getMetaSyncProgress } from "../../../src/infrastructure/cache/redis";
 import { captureLeadgenEvents, enqueueCapturedLeadgenEvents } from "../../../src/application/metaSync/metaLeadEventService";
 import { captureWhatsappEvents, enqueueCapturedWhatsappEvents } from "../../../src/application/metaSync/metaWhatsappEventService";
+import { handleQueryBotMessages } from "../../../src/application/metaSync/whatsappQueryBot";
+import { createWhatsappLinkCode, deleteUserWhatsappLink, getUserWhatsappLinkByUserId } from "../../../src/infrastructure/db/repositories/whatsapp";
 import {
   getMetaFormById,
   listFieldMappingsForForm,
@@ -769,6 +771,11 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
     // failure is logged and recovered later by reconcile.ts's own
     // unenqueued-WhatsApp-event sweep.
     await enqueueCapturedWhatsappEvents(waResult.toEnqueue);
+    // Internal WhatsApp Query Bot - same post-ack timing as the lead
+    // pipeline above; these messages never touched whatsapp_message_events
+    // (see captureWhatsappEvents' own branch) so there is nothing to enqueue
+    // through QStash for them, just the reply to send.
+    await handleQueryBotMessages(waResult.toHandleAsBot);
     return;
   }
 
@@ -964,6 +971,46 @@ async function handleMetaFormMapping(req: VercelRequest, res: VercelResponse, me
   res.status(200).json({ saved: true, updatedCount: updatedIds.length });
 }
 
+/**
+ * Internal WhatsApp Query Bot - Settings -> Link WhatsApp (self-serve only,
+ * per claude/whatsapp-internal-query-bot-flow.md §7 decision 5). Scoped to
+ * the caller's own REAL company (auth.companyId), deliberately NOT run
+ * through withEffectiveCompanyContext - same reasoning handleOAuthConnect
+ * documents above: a linked number is this person's own identity, not
+ * whichever client an agency user happens to be "inside" right now. GET
+ * returns current link status; POST generates a fresh one-time code.
+ */
+async function handleWhatsappBotLink(req: VercelRequest, res: VercelResponse) {
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+
+  if (req.method === "GET") {
+    const link = await getUserWhatsappLinkByUserId(auth.companyId, auth.userId);
+    res.status(200).json({
+      linked: !!link,
+      phoneNumber: link ? `••••${link.phoneNumber.slice(-4)}` : null,
+    });
+    return;
+  }
+  if (req.method === "POST") {
+    const { code, expiresAt } = await createWhatsappLinkCode(auth.companyId, auth.userId);
+    res.status(200).json({ code, expiresAt, instructions: `Text "LINK ${code}" to the CRM's WhatsApp number from your own WhatsApp within 10 minutes.` });
+    return;
+  }
+  res.status(405).json({ error: "Method not allowed" });
+}
+
+async function handleWhatsappBotUnlink(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const auth = await requireAuth(req, res);
+  if (!auth) return;
+  const removed = await deleteUserWhatsappLink(auth.companyId, auth.userId);
+  res.status(200).json({ unlinked: removed });
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const resource = getQueryString(req, "resource");
   if (resource === "oauth-connect") return handleOAuthConnect(req, res);
@@ -974,6 +1021,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (resource === "sync") return handleSync(req, res);
   if (resource === "sync-status") return handleSyncStatus(req, res);
   if (resource === "webhook-retry") return handleWebhookRetry(req, res);
+  if (resource === "whatsapp-bot-link") return handleWhatsappBotLink(req, res);
+  if (resource === "whatsapp-bot-unlink") return handleWhatsappBotUnlink(req, res);
   // "leadgen" is the Phase 11 canonical name; "page-events" is Phase 7's
   // original name, kept as a permanent alias to the same handler so any
   // subscription Meta already has registered against it keeps working.

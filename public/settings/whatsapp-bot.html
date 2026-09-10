@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Link WhatsApp — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .wa-wrap{ max-width:640px; }
+  .wa-card{ padding:22px; border:1px solid var(--border); border-radius:12px; background:var(--surface); margin-top:16px; }
+  .wa-code{ font-family:ui-monospace, monospace; font-size:28px; font-weight:700; letter-spacing:.12em; background:var(--surface-sunken,#f6f4f0); border:1px solid var(--border); border-radius:8px; padding:14px 18px; text-align:center; margin:14px 0; }
+  .wa-hint{ font-size:13px; color:var(--text-muted); }
+  .wa-status{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .wa-dot{ width:9px; height:9px; border-radius:50%; background:#b8b0a4; flex:none; }
+  .wa-dot.on{ background:#2fa86b; }
+  .wa-examples{ margin:14px 0 0; padding-left:18px; font-size:13px; color:var(--text-muted); }
+  .wa-examples li{ margin-bottom:4px; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap wa-wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Link WhatsApp</h1>
+        <p class="page-sub">Ask the CRM your own follow-up and lead questions from your phone. Only your own data — this never messages leads.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="wa-card">
+      <div class="wa-status"><span class="wa-dot" id="statusDot"></span><span id="statusText">Checking…</span></div>
+      <div id="linkedView" style="display:none">
+        <p class="wa-hint">Send <b>UNLINK</b> from that number on WhatsApp anytime, or use the button below.</p>
+        <button class="btn" id="unlinkBtn" type="button">Unlink this number</button>
+      </div>
+      <div id="unlinkedView" style="display:none">
+        <button class="btn" id="generateBtn" type="button">Generate linking code</button>
+        <div id="codeBlock" style="display:none">
+          <div class="wa-code" id="codeValue"></div>
+          <p class="wa-hint" id="codeInstructions"></p>
+        </div>
+        <ul class="wa-examples">
+          <li>"follow-ups today"</li>
+          <li>"update on &lt;name&gt;"</li>
+          <li>"my leads today"</li>
+          <li>"pending follow-ups"</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  (async () => {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings/whatsapp-bot.html");
+
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const linkedView = document.getElementById("linkedView");
+    const unlinkedView = document.getElementById("unlinkedView");
+    const banner = document.getElementById("banner");
+
+    function showError(err) {
+      banner.innerHTML = `<div class="state-block"><p class="state-title">${(err && err.message) || "Something went wrong."}</p></div>`;
+    }
+
+    async function loadStatus() {
+      const res = await fetch("/api/settings/whatsapp-bot-link");
+      if (res.status === 401) { window.location.href = "/login.html"; return; }
+      const data = await res.json();
+      if (!res.ok) { showError(new Error(data.error)); return; }
+      statusDot.classList.toggle("on", data.linked);
+      statusText.textContent = data.linked ? `Linked — ${data.phoneNumber}` : "Not linked";
+      linkedView.style.display = data.linked ? "block" : "none";
+      unlinkedView.style.display = data.linked ? "none" : "block";
+    }
+
+    document.getElementById("generateBtn").addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/settings/whatsapp-bot-link", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) { showError(new Error(data.error)); return; }
+        document.getElementById("codeValue").textContent = data.code;
+        document.getElementById("codeInstructions").textContent = data.instructions;
+        document.getElementById("codeBlock").style.display = "block";
+      } catch (err) { showError(err); }
+    });
+
+    document.getElementById("unlinkBtn").addEventListener("click", async () => {
+      try {
+        const res = await fetch("/api/settings/whatsapp-bot-unlink", { method: "POST" });
+        if (!res.ok) { const data = await res.json(); showError(new Error(data.error)); return; }
+        await loadStatus();
+      } catch (err) { showError(err); }
+    });
+
+    await loadStatus().catch(showError);
+  })();
+</script>
+</body>
+</html>

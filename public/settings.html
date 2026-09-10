@@ -39,6 +39,14 @@
 
     const grid = document.getElementById("settingsGrid");
     const cards = [];
+    // Self-serve, every user - not gated behind a permission, same as
+    // linking your own identity to anything else.
+    cards.push(`
+      <a class="settings-card" href="/settings/whatsapp-bot.html">
+        <h3>Link WhatsApp</h3>
+        <p>Ask the CRM your own follow-up and lead questions from WhatsApp.</p>
+      </a>
+    `);
     if (App.hasPermission(me, "company.manage")) {
       cards.push(`
         <a class="settings-card" href="/settings/business-configuration.html">

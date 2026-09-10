@@ -1459,6 +1459,59 @@ export const whatsappMessageEvents = crm.table(
   }),
 );
 
+// Internal WhatsApp Query Bot - RUTA's own users (not leads) querying the
+// CRM from their phone. See claude/whatsapp-internal-query-bot-flow.md
+// (CRM Automation project) for the full design. Two tables:
+//   whatsapp_link_codes   - short-lived one-time codes, generated from
+//                            Settings -> Link WhatsApp, redeemed by texting
+//                            "LINK <code>" to the tenant's WhatsApp number.
+//   user_whatsapp_links   - the resulting verified binding (phoneNumber ->
+//                            userId), scoped per tenant, one per user by
+//                            default. Also carries the short-lived
+//                            numbered-list disambiguation state so a
+//                            follow-up "2" resolves within that SAME user's
+//                            thread only - never merged across users.
+export const whatsappLinkCodes = crm.table(
+  "whatsapp_link_codes",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    code: text("code").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    codeIdx: index("ix_whatsapp_link_codes_code").on(t.code),
+    userIdx: index("ix_whatsapp_link_codes_user_id").on(t.userId),
+  }),
+);
+
+export const userWhatsappLinks = crm.table(
+  "user_whatsapp_links",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    phoneNumber: text("phone_number").notNull(),
+    // Numbered-list disambiguation state (e.g. two leads named "Rohan") -
+    // {kind, options: [...]}, cleared on use or once expired. Never holds
+    // anything else - the bot has no other multi-turn state.
+    pendingQueryContext: jsonb("pending_query_context"),
+    pendingQueryContextExpiresAt: timestamp("pending_query_context_expires_at", { withTimezone: true }),
+    linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    // One CRM identity per number, and one linked number per user, both
+    // per tenant - the identity guarantee the whole feature depends on.
+    tenantPhoneIdx: uniqueIndex("ux_user_whatsapp_links_tenant_phone").on(t.tenantId, t.phoneNumber),
+    tenantUserIdx: uniqueIndex("ux_user_whatsapp_links_tenant_user").on(t.tenantId, t.userId),
+  }),
+);
+
 /**
  * LEGACY per-campaign Meta connection model, kept as-is and fully
  * functional - Phase 2 moves Meta AUTHENTICATION to the tenant level (see

@@ -246,6 +246,13 @@
       "when": 1788799185563,
       "tag": "0034_platform_packages_and_billing_refunds",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1789045202873,
+      "tag": "0035_add_whatsapp_query_bot",
+      "breakpoints": true
     }
   ]
 }

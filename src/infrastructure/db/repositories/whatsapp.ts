@@ -519,3 +519,179 @@ export async function insertWhatsappLead(input: InsertWhatsappLeadInput): Promis
     throw err;
   }
 }
+
+// ---- Internal WhatsApp Query Bot -------------------------------------------
+// Persistence for whatsapp_link_codes + user_whatsapp_links. See
+// claude/whatsapp-internal-query-bot-flow.md (CRM Automation project) for
+// the full design; src/application/metaSync/whatsappQueryBot.ts is the only
+// caller of everything below.
+
+import { desc, gt, isNull } from "drizzle-orm";
+import { roles, userWhatsappLinks, users, whatsappLinkCodes } from "../schema";
+
+const LINK_CODE_TTL_MINUTES = 10;
+const LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I - avoids misread-over-WhatsApp codes
+const PENDING_QUERY_CONTEXT_TTL_MINUTES = 3;
+
+function generateLinkCode(length = 6): string {
+  let code = "";
+  for (let i = 0; i < length; i++) code += LINK_CODE_ALPHABET[Math.floor(Math.random() * LINK_CODE_ALPHABET.length)];
+  return code;
+}
+
+/** Settings -> "Generate linking code". A user may only ever have one live
+ * (unconsumed, unexpired) code at a time - generating a new one supersedes
+ * any prior one rather than accumulating them. */
+export async function createWhatsappLinkCode(tenantId: string, userId: string): Promise<{ code: string; expiresAt: Date }> {
+  const db = await getDb();
+  const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MINUTES * 60_000);
+  // Best-effort cleanup of this user's prior unconsumed codes - not load-
+  // bearing (consumeWhatsappLinkCode always filters expiresAt/consumedAt
+  // itself), just keeps the table from accumulating dead rows per user.
+  await db
+    .update(whatsappLinkCodes)
+    .set({ consumedAt: new Date() })
+    .where(and(eq(whatsappLinkCodes.tenantId, tenantId), eq(whatsappLinkCodes.userId, userId), isNull(whatsappLinkCodes.consumedAt)));
+
+  // Collision retry - astronomically unlikely (33^6 codespace) but a
+  // unique-constraint-free `code` column means a collision would otherwise
+  // silently let two users share one code, so guard it anyway.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateLinkCode();
+    const existing = await db
+      .select({ id: whatsappLinkCodes.id })
+      .from(whatsappLinkCodes)
+      .where(and(eq(whatsappLinkCodes.code, code), gt(whatsappLinkCodes.expiresAt, new Date())))
+      .limit(1);
+    if (existing.length > 0) continue;
+    await db.insert(whatsappLinkCodes).values({ tenantId, userId, code, expiresAt });
+    return { code, expiresAt };
+  }
+  throw new Error("Could not generate a unique WhatsApp link code after 5 attempts.");
+}
+
+export interface ConsumeLinkCodeResult {
+  ok: boolean;
+  userId?: string;
+  reason?: "not_found" | "expired" | "phone_taken";
+}
+
+/** Redeems a "LINK <code>" message. Scoped to the tenant the inbound
+ * message itself was already resolved against (never trusts the payload
+ * for tenant identity - same rule the rest of this file follows) - a code
+ * from tenant A can never be redeemed against tenant B's WhatsApp number.
+ * Binds phoneNumber -> userId via upsertUserWhatsappLink; "phone_taken"
+ * means a DIFFERENT user in this tenant already has that number linked. */
+export async function consumeWhatsappLinkCode(tenantId: string, code: string, phoneNumber: string): Promise<ConsumeLinkCodeResult> {
+  const db = await getDb();
+  const [row] = await db
+    .select()
+    .from(whatsappLinkCodes)
+    .where(and(eq(whatsappLinkCodes.tenantId, tenantId), eq(whatsappLinkCodes.code, code.toUpperCase()), isNull(whatsappLinkCodes.consumedAt)))
+    .orderBy(desc(whatsappLinkCodes.createdAt))
+    .limit(1);
+  if (!row) return { ok: false, reason: "not_found" };
+  if (row.expiresAt.getTime() < Date.now()) return { ok: false, reason: "expired" };
+
+  const bind = await upsertUserWhatsappLink(tenantId, row.userId, phoneNumber);
+  if (!bind.ok) return { ok: false, reason: "phone_taken" };
+
+  await db.update(whatsappLinkCodes).set({ consumedAt: new Date() }).where(eq(whatsappLinkCodes.id, row.id));
+  return { ok: true, userId: row.userId };
+}
+
+export interface UpsertLinkResult {
+  ok: boolean;
+  reason?: "phone_taken";
+}
+
+/** Binds phoneNumber -> userId, superseding any number this SAME user had
+ * previously linked (re-linking from a new phone just moves the binding).
+ * Fails with "phone_taken" if that number is already bound to a DIFFERENT
+ * user in this tenant - never silently reassigns another person's number. */
+export async function upsertUserWhatsappLink(tenantId: string, userId: string, phoneNumber: string): Promise<UpsertLinkResult> {
+  const db = await getDb();
+  try {
+    await db
+      .insert(userWhatsappLinks)
+      .values({ tenantId, userId, phoneNumber, linkedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [userWhatsappLinks.tenantId, userWhatsappLinks.userId],
+        set: { phoneNumber, linkedAt: new Date(), updatedAt: new Date(), pendingQueryContext: null, pendingQueryContextExpiresAt: null },
+      });
+    return { ok: true };
+  } catch (err) {
+    if (isUniqueViolation(err)) return { ok: false, reason: "phone_taken" };
+    throw err;
+  }
+}
+
+export async function deleteUserWhatsappLink(tenantId: string, userId: string): Promise<boolean> {
+  const db = await getDb();
+  const rows = await db
+    .delete(userWhatsappLinks)
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)))
+    .returning({ id: userWhatsappLinks.id });
+  return rows.length > 0;
+}
+
+/** THE identity check every inbound WhatsApp message runs first (see
+ * metaWhatsappEventService.ts's captureWhatsappEvents) - a verified match
+ * here is what routes a message to the query bot instead of lead-capture. */
+export async function getUserWhatsappLinkByPhone(tenantId: string, phoneNumber: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select()
+    .from(userWhatsappLinks)
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.phoneNumber, phoneNumber)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getUserWhatsappLinkByUserId(tenantId: string, userId: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select()
+    .from(userWhatsappLinks)
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Sets/overwrites the numbered-list disambiguation state for this SAME
+ * user's own thread only (scoped by the tenantId+userId primary lookup key
+ * already on the row) - a fresh question always simply overwrites whatever
+ * was pending, never accumulates. */
+export async function setPendingQueryContext(tenantId: string, userId: string, context: unknown): Promise<void> {
+  const db = await getDb();
+  const expiresAt = new Date(Date.now() + PENDING_QUERY_CONTEXT_TTL_MINUTES * 60_000);
+  await db
+    .update(userWhatsappLinks)
+    .set({ pendingQueryContext: context, pendingQueryContextExpiresAt: expiresAt, updatedAt: new Date() })
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
+}
+
+export async function clearPendingQueryContext(tenantId: string, userId: string): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(userWhatsappLinks)
+    .set({ pendingQueryContext: null, pendingQueryContextExpiresAt: null, updatedAt: new Date() })
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
+}
+
+/** For the query bot's authorization check (§4) - the user's role
+ * permissions, fetched fresh from the DB rather than a JWT (the bot has no
+ * session token, only the verified phone->userId binding). Tenant-scoped
+ * defensively, same "never trust an id in isolation" posture as the rest
+ * of this file. */
+export async function getUserRoleAndPermissions(tenantId: string, userId: string): Promise<{ fullName: string; permissions: string[] } | null> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ fullName: users.fullName, permissions: roles.permissions })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(eq(users.companyId, tenantId), eq(users.id, userId), eq(users.status, "active")))
+    .limit(1);
+  if (!row) return null;
+  return { fullName: row.fullName, permissions: (row.permissions as string[] | null) ?? [] };
+}

@@ -1046,3 +1046,61 @@ export async function getWhatsAppPhoneNumbers(wabaId: string, userAccessToken: s
   }
   return results;
 }
+
+// ---------------------------------------------------------------------------
+// Internal WhatsApp Query Bot - the first OUTBOUND WhatsApp send this file
+// has ever made (every prior WhatsApp function here is inbound/discovery
+// only). Always a free-form text reply to a message that just arrived from
+// a verified RUTA teammate - i.e. always inside Meta's 24h customer-service
+// window - so no message-template approval is needed. See
+// claude/whatsapp-internal-query-bot-flow.md.
+//
+// Unlike every other Graph call above (query-string params only, GET/POST
+// with no body), this one MUST send a JSON body - Meta's /messages endpoint
+// has no query-string form - so it gets its own small fetch helper rather
+// than reusing fetchWithRetry, but keeps the same timeout/retry/abort and
+// error-shape conventions.
+async function fetchWithRetryJson(url: string, body: unknown, attempts = 3): Promise<Response> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GRAPH_API_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (response.ok) return response;
+      if (response.status < 500) return response;
+      lastError = new MetaApiError(`Graph API returned ${response.status}`, response.status);
+    } catch (err) {
+      lastError =
+        err instanceof Error && err.name === "AbortError"
+          ? new MetaApiError(`Graph API request timed out after ${GRAPH_API_TIMEOUT_MS}ms`)
+          : err;
+    } finally {
+      clearTimeout(timeout);
+    }
+    await new Promise((r) => setTimeout(r, 250 * 2 ** i));
+  }
+  throw lastError instanceof Error ? lastError : new MetaApiError("Graph API request failed");
+}
+
+/** Sends a free-form WhatsApp text reply. `to` is the recipient's own
+ * WhatsApp number exactly as Meta delivered it in messages[].from - never
+ * reformatted/guessed. Throws MetaApiError on failure; callers (the query
+ * bot) log and drop rather than retry-storming a chat reply. */
+export async function sendWhatsappTextMessage(phoneNumberId: string, accessToken: string, to: string, body: string): Promise<void> {
+  const url = `${getBaseUrl()}/${phoneNumberId}/messages?access_token=${encodeURIComponent(accessToken)}`;
+  const response = await fetchWithRetryJson(url, {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body, preview_url: false },
+  });
+  if (!response.ok) {
+    throw await buildMetaApiError(response, `Failed to send WhatsApp message via phone number ${phoneNumberId}`);
+  }
+}

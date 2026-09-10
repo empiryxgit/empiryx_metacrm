@@ -140,6 +140,8 @@
     { "source": "/api/integrations/meta/forms", "destination": "/api/webhooks/meta/handler?resource=meta-forms" },
     { "source": "/api/integrations/meta/forms/:metaFormId/mapping", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId&sub=mapping" },
     { "source": "/api/integrations/meta/forms/:metaFormId", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId" },
+    { "source": "/api/settings/whatsapp-bot-link", "destination": "/api/webhooks/meta/handler?resource=whatsapp-bot-link" },
+    { "source": "/api/settings/whatsapp-bot-unlink", "destination": "/api/webhooks/meta/handler?resource=whatsapp-bot-unlink" },
 
     { "source": "/", "destination": "/index.html" }
   ],

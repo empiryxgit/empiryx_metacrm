@@ -47,7 +47,21 @@
 // something the payload can assert on its own.
 
 import { publishWhatsappMessageReceived } from "../../infrastructure/queue/qstash";
-import { getTenantsBySelectedWhatsappPhoneNumberId, markWhatsappMessageEventEnqueued, recordWhatsappMessageEvent } from "../../infrastructure/db/repositories/whatsapp";
+import { getTenantsBySelectedWhatsappPhoneNumberId, getUserWhatsappLinkByPhone, markWhatsappMessageEventEnqueued, recordWhatsappMessageEvent } from "../../infrastructure/db/repositories/whatsapp";
+import type { QueryBotInboundMessage } from "./whatsappQueryBot";
+
+/** A message routes to the Internal WhatsApp Query Bot instead of
+ * lead-capture when the sender is already a verified linked RUTA teammate
+ * for this tenant, OR the message is itself a LINK/UNLINK command (by
+ * definition sent from a number not yet linked, or re-linking). See
+ * claude/whatsapp-internal-query-bot-flow.md §2. Checked BEFORE any
+ * whatsapp_message_events row is written - a bot-routed message never
+ * touches the lead pipeline at all, not even as a durability record. */
+async function isQueryBotMessage(tenantId: string, fromPhoneNumber: string, text: string | null): Promise<boolean> {
+  if (/^link\s+[a-z0-9]{4,8}\s*$/i.test((text ?? "").trim())) return true;
+  const link = await getUserWhatsappLinkByPhone(tenantId, fromPhoneNumber);
+  return link !== null;
+}
 
 interface WhatsappContact {
   profile?: { name?: string };
@@ -98,6 +112,9 @@ export interface CaptureWhatsappEventsResult {
   captured: number;
   skipped: number; // status receipts, non-"messages" change fields, unowned phone numbers, malformed entries, or already-recorded events
   toEnqueue: CapturedWhatsappEvent[];
+  // Internal WhatsApp Query Bot - messages routed here NEVER get a
+  // whatsapp_message_events row and never reach the lead pipeline at all.
+  toHandleAsBot: QueryBotInboundMessage[];
 }
 
 /**
@@ -117,6 +134,7 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
   let captured = 0;
   let skipped = 0;
   const toEnqueue: CapturedWhatsappEvent[] = [];
+  const toHandleAsBot: QueryBotInboundMessage[] = [];
 
   for (const entry of payload.entry ?? []) {
     const wabaId = entry.id ?? null;
@@ -160,6 +178,19 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
         }
 
         for (const tenant of owningTenants) {
+          // Internal WhatsApp Query Bot - check BEFORE any durability write.
+          // A verified linked teammate (or a LINK/UNLINK command) never
+          // becomes a whatsapp_message_events row and never enters the lead
+          // pipeline; it's queued for post-ack handling by
+          // whatsappQueryBot.ts's handleQueryBotMessages instead (same
+          // "durable half here, slower half after ack" split the lead path
+          // uses - the bot's own idempotency is a much lighter concern than
+          // lead creation, so no separate durable table is needed for it).
+          if (await isQueryBotMessage(tenant.tenantId, message.from, message.text?.body ?? null)) {
+            toHandleAsBot.push({ tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id, messageText: message.text?.body ?? null });
+            continue;
+          }
+
           // Check duplicate + Store raw event, in one insert -
           // recordWhatsappMessageEvent's onConflictDoNothing on
           // (tenantId, waMessageId) is the idempotency backstop, exactly
@@ -195,7 +226,7 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
     }
   }
 
-  return { captured, skipped, toEnqueue };
+  return { captured, skipped, toEnqueue, toHandleAsBot };
 }
 
 /**
