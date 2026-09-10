@@ -140,6 +140,7 @@
 // trusted-shape) JSON bodies via readJsonBody rather than relying on
 // req.body.
 
+import { getEnv } from "../../../src/infrastructure/env";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { verifyMetaSignature } from "../../../src/infrastructure/meta/verifySignature";
 import { ingestWebhookPayload } from "../../../src/application/ingestWebhook";
@@ -694,7 +695,7 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
     const mode = getQueryString(req, "hub.mode");
     const token = getQueryString(req, "hub.verify_token");
     const challenge = getQueryString(req, "hub.challenge");
-    const expected = process.env.META_WEBHOOK_VERIFY_TOKEN;
+    const expected = getEnv("META_WEBHOOK_VERIFY_TOKEN");
 
     if (mode === "subscribe" && expected && token === expected) {
       res.status(200).send(challenge ?? "");

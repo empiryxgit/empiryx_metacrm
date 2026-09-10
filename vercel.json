@@ -26,6 +26,9 @@
     { "source": "/api/platform-admin/companies/:companyId", "destination": "/api/system?resource=platform-admin&action=company&companyId=:companyId" },
     { "source": "/api/platform-admin/notifications", "destination": "/api/system?resource=platform-admin&action=notifications" },
     { "source": "/api/platform-admin/audit", "destination": "/api/system?resource=platform-admin&action=audit" },
+    { "source": "/api/platform-admin/packages", "destination": "/api/system?resource=platform-admin&action=packages" },
+    { "source": "/api/platform-admin/subscriptions/:companyId", "destination": "/api/system?resource=platform-admin&action=subscription&companyId=:companyId" },
+    { "source": "/api/platform-admin/customer-activity", "destination": "/api/system?resource=platform-admin&action=customer-activity" },
     { "source": "/api/notifications", "destination": "/api/system?resource=notifications&action=list" },
     { "source": "/api/notifications/:notificationId/read", "destination": "/api/system?resource=notifications&action=read&notificationId=:notificationId" },
 

@@ -2087,6 +2087,19 @@ export const billingOrders = crm.table(
     // markBillingOrderPaid's conditional UPDATE gates on - see this
     // table's own doc comment above for why that matters.
     status: text("status").notNull().default("created"),
+    // Platform Admin "Subscriptions" full billing management - marks that
+    // an admin has recorded this specific payment as refunded. This app
+    // never calls Razorpay's own Refunds API from here (that moves real
+    // money and was not separately confirmed with the user) - these four
+    // columns are an audit-trail fact ("an admin marked this refunded, for
+    // this amount, for this reason"), not a live refund action. See
+    // refundPaymentOrder in src/application/platformAdmin.ts. All four are
+    // null for every order that has never been refunded - the overwhelming
+    // majority, always.
+    refundedAt: timestamp("refunded_at", { withTimezone: true }),
+    refundAmountInPaise: integer("refund_amount_in_paise"),
+    refundReason: text("refund_reason"),
+    refundedBy: uuid("refunded_by").references(() => platformAdmins.id, { onDelete: "set null" }),
     // Set when the BROWSER round-trip (step 1 above) is what won the
     // created->paid race for this order. Independent of
     // webhookConfirmedAt below - a genuinely paid order commonly has only
@@ -2106,5 +2119,79 @@ export const billingOrders = crm.table(
     razorpayOrderIdx: uniqueIndex("ux_billing_orders_razorpay_order_id").on(t.razorpayOrderId),
     statusIdx: index("ix_billing_orders_status").on(t.status),
     createdAtIdx: index("ix_billing_orders_created_at").on(t.createdAt),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Platform Admin "Packages" - editable pricing config (see this feature's
+// own migration, drizzle/0034_platform_packages_and_billing_refunds.sql,
+// for the full split-of-responsibility reasoning: what moved from
+// src/domain/billing.ts's hardcoded constants into these two tables, and
+// what deliberately stayed a fixed domain constant). src/application/
+// pricing.ts is the only reader of either table - every other call site
+// (src/application/billing.ts, public/subscription.html via /api/billing/
+// status) goes through its resolvePricingConfig()/effective* helpers, never
+// straight at these rows, so there is exactly one place that ever needs to
+// know "fall back to src/domain/billing.ts's constants when a row/table is
+// missing."
+// ---------------------------------------------------------------------------
+
+/** One row per AccountType ("individual" | "agency") - the base-plan price/
+ * limits and overage unit price an admin can edit from
+ * public/admin/packages.html. accountType is UNIQUE: there is never more
+ * than one live package per account type, mirroring how src/domain/
+ * billing.ts's own constants were always looked up by AccountType, never by
+ * an arbitrary plan id. Deliberately excludes what one Agency overage
+ * "bundle" is physically made of (1 client + 2 campaigns) - see this
+ * table's migration comment for why that composition stays a fixed domain
+ * constant rather than becoming a 5th/6th editable column here. */
+export const platformPackages = crm.table(
+  "platform_packages",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    accountType: text("account_type").notNull(),
+    baseMonthlyPaise: integer("base_monthly_paise").notNull(),
+    baseCampaignLimit: integer("base_campaign_limit").notNull(),
+    // Only meaningful for "agency" - left null for "individual" (which has
+    // no client concept at all, same as BASE_CLIENT_LIMIT_AGENCY's own
+    // "only ever checked for accountType agency" doc comment in
+    // src/domain/billing.ts).
+    baseClientLimit: integer("base_client_limit"),
+    overageUnitMonthlyPaise: integer("overage_unit_monthly_paise").notNull(),
+    // Soft-disable escape hatch - deliberately unused by any read path yet
+    // (resolvePricingConfig treats every row it finds as live), included
+    // now so a future "retire this package without deleting its pricing
+    // history" admin action has a column to flip rather than needing its
+    // own follow-up migration.
+    isActive: boolean("is_active").notNull().default(true),
+    updatedBy: uuid("updated_by").references(() => platformAdmins.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    accountTypeIdx: uniqueIndex("ux_platform_packages_account_type").on(t.accountType),
+  }),
+);
+
+/** One row per BillingCycle ("monthly" | "quarterly" | "halfyearly" |
+ * "yearly") - replaces src/domain/billing.ts's hardcoded CYCLE_DISCOUNT map.
+ * discountPercent is a whole-number percent (0-100), never a float, so an
+ * admin edit can never introduce float-rounding drift into
+ * computeOverageAmountInPaise/computeBaseSubscriptionAmountInPaise's own
+ * "* (1 - discount)" arithmetic - see effectiveCycleDiscount in
+ * src/application/pricing.ts for where this is divided back down to a
+ * fraction, once, in exactly one place. */
+export const platformBillingCycleDiscounts = crm.table(
+  "platform_billing_cycle_discounts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    cycle: text("cycle").notNull(),
+    discountPercent: integer("discount_percent").notNull().default(0),
+    updatedBy: uuid("updated_by").references(() => platformAdmins.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    cycleIdx: uniqueIndex("ux_platform_billing_cycle_discounts_cycle").on(t.cycle),
   }),
 );

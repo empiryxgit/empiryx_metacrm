@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Packages</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
+<style>
+.wrap-admin{max-width:1000px;margin:0 auto;padding:28px 20px}.head{margin-bottom:8px}.head h1{margin:0}.hint{color:var(--text-muted);font-size:12.5px;margin:0 0 20px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}.card{padding:20px}.card h2{margin:0 0 4px}.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;margin-left:8px}.badge.custom{background:var(--brand-primary-soft);color:var(--brand-primary-hover)}.badge.default{background:var(--surface-sunken,#f0eee9);color:var(--text-muted)}label{display:block;font-size:12px;font-weight:700;margin:12px 0 5px}input{width:100%;box-sizing:border-box}.row-actions{margin-top:16px;display:flex;align-items:center;gap:10px}small.updated{color:var(--text-muted);font-size:11px}.discount-table{width:100%;border-collapse:collapse}.discount-table th,.discount-table td{padding:9px 6px;border-bottom:1px solid var(--border);font-size:12.5px;text-align:left}.discount-table input{width:90px}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/subscriptions.html">Subscriptions</a><a href="/admin/notifications.html">Notifications</a><a href="/admin/customer-activity.html">Customer Activity</a><a href="/admin/audit.html">Audit Logs</a><a class="active" href="/admin/packages.html">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
+<main class="wrap-admin">
+  <header class="head"><h1>Packages &amp; pricing</h1></header>
+  <p class="hint">Editable pricing config. Values shown as "Default" are not yet in the database and reflect the app's built-in defaults; saving a package or discount here overrides that default immediately for every customer of that account type / billing cycle.</p>
+  <div id="message"></div>
+  <div class="grid" id="packagesGrid">Loading…</div>
+  <section class="card">
+    <h2 class="section-title">Billing cycle discounts</h2>
+    <div class="table-wrap"><table class="discount-table" id="discountTable"><thead><tr><th>Cycle</th><th>Discount %</th><th></th><th>Status</th></tr></thead><tbody id="discountBody"></tbody></table></div>
+  </section>
+</main>
+</div>
+<script>
+const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const rupees=(paise)=>(paise/100).toLocaleString("en-IN",{minimumFractionDigits:0});
+const CYCLE_LABELS={monthly:"Monthly",quarterly:"Quarterly (3mo)",halfyearly:"Half-yearly (6mo)",yearly:"Yearly"};
+let data=null;
+
+async function load(){
+  const r=await fetch("/api/platform-admin/packages");
+  if(r.status===401){location.href="/admin/login.html";return}
+  const d=await r.json();
+  if(!r.ok){packagesGrid.textContent=d.error||"Unable to load pricing config.";return}
+  data=d;
+  renderPackages();
+  renderDiscounts();
+}
+
+function renderPackages(){
+  packagesGrid.innerHTML=data.packages.map(p=>`
+    <section class="card" data-account-type="${esc(p.accountType)}">
+      <h2>${p.accountType==="agency"?"Agency":"Individual"} package<span class="badge ${p.isCustomized?"custom":"default"}">${p.isCustomized?"Customized":"Default"}</span></h2>
+      <form class="pkg-form">
+        <label>Base plan price (₹/month)</label>
+        <input name="baseMonthlyPaise" type="number" min="0" step="1" value="${Math.round(p.baseMonthlyPaise/100)}" required />
+        <label>Included campaigns</label>
+        <input name="baseCampaignLimit" type="number" min="0" step="1" value="${p.baseCampaignLimit}" required />
+        ${p.accountType==="agency"?`<label>Included clients</label><input name="baseClientLimit" type="number" min="0" step="1" value="${p.baseClientLimit ?? 0}" required />`:""}
+        <label>Overage price per extra unit (₹/month)</label>
+        <input name="overageUnitMonthlyPaise" type="number" min="0" step="1" value="${Math.round(p.overageUnitMonthlyPaise/100)}" required />
+        <div class="row-actions"><button class="btn" type="submit">Save</button><small class="updated">${p.updatedAt?`Last updated ${new Date(p.updatedAt).toLocaleString()}`:"Never customized"}</small></div>
+      </form>
+    </section>`).join("");
+  packagesGrid.querySelectorAll(".pkg-form").forEach(form=>{
+    form.addEventListener("submit",async(e)=>{
+      e.preventDefault();
+      const accountType=form.closest("[data-account-type]").dataset.accountType;
+      const fd=new FormData(form);
+      const payload={
+        accountType,
+        baseMonthlyPaise:Math.round(Number(fd.get("baseMonthlyPaise"))*100),
+        baseCampaignLimit:Number(fd.get("baseCampaignLimit")),
+        overageUnitMonthlyPaise:Math.round(Number(fd.get("overageUnitMonthlyPaise"))*100),
+      };
+      if(fd.has("baseClientLimit")) payload.baseClientLimit=Number(fd.get("baseClientLimit"));
+      const r=await fetch("/api/platform-admin/packages",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+      const d=await r.json();
+      message.innerHTML=r.ok?`<div class="banner success">${accountType==="agency"?"Agency":"Individual"} package updated.</div>`:`<div class="banner error">${esc(d.error||"Failed to save.")}</div>`;
+      if(r.ok) load();
+    });
+  });
+}
+
+function renderDiscounts(){
+  discountBody.innerHTML=data.cycleDiscounts.map(c=>`
+    <tr data-cycle="${esc(c.cycle)}">
+      <td>${CYCLE_LABELS[c.cycle]||esc(c.cycle)}</td>
+      <td><input type="number" min="0" max="100" step="1" value="${c.discountPercent}" /></td>
+      <td><button class="btn" data-save-cycle="${esc(c.cycle)}" type="button">Save</button></td>
+      <td><span class="badge ${c.isCustomized?"custom":"default"}">${c.isCustomized?"Customized":"Default"}</span></td>
+    </tr>`).join("");
+  discountBody.querySelectorAll("[data-save-cycle]").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      const cycle=btn.dataset.saveCycle;
+      const input=btn.closest("tr").querySelector("input");
+      const discountPercent=Number(input.value);
+      const r=await fetch("/api/platform-admin/packages",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:"cycle_discount",cycle,discountPercent})});
+      const d=await r.json();
+      message.innerHTML=r.ok?`<div class="banner success">${CYCLE_LABELS[cycle]||cycle} discount updated.</div>`:`<div class="banner error">${esc(d.error||"Failed to save.")}</div>`;
+      if(r.ok) load();
+    });
+  });
+}
+
+topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});
+load();
+</script>
+</body>
+</html>

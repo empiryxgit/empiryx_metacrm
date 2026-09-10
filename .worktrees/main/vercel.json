@@ -1,0 +1,149 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "devCommand": null,
+  "functions": {
+    "api/webhooks/meta/handler.ts": { "maxDuration": 60 },
+    "api/internal/handler.ts": { "maxDuration": 60 },
+    "api/leads/handler.ts": { "maxDuration": 15 },
+    "api/pipeline/index.ts": { "maxDuration": 15 },
+    "api/dashboard/index.ts": { "maxDuration": 15 },
+    "api/campaigns/handler.ts": { "maxDuration": 15 },
+    "api/admin/roles/handler.ts": { "maxDuration": 15 },
+    "api/admin/users/handler.ts": { "maxDuration": 15 },
+    "api/forms/handler.ts": { "maxDuration": 15 },
+    "api/auth/handler.ts": { "maxDuration": 10 },
+    "api/onboarding/handler.ts": { "maxDuration": 10 },
+    "api/system.ts": { "maxDuration": 15 }
+  },
+  "rewrites": [
+    { "source": "/api/health", "destination": "/api/system?resource=health" },
+    { "source": "/api/monitoring/metrics", "destination": "/api/system?resource=metrics" },
+    { "source": "/api/permissions", "destination": "/api/system?resource=permissions" },
+    { "source": "/api/platform-admin/login", "destination": "/api/system?resource=platform-admin&action=login" },
+    { "source": "/api/platform-admin/logout", "destination": "/api/system?resource=platform-admin&action=logout" },
+    { "source": "/api/platform-admin/dashboard", "destination": "/api/system?resource=platform-admin&action=dashboard" },
+    { "source": "/api/platform-admin/companies/:companyId", "destination": "/api/system?resource=platform-admin&action=company&companyId=:companyId" },
+    { "source": "/api/platform-admin/notifications", "destination": "/api/system?resource=platform-admin&action=notifications" },
+    { "source": "/api/platform-admin/audit", "destination": "/api/system?resource=platform-admin&action=audit" },
+    { "source": "/api/notifications", "destination": "/api/system?resource=notifications&action=list" },
+    { "source": "/api/notifications/:notificationId/read", "destination": "/api/system?resource=notifications&action=read&notificationId=:notificationId" },
+
+    { "source": "/api/auth/register", "destination": "/api/auth/handler?action=register" },
+    { "source": "/api/auth/login", "destination": "/api/auth/handler?action=login" },
+    { "source": "/api/auth/refresh", "destination": "/api/auth/handler?action=refresh" },
+    { "source": "/api/auth/logout", "destination": "/api/auth/handler?action=logout" },
+    { "source": "/api/auth/me", "destination": "/api/auth/handler?action=me" },
+    { "source": "/api/auth/change-password", "destination": "/api/auth/handler?action=change-password" },
+
+    { "source": "/api/onboarding/company", "destination": "/api/onboarding/handler?action=company" },
+    { "source": "/api/onboarding/complete", "destination": "/api/onboarding/handler?action=complete" },
+    { "source": "/api/settings/business-configuration", "destination": "/api/onboarding/handler?action=business-config" },
+
+    { "source": "/api/onboarding/wizard/status", "destination": "/api/onboarding/handler?action=status" },
+    { "source": "/api/onboarding/wizard/business-profile", "destination": "/api/onboarding/handler?action=business-profile" },
+    { "source": "/api/onboarding/wizard/crm-basics", "destination": "/api/onboarding/handler?action=crm-basics" },
+    { "source": "/api/onboarding/wizard/pipeline", "destination": "/api/onboarding/handler?action=pipeline" },
+    { "source": "/api/onboarding/wizard/lead-source", "destination": "/api/onboarding/handler?action=lead-source" },
+    { "source": "/api/onboarding/wizard/skip", "destination": "/api/onboarding/handler?action=skip" },
+    { "source": "/api/onboarding/wizard/complete", "destination": "/api/onboarding/handler?action=wizard-complete" },
+    { "source": "/api/onboarding/wizard/first-lead", "destination": "/api/onboarding/handler?action=first-lead" },
+
+    { "source": "/api/internal/process-lead", "destination": "/api/internal/handler?action=process-lead" },
+    { "source": "/api/internal/reconciliation", "destination": "/api/internal/handler?action=reconciliation" },
+    { "source": "/api/internal/dead-letter", "destination": "/api/internal/handler?action=dead-letter" },
+
+    { "source": "/api/leads", "destination": "/api/leads/handler" },
+    { "source": "/api/leads/:leadId/stage", "destination": "/api/leads/handler?leadId=:leadId&sub=stage" },
+    { "source": "/api/leads/:leadId/followups", "destination": "/api/leads/handler?leadId=:leadId&sub=followups" },
+    { "source": "/api/leads/:leadId", "destination": "/api/leads/handler?leadId=:leadId" },
+
+    { "source": "/api/campaigns", "destination": "/api/campaigns/handler" },
+    { "source": "/api/campaigns/meta", "destination": "/api/campaigns/handler?resource=meta-campaigns" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/map", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=map" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/unmap", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=unmap" },
+    { "source": "/api/campaigns/meta/:metaCampaignId/insights", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId&sub=insights" },
+    { "source": "/api/campaigns/meta/:metaCampaignId", "destination": "/api/campaigns/handler?resource=meta-campaigns&metaCampaignId=:metaCampaignId" },
+    { "source": "/api/campaigns/:campaignId/webhook", "destination": "/api/campaigns/handler?campaignId=:campaignId&sub=webhook" },
+    { "source": "/api/campaigns/:campaignId", "destination": "/api/campaigns/handler?campaignId=:campaignId" },
+
+    { "source": "/api/billing/status", "destination": "/api/campaigns/handler?resource=billing&action=status" },
+    { "source": "/api/billing/history", "destination": "/api/campaigns/handler?resource=billing&action=history" },
+    { "source": "/api/billing/order", "destination": "/api/campaigns/handler?resource=billing&action=create-order" },
+    { "source": "/api/billing/verify", "destination": "/api/campaigns/handler?resource=billing&action=verify" },
+
+    { "source": "/api/admin/roles", "destination": "/api/admin/roles/handler" },
+    { "source": "/api/admin/roles/:roleId", "destination": "/api/admin/roles/handler?roleId=:roleId" },
+
+    { "source": "/api/admin/users", "destination": "/api/admin/users/handler" },
+    { "source": "/api/admin/users/:userId", "destination": "/api/admin/users/handler?userId=:userId" },
+
+    { "source": "/api/branches/mine", "destination": "/api/admin/users/handler?resource=branches&action=mine" },
+    { "source": "/api/branches/company-users", "destination": "/api/admin/users/handler?resource=branches&action=company-users" },
+    { "source": "/api/branches/:branchId/users/:branchUserId/primary", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId&sub=primary" },
+    { "source": "/api/branches/:branchId/users/:branchUserId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId" },
+    { "source": "/api/branches/:branchId/users", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users" },
+    { "source": "/api/branches/:branchId/archive", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=archive" },
+    { "source": "/api/branches/:branchId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId" },
+    { "source": "/api/branches", "destination": "/api/admin/users/handler?resource=branches" },
+
+    { "source": "/api/agency/dashboard", "destination": "/api/admin/users/handler?resource=agency&action=dashboard" },
+    { "source": "/api/agency/leads-report", "destination": "/api/admin/users/handler?resource=agency&action=leads-report" },
+    { "source": "/api/agency/campaigns", "destination": "/api/admin/users/handler?resource=agency&action=campaigns-report" },
+    { "source": "/api/agency/clients/invite", "destination": "/api/admin/users/handler?resource=agency&action=invite-client" },
+    { "source": "/api/agency/clients/:clientId/status", "destination": "/api/admin/users/handler?resource=agency&action=set-client-status&clientId=:clientId" },
+    { "source": "/api/agency/clients/:clientId", "destination": "/api/admin/users/handler?resource=agency&action=client-detail&clientId=:clientId" },
+    { "source": "/api/agency/clients", "destination": "/api/admin/users/handler?resource=agency&action=clients" },
+    { "source": "/api/agency/invites/pending", "destination": "/api/admin/users/handler?resource=agencyInvite&action=pending" },
+    { "source": "/api/agency/invites/respond", "destination": "/api/admin/users/handler?resource=agencyInvite&action=respond" },
+
+    { "source": "/api/agency/context/enter", "destination": "/api/admin/users/handler?resource=agency&action=enter-client-context" },
+    { "source": "/api/agency/context/exit", "destination": "/api/admin/users/handler?resource=agency&action=exit-client-context" },
+
+    { "source": "/api/agency/onboarding-links", "destination": "/api/admin/users/handler?resource=agency&action=list-onboarding-links" },
+    { "source": "/api/agency/onboarding-links/generate", "destination": "/api/admin/users/handler?resource=agency&action=generate-onboarding-link" },
+    { "source": "/api/agency/onboarding-links/:tokenId/revoke", "destination": "/api/admin/users/handler?resource=agency&action=revoke-onboarding-link&tokenId=:tokenId" },
+
+    { "source": "/api/public/agency-onboarding/:token/complete", "destination": "/api/admin/users/handler?resource=agencyOnboardingPublic&token=:token&action=complete" },
+    { "source": "/api/public/agency-onboarding/:token", "destination": "/api/admin/users/handler?resource=agencyOnboardingPublic&token=:token" },
+
+    { "source": "/onboarding/agency/:token", "destination": "/onboarding-agency.html?token=:token" },
+
+    { "source": "/api/forms/default-internal", "destination": "/api/forms/handler?sub=default-internal" },
+    { "source": "/api/forms/:formId/publish", "destination": "/api/forms/handler?formId=:formId&sub=publish" },
+    { "source": "/api/forms/:formId/archive", "destination": "/api/forms/handler?formId=:formId&sub=archive" },
+    { "source": "/api/forms/:formId/set-default", "destination": "/api/forms/handler?formId=:formId&sub=set-default" },
+    { "source": "/api/forms/:formId/submit", "destination": "/api/forms/handler?formId=:formId&sub=submit" },
+    { "source": "/api/forms/:formId/submissions", "destination": "/api/forms/handler?formId=:formId&sub=submissions" },
+    { "source": "/api/forms/:formId", "destination": "/api/forms/handler?formId=:formId" },
+    { "source": "/api/forms", "destination": "/api/forms/handler" },
+
+    { "source": "/api/public/forms/:publicKey/submit", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-submit" },
+    { "source": "/api/public/forms/:publicKey", "destination": "/api/forms/handler?publicKey=:publicKey&sub=public-get" },
+
+    { "source": "/api/webhooks/meta/leadgen", "destination": "/api/webhooks/meta/handler?resource=leadgen" },
+    { "source": "/api/webhooks/meta/page-events", "destination": "/api/webhooks/meta/handler?resource=page-events" },
+    { "source": "/api/webhooks/razorpay", "destination": "/api/webhooks/meta/handler?resource=razorpay-webhook" },
+    { "source": "/api/webhooks/meta/:slug", "destination": "/api/webhooks/meta/handler?slug=:slug" },
+
+    { "source": "/api/integrations/meta/connect", "destination": "/api/webhooks/meta/handler?resource=oauth-connect" },
+    { "source": "/api/integrations/meta/callback", "destination": "/api/webhooks/meta/handler?resource=oauth-callback" },
+    { "source": "/api/integrations/meta/status", "destination": "/api/webhooks/meta/handler?resource=oauth-status" },
+    { "source": "/api/integrations/meta/disconnect", "destination": "/api/webhooks/meta/handler?resource=oauth-disconnect" },
+    { "source": "/api/integrations/meta/select", "destination": "/api/webhooks/meta/handler?resource=select" },
+    { "source": "/api/integrations/meta/sync", "destination": "/api/webhooks/meta/handler?resource=sync" },
+    { "source": "/api/integrations/meta/sync-status", "destination": "/api/webhooks/meta/handler?resource=sync-status" },
+    { "source": "/api/integrations/meta/webhook/retry", "destination": "/api/webhooks/meta/handler?resource=webhook-retry" },
+    { "source": "/api/integrations/meta/forms", "destination": "/api/webhooks/meta/handler?resource=meta-forms" },
+    { "source": "/api/integrations/meta/forms/:metaFormId/mapping", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId&sub=mapping" },
+    { "source": "/api/integrations/meta/forms/:metaFormId", "destination": "/api/webhooks/meta/handler?resource=meta-forms&metaFormId=:metaFormId" },
+
+    { "source": "/", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/internal/reconciliation",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

@@ -19,6 +19,7 @@
 // with (or accepted as) a real access token even though they share a key -
 // verifyOAuthState rejects anything without it.
 
+import { getEnv } from "../env";
 import { SignJWT, jwtVerify } from "jose";
 import { randomBytes } from "node:crypto";
 import { tryClaimOAuthStateNonce } from "../cache/redis";
@@ -32,7 +33,7 @@ export interface OAuthStateClaims {
 }
 
 function getSecret(): Uint8Array {
-  const secret = process.env.AUTH_JWT_SECRET;
+  const secret = getEnv("AUTH_JWT_SECRET");
   if (!secret) {
     throw new Error(
       "AUTH_JWT_SECRET is not set. Generate one with: node -e \"console.log(require('crypto').randomBytes(48).toString('base64'))\"",

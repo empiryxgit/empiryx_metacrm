@@ -1,0 +1,112 @@
+name: Production CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: production-deployment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate & Test (Production)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run Test Suite
+        run: npm test
+
+  deploy-production:
+    name: Deploy to Production
+    if: github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Production Database Migrations
+        env:
+          MIGRATE_DATABASE_URL: ${{ secrets.MIGRATE_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npx tsx scripts/migrate.ts
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information (Production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN is empty! Checked secrets: VERCEL_TOKEN, PROD_VERCEL_TOKEN, VERCEL_AUTH_TOKEN."
+            echo "Please add VERCEL_TOKEN to GitHub Repository/Environment Secrets."
+            exit 1
+          fi
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Build Project Artifacts (Production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
+        run: vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy to Vercel Production
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.PROD_VERCEL_TOKEN || secrets.VERCEL_TOKEN || secrets.VERCEL_AUTH_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.PROD_VERCEL_ORG_ID || secrets.VERCEL_ORG_ID || vars.VERCEL_ORG_ID || 'team_AQZo96QexRUxCvZNB3Zyi37G' }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROD_VERCEL_PROJECT_ID || secrets.VERCEL_PROJECT_ID || vars.VERCEL_PROJECT_ID || 'prj_vNKsZ1enL6GL9Ftc3CxDPBnnJBM8' }}
+        run: |
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          echo "deployment-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed Production build to $DEPLOY_URL"
+
+      - name: Setup Production QStash Schedules
+        env:
+          QSTASH_TOKEN: ${{ secrets.QSTASH_TOKEN }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL || steps.deploy.outputs.deployment-url }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -n "$QSTASH_TOKEN" ] && [ -n "$PUBLIC_BASE_URL" ]; then
+            npx tsx scripts/setup-schedules.ts
+          else
+            echo "QSTASH_TOKEN or PUBLIC_BASE_URL not set; skipping QStash schedules setup."
+          fi

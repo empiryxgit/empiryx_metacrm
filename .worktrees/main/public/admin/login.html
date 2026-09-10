@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Admin Login</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<style>body{background:var(--surface-sunken,#f6f4f0)}.admin-login{max-width:420px;margin:12vh auto;padding:28px}.admin-login h1{margin:0 0 8px}.admin-login p{color:var(--text-muted);font-size:13px}.admin-login label{display:block;margin:16px 0 6px;font-size:13px;font-weight:700}.admin-login input{width:100%;box-sizing:border-box}.admin-login button{width:100%;margin-top:20px}.error{color:var(--danger);font-size:13px;margin-top:14px}</style>
+</head>
+<body>
+<main class="card admin-login">
+  <h1>Platform Administration</h1>
+  <p>Sign in to manage and monitor the RUTA platform.</p>
+  <form id="loginForm">
+    <label for="email">Email</label><input id="email" type="email" autocomplete="username" required />
+    <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required />
+    <button class="btn" type="submit">Sign in</button>
+    <div class="error" id="error" role="alert"></div>
+  </form>
+</main>
+<script>
+  document.getElementById("loginForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const error = document.getElementById("error"); error.textContent = "";
+    try {
+      const response = await fetch("/api/platform-admin/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email.value, password: password.value }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to sign in.");
+      window.location.href = "/admin/index.html";
+    } catch (err) { error.textContent = err.message; }
+  });
+</script>
+</body>
+</html>

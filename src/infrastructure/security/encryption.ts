@@ -5,10 +5,11 @@
 // become unrecoverable - back it up the same way you'd back up a database
 // password.
 
+import { getEnv } from "../env";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 function getKey(): Buffer {
-  const b64 = process.env.ENCRYPTION_KEY;
+  const b64 = getEnv("ENCRYPTION_KEY");
   if (!b64) {
     throw new Error(
       "ENCRYPTION_KEY is not set. Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",

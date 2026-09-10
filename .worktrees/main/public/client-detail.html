@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Client — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .back-link{ display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--text-muted); text-decoration:none; margin-bottom:10px; }
+  .back-link:hover{ color:var(--text); }
+  .client-kpis{ display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; max-width:420px; }
+  .integration-row{ display:flex; align-items:center; gap:10px; }
+  .relationship-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav" style="display:none"></nav>
+  <div class="wrap">
+    <a class="back-link" href="/clients.html">← Back to Clients</a>
+
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title" id="clientName">Client</h1>
+        <p class="page-sub"><span class="pill" id="statusPill"></span></p>
+      </div>
+      <!-- THE way an agency opens a client - see src/application/
+           agencyClientContext.ts's header comment for the full design.
+           Clicking this is what "when an agency opens a client, they
+           should see the client's normal CRM interface" actually means:
+           it lands on the exact same, completely unchanged
+           dashboard.html/pipeline.html/campaigns.html/forms.html a real
+           user of this client would see - never a second, agency-specific
+           rebuild of any of those pages. Everything below on THIS page
+           (Users/Campaigns/Integration/Settings, Suspend/Remove) stays a
+           separate, read-only AGENCY-side relationship-management view -
+           deliberately not routed through client context (see that same
+           header comment for why admin/settings never is) - so it's
+           unaffected by this change. -->
+      <div class="page-head-actions" id="headActions" style="display:none">
+        <button class="btn" type="button" id="openCrmBtn">Open LMS Dashboard</button>
+      </div>
+    </div>
+
+    <div id="banner"></div>
+
+    <div id="content" style="display:none">
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Client Leads</p>
+              <p class="dash-card-sub">Aggregate counts only - see this page's own notes on why a full lead list isn't shown here yet.</p>
+            </div>
+          </div>
+          <div class="client-kpis">
+            <div class="kpi-card"><div class="kpi-label">Total Leads</div><div class="kpi-value" id="kpiTotalLeads">0</div></div>
+            <div class="kpi-card"><div class="kpi-label">Leads Today</div><div class="kpi-value" id="kpiLeadsToday">0</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Client Users</p>
+              <p class="dash-card-sub" id="usersSub"></p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead>
+              <tbody id="usersBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Client Campaigns</p>
+              <p class="dash-card-sub" id="campaignsSub"></p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Platform</th><th>Status</th></tr></thead>
+              <tbody id="campaignsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Client Integrations</p>
+              <p class="dash-card-sub">Connection status only - RUTA never shows or shares a client's Meta access tokens.</p>
+            </div>
+          </div>
+          <div class="integration-row">
+            <span class="pill" id="integrationPill"></span>
+            <span id="integrationDetail" class="dash-card-sub"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Client Settings</p>
+              <p class="dash-card-sub">Read-only profile, plus your agency's relationship controls.</p>
+            </div>
+          </div>
+          <div class="detail-row"><span class="detail-label">Company Name</span><span class="detail-value" id="settingsName"></span></div>
+          <div class="detail-row"><span class="detail-label">LMS Template</span><span class="detail-value" id="settingsTemplate"></span></div>
+          <div class="detail-row"><span class="detail-label">Client Since</span><span class="detail-value" id="settingsCreatedAt"></span></div>
+
+          <div class="relationship-actions" id="relationshipActions"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Remove-client confirmation - the one destructive action here, so it
+       gets its own confirm step (this codebase's modal-overlay convention,
+       not a native confirm()). Suspend/Reactivate are reversible and act
+       immediately on click. -->
+  <div class="modal-overlay" id="removeModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Remove Client</h2>
+          <p>This ends your agency's relationship with this client. They can be invited again later.</p>
+        </div>
+        <button class="modal-close" type="button" id="removeModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body"><div id="removeError"></div></div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="removeCancel">Cancel</button>
+        <button class="btn danger" type="button" id="removeConfirm">Remove Client</button>
+      </div>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  function fmt(n) { return (n ?? 0).toLocaleString(); }
+  function fmtDate(iso) { return iso ? new Date(iso).toLocaleDateString() : "—"; }
+
+  function statusPillClass(status) {
+    if (status === "active") return "active";
+    if (status === "suspended") return "paused";
+    return "pending";
+  }
+  function statusLabel(status) { return status.charAt(0).toUpperCase() + status.slice(1); }
+
+  const params = new URLSearchParams(window.location.search);
+  const clientId = params.get("id");
+
+  function renderRelationshipActions(status) {
+    const wrap = document.getElementById("relationshipActions");
+    const buttons = [];
+    if (status === "active") {
+      buttons.push(`<button class="btn secondary" type="button" id="suspendBtn">Suspend Client</button>`);
+    } else if (status === "suspended") {
+      buttons.push(`<button class="btn secondary" type="button" id="reactivateBtn">Reactivate Client</button>`);
+    }
+    buttons.push(`<button class="btn danger" type="button" id="removeBtn">Remove Client</button>`);
+    wrap.innerHTML = buttons.join("");
+
+    document.getElementById("suspendBtn")?.addEventListener("click", () => setStatus("suspended"));
+    document.getElementById("reactivateBtn")?.addEventListener("click", () => setStatus("active"));
+    document.getElementById("removeBtn")?.addEventListener("click", () => {
+      document.getElementById("removeError").innerHTML = "";
+      document.getElementById("removeModalOverlay").style.display = "flex";
+    });
+  }
+
+  async function setStatus(status) {
+    document.getElementById("banner").innerHTML = "";
+    try {
+      await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/status`, {
+        method: "POST",
+        body: { status },
+      });
+      await load();
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function render(detail) {
+    document.getElementById("clientName").textContent = detail.company.name;
+    const pill = document.getElementById("statusPill");
+    pill.className = `pill ${statusPillClass(detail.relationshipStatus)}`;
+    pill.textContent = statusLabel(detail.relationshipStatus);
+
+    document.getElementById("kpiTotalLeads").textContent = fmt(detail.leads.totalLeads);
+    document.getElementById("kpiLeadsToday").textContent = fmt(detail.leads.leadsToday);
+
+    document.getElementById("usersSub").textContent = `${detail.users.length} user${detail.users.length === 1 ? "" : "s"}`;
+    document.getElementById("usersBody").innerHTML = detail.users.length
+      ? detail.users.map((u) => `
+          <tr>
+            <td>${App.escapeHtml(u.fullName)}</td>
+            <td>${App.escapeHtml(u.email)}</td>
+            <td>${App.escapeHtml(u.roleName)}</td>
+            <td><span class="pill ${u.status === "active" ? "active" : "paused"}">${App.escapeHtml(statusLabel(u.status))}</span></td>
+          </tr>`).join("")
+      : `<tr><td colspan="4" class="empty">No users yet.</td></tr>`;
+
+    document.getElementById("campaignsSub").textContent = `${detail.campaigns.length} campaign${detail.campaigns.length === 1 ? "" : "s"}`;
+    document.getElementById("campaignsBody").innerHTML = detail.campaigns.length
+      ? detail.campaigns.map((c) => `
+          <tr>
+            <td>${App.escapeHtml(c.name)}</td>
+            <td>${App.escapeHtml(c.platform)}</td>
+            <td><span class="pill ${c.status === "active" ? "active" : "paused"}">${App.escapeHtml(statusLabel(c.status))}</span></td>
+          </tr>`).join("")
+      : `<tr><td colspan="3" class="empty">No campaigns yet.</td></tr>`;
+
+    const integrationPill = document.getElementById("integrationPill");
+    if (detail.integration.connected) {
+      integrationPill.className = "pill active";
+      integrationPill.textContent = "Connected";
+      document.getElementById("integrationDetail").textContent = "Meta is connected for this client.";
+    } else if (detail.integration.status) {
+      integrationPill.className = "pill paused";
+      integrationPill.textContent = statusLabel(detail.integration.status.replace(/_/g, " "));
+      document.getElementById("integrationDetail").textContent = detail.integration.lastError || "This client's Meta connection needs attention.";
+    } else {
+      integrationPill.className = "pill pending";
+      integrationPill.textContent = "Not Connected";
+      document.getElementById("integrationDetail").textContent = "This client hasn't connected Meta yet.";
+    }
+
+    document.getElementById("settingsName").textContent = detail.company.name;
+    document.getElementById("settingsTemplate").textContent = detail.company.industryTemplate;
+    document.getElementById("settingsCreatedAt").textContent = fmtDate(detail.company.createdAt);
+
+    renderRelationshipActions(detail.relationshipStatus);
+    document.getElementById("content").style.display = "";
+    // "Open CRM Dashboard" only ever appears once this page's own load
+    // already succeeded - getClientDetail (the endpoint this page calls)
+    // grants access under exactly the same rules checkAgencyCanManageClient
+    // enforces for entering context (active/suspended relationship,
+    // resolveAgencyClientAccess), so reaching this render() at all already
+    // means the button below is expected to work.
+    document.getElementById("headActions").style.display = "flex";
+  }
+
+  async function openCrmDashboard() {
+    const btn = document.getElementById("openCrmBtn");
+    document.getElementById("banner").innerHTML = "";
+    btn.disabled = true;
+    btn.textContent = "Opening…";
+    try {
+      await App.enterClient(clientId);
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      btn.disabled = false;
+      btn.textContent = "Open LMS Dashboard";
+    }
+  }
+  document.getElementById("openCrmBtn").addEventListener("click", openCrmDashboard);
+
+  async function load() {
+    document.getElementById("banner").innerHTML = "";
+    const me = await App.requireAuth();
+    if (!me) return;
+
+    document.getElementById("topnav").style.display = "flex";
+    App.renderNav(me, "/clients.html");
+
+    if (!clientId) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">No client specified.</div>`;
+      return;
+    }
+
+    try {
+      const detail = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}`);
+      render(detail);
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  // ---- Remove confirmation modal -------------------------------------------
+  const removeModal = document.getElementById("removeModalOverlay");
+  document.getElementById("removeModalClose").addEventListener("click", () => removeModal.style.display = "none");
+  document.getElementById("removeCancel").addEventListener("click", () => removeModal.style.display = "none");
+  removeModal.addEventListener("click", (e) => { if (e.target === removeModal) removeModal.style.display = "none"; });
+  document.getElementById("removeConfirm").addEventListener("click", async () => {
+    const btn = document.getElementById("removeConfirm");
+    btn.disabled = true;
+    try {
+      await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/status`, {
+        method: "POST",
+        body: { status: "removed" },
+      });
+      window.location.href = "/clients.html";
+    } catch (err) {
+      document.getElementById("removeError").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      btn.disabled = false;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>

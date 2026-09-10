@@ -20,6 +20,7 @@
 // success or failure - is written to meta_whatsapp_accounts' webhook_*
 // columns, mirroring meta_pages exactly ("Do not silently fail").
 
+import { getEnv } from "../../infrastructure/env";
 import { ensureAppWhatsappMessagesSubscription, subscribeWabaToApp, MetaApiError } from "../../infrastructure/meta/graphClient";
 import { getAppId, getAppSecret } from "../metaOAuth";
 import {
@@ -43,7 +44,7 @@ import { MetaWebhookConfigError, getWebhookVerifyToken } from "./metaWebhookServ
  * to serve identically - there is no reason to, and every reason not to
  * (one fewer thing to keep in sync if PUBLIC_BASE_URL ever changes). */
 function getWhatsappWebhookCallbackUrl(): string {
-  const base = process.env.PUBLIC_BASE_URL;
+  const base = getEnv("PUBLIC_BASE_URL");
   if (!base) throw new MetaWebhookConfigError("PUBLIC_BASE_URL is not set. See .env.example.");
   return `${base.replace(/\/$/, "")}/api/webhooks/meta/leadgen`;
 }

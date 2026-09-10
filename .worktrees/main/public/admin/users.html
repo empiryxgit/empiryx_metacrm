@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Users — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">Users</h1>
+        <p class="page-sub">Create a user and assign a role — a temporary password is shown once, for you to relay to them.</p>
+      </div>
+      <div class="page-head-actions">
+        <button class="btn" type="button" id="ctaCreate">Add user</button>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="card" id="createCard" style="display:none">
+      <h2 class="section-title" style="margin-top:0">New user</h2>
+      <form id="createForm">
+        <div class="grid-2">
+          <div>
+            <label for="fullName">Full name</label>
+            <input id="fullName" required />
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input id="email" type="email" required />
+          </div>
+        </div>
+        <label for="roleId">Role</label>
+        <select id="roleId" required></select>
+        <div id="createAssignedClients" style="display:none; margin-top:14px"></div>
+        <button class="btn" type="submit" style="margin-top:14px">Create user</button>
+      </form>
+      <div id="tempPasswordBox" style="display:none; margin-top:14px">
+        <div class="banner success">
+          User created. Share this temporary password with them — it won't be shown again.
+        </div>
+        <code class="token" id="tempPassword"></code>
+      </div>
+    </div>
+
+    <h2 class="section-title">All users</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Status</th><th>Last active</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="modalRoot"></div>
+
+<script src="/assets/app.js"></script>
+<script>
+  // Assigned Clients (see src/domain/fixedRoles.ts / agencyClientAssignments)
+  // only exists for agency accounts - agencyClients is the agency's own
+  // roster, fetched once from the same endpoint clients.html/
+  // agency-dashboard.html already use. Every other company type leaves
+  // this null and the whole feature stays invisible on this page.
+  let me, roles = [], agencyClients = null;
+
+  function fmt(iso){ return iso ? new Date(iso).toLocaleString() : "Never"; }
+
+  async function loadRoles() {
+    const { roles: r } = await App.apiJson("/api/admin/roles");
+    roles = r;
+    document.getElementById("roleId").innerHTML = roles.map(r => `<option value="${r.id}">${App.escapeHtml(r.name)}</option>`).join("");
+  }
+
+  async function loadAgencyClientsIfAgency() {
+    if (me?.company?.accountType !== "agency") return;
+    try {
+      const { clients } = await App.apiJson("/api/agency/dashboard");
+      agencyClients = clients;
+    } catch {
+      agencyClients = [];
+    }
+  }
+
+  // Renders a checkbox per claimed client, `checked` pre-selected. Returns
+  // "" (renders nothing) when this isn't an agency account or the agency
+  // has no clients yet - the create form's own wrapper div stays hidden in
+  // that case (see its caller).
+  function assignedClientsCheckboxesHtml(idPrefix, checked) {
+    if (!agencyClients || agencyClients.length === 0) return "";
+    const checkedSet = new Set(checked || []);
+    return `
+      <label>Assigned Clients</label>
+      <p class="hint" style="margin-top:0">
+        The Agency Owner role always sees every client regardless of this list. Every other role (Admin, Manager, User) sees ONLY the clients checked here.
+      </p>
+      <div class="checkbox-row" style="flex-direction:column; align-items:flex-start; gap:6px">
+        ${agencyClients.map(c => `
+          <label style="display:flex; align-items:center; gap:8px; font-weight:400">
+            <input type="checkbox" class="${idPrefix}-client" value="${c.id}" ${checkedSet.has(c.id) ? "checked" : ""} />
+            ${App.escapeHtml(c.name)}
+          </label>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function readCheckedClientIds(idPrefix) {
+    return Array.from(document.querySelectorAll(`.${idPrefix}-client:checked`)).map(el => el.value);
+  }
+
+  async function loadUsers() {
+    const { users } = await App.apiJson("/api/admin/users");
+    const rows = document.getElementById("rows");
+    rows.innerHTML = users.map(u => `
+      <tr>
+        <td>
+          <div style="display:flex; align-items:center; gap:9px">
+            <span class="avatar">${App.escapeHtml(App.initials(u.fullName))}</span>
+            <strong>${App.escapeHtml(u.fullName)}</strong>
+          </div>
+        </td>
+        <td>${App.escapeHtml(u.email)}</td>
+        <td>
+          <select data-role="${u.id}">
+            ${roles.map(r => `<option value="${r.id}" ${r.id === u.roleId ? "selected" : ""}>${App.escapeHtml(r.name)}</option>`).join("")}
+          </select>
+        </td>
+        <td><span class="pill ${u.status}">${u.status}</span></td>
+        <td>${fmt(u.lastLoginAt)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn secondary sm" data-view="${u.id}">View</button>
+          <button class="btn secondary sm" data-toggle="${u.id}" data-status="${u.status === "active" ? "disabled" : "active"}">
+            ${u.status === "active" ? "Disable" : "Enable"}
+          </button>
+        </td>
+      </tr>
+    `).join("") || `<tr><td colspan="6">
+      <div class="state-block">
+        <p class="state-title">No users yet</p>
+        <p class="state-desc">Add your first teammate above.</p>
+      </div>
+    </td></tr>`;
+
+    rows.querySelectorAll("[data-role]").forEach(sel => {
+      sel.addEventListener("change", async () => {
+        try {
+          await App.apiJson(`/api/admin/users/${sel.dataset.role}`, { method: "PATCH", body: { roleId: sel.value } });
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+          loadUsers();
+        }
+      });
+    });
+    rows.querySelectorAll("[data-toggle]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        try {
+          await App.apiJson(`/api/admin/users/${btn.dataset.toggle}`, { method: "PATCH", body: { status: btn.dataset.status } });
+          loadUsers();
+        } catch (err) {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        }
+      });
+    });
+    rows.querySelectorAll("[data-view]").forEach(btn => {
+      btn.addEventListener("click", () => openUserModal(btn.dataset.view));
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // View - fetches one user's full profile plus their company's context
+  // (name, size, industry) from GET /api/admin/users/{id}. Deliberately
+  // shows no campaign data - that lives on its own page.
+  // -------------------------------------------------------------------
+
+  function closeModal(){
+    document.getElementById("modalRoot").innerHTML = "";
+  }
+
+  function detailRow(label, value){
+    return `<div class="detail-row"><span class="detail-label">${App.escapeHtml(label)}</span><span class="detail-value">${value}</span></div>`;
+  }
+
+  async function openUserModal(userId){
+    document.getElementById("modalRoot").innerHTML = `
+      <div class="modal-overlay" id="userModalOverlay">
+        <div class="modal modal-sm">
+          <div class="modal-header">
+            <div><h2>User details</h2></div>
+            <button class="modal-close" type="button" id="userModalClose" aria-label="Close">✕</button>
+          </div>
+          <div class="modal-body" id="userModalBody">
+            <p class="state-desc">Loading…</p>
+          </div>
+        </div>
+      </div>`;
+    document.getElementById("userModalClose").addEventListener("click", closeModal);
+    document.getElementById("userModalOverlay").addEventListener("click", (e) => {
+      if (e.target.id === "userModalOverlay") closeModal();
+    });
+
+    const body = document.getElementById("userModalBody");
+    try {
+      const { user, role, company, assignedClientIds } = await App.apiJson(`/api/admin/users/${userId}`);
+      const showAssignedClients = assignedClientIds !== undefined;
+      body.innerHTML = `
+        <div class="lead-identity" style="margin-bottom:14px">
+          <span class="avatar">${App.escapeHtml(App.initials(user.fullName))}</span>
+          <div>
+            <div class="lead-name">${App.escapeHtml(user.fullName)}</div>
+            <div class="hint" style="margin:0">${App.escapeHtml(user.email)}</div>
+          </div>
+        </div>
+        ${detailRow("Role", App.escapeHtml(role?.name || "—"))}
+        ${detailRow("Status", `<span class="pill ${user.status}">${App.escapeHtml(user.status)}</span>`)}
+        ${detailRow("Last active", fmt(user.lastLoginAt))}
+        ${detailRow("User since", fmt(user.createdAt))}
+        <div style="height:1px; background:var(--border); margin:14px 0"></div>
+        <p class="section-title" style="margin-top:0; font-size:13px">Company</p>
+        ${detailRow("Company", App.escapeHtml(company?.name || "—"))}
+        ${detailRow("Company size", App.escapeHtml(company?.companySize || "—"))}
+        ${detailRow("Industry", App.escapeHtml(company?.industry || "—"))}
+        ${showAssignedClients ? `
+          <div style="height:1px; background:var(--border); margin:14px 0"></div>
+          <div id="viewAssignedClients">${assignedClientsCheckboxesHtml("view", assignedClientIds)}</div>
+          ${agencyClients && agencyClients.length > 0 ? `<button class="btn secondary sm" type="button" id="saveAssignedClients" style="margin-top:10px">Save assigned clients</button>` : ""}
+        ` : ""}
+      `;
+      const saveBtn = document.getElementById("saveAssignedClients");
+      if (saveBtn) {
+        saveBtn.addEventListener("click", async () => {
+          try {
+            await App.apiJson(`/api/admin/users/${userId}`, {
+              method: "PATCH",
+              body: { assignedClientIds: readCheckedClientIds("view") },
+            });
+            saveBtn.textContent = "Saved";
+            setTimeout(() => { saveBtn.textContent = "Save assigned clients"; }, 1500);
+          } catch (err) {
+            body.insertAdjacentHTML("beforeend", `<div class="banner error">${App.escapeHtml(err.message)}</div>`);
+          }
+        });
+      }
+    } catch (err) {
+      body.innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Unable to load user details.")}</div>`;
+    }
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+  });
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const banner = document.getElementById("banner");
+    banner.innerHTML = "";
+    try {
+      const { temporaryPassword } = await App.apiJson("/api/admin/users", {
+        method: "POST",
+        body: {
+          fullName: document.getElementById("fullName").value.trim(),
+          email: document.getElementById("email").value.trim(),
+          roleId: document.getElementById("roleId").value,
+          assignedClientIds: agencyClients ? readCheckedClientIds("create") : undefined,
+        },
+      });
+      document.getElementById("tempPasswordBox").style.display = "block";
+      document.getElementById("tempPassword").textContent = temporaryPassword;
+      document.getElementById("createForm").reset();
+      loadUsers();
+    } catch (err) {
+      banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  document.getElementById("ctaCreate").addEventListener("click", () => {
+    document.getElementById("createCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    document.getElementById("fullName").focus();
+  });
+
+  (async () => {
+    me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/admin/users.html");
+    if (!App.hasPermission(me, "users.manage")) {
+      document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
+      return;
+    }
+    document.getElementById("createCard").style.display = "block";
+    await loadAgencyClientsIfAgency();
+    if (agencyClients && agencyClients.length > 0) {
+      const wrap = document.getElementById("createAssignedClients");
+      wrap.innerHTML = assignedClientsCheckboxesHtml("create", []);
+      wrap.style.display = "block";
+    }
+    await loadRoles();
+    await loadUsers();
+  })();
+</script>
+</body>
+</html>

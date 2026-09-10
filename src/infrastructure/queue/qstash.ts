@@ -6,10 +6,11 @@
 // That is exactly what makes this fit Vercel's serverless model, where
 // nothing can hold an open connection or run continuously.
 
+import { getEnv } from "../env";
 import { Client } from "@upstash/qstash";
 
 function getBaseUrl(): string {
-  const url = process.env.PUBLIC_BASE_URL;
+  const url = getEnv("PUBLIC_BASE_URL");
   if (!url) {
     throw new Error("PUBLIC_BASE_URL is not set (e.g. https://your-app.vercel.app). See .env.example.");
   }
@@ -17,7 +18,7 @@ function getBaseUrl(): string {
 }
 
 function getClient(): Client {
-  const token = process.env.QSTASH_TOKEN;
+  const token = getEnv("QSTASH_TOKEN");
   if (!token) {
     throw new Error("QSTASH_TOKEN is not set. See .env.example.");
   }

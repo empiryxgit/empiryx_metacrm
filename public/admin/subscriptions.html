@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Subscriptions</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
+<style>
+.wrap-admin{max-width:1180px;margin:0 auto;padding:28px 20px}.head{margin-bottom:16px}.head h1{margin:0}.toolbar{display:flex;gap:10px;margin-bottom:14px}.toolbar input{max-width:320px;margin:0}.table-wrap{overflow-x:auto}.admin-table{width:100%;border-collapse:collapse;min-width:820px}.admin-table th,.admin-table td{padding:12px 10px;border-bottom:1px solid var(--border);text-align:left;font-size:12.5px}.admin-table th{font-size:11px;text-transform:uppercase;color:var(--text-muted)}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--brand-primary-soft);color:var(--brand-primary-hover);font-size:11px;font-weight:700}
+#detail{margin-top:20px}.detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}.detail-head h2{margin:0 0 4px}.detail-meta{color:var(--text-muted);font-size:13px;margin:0 0 16px}
+.actions-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0}.action-card{border:1px solid var(--border);border-radius:10px;padding:14px}.action-card h3{margin:0 0 8px;font-size:13px}.action-card label{display:block;font-size:11px;font-weight:700;margin:8px 0 4px}.action-card input,.action-card select{width:100%;box-sizing:border-box;margin-bottom:4px}.action-card button{margin-top:8px;width:100%}
+.payments-table{width:100%;border-collapse:collapse;margin-top:10px}.payments-table th,.payments-table td{padding:9px 8px;border-bottom:1px solid var(--border);font-size:12px;text-align:left}.refunded-tag{color:var(--danger,#b42318);font-weight:700}
+@media(max-width:900px){.actions-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a class="active" href="/admin/subscriptions.html">Subscriptions</a><a href="/admin/notifications.html">Notifications</a><a href="/admin/customer-activity.html">Customer Activity</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/packages.html">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
+<main class="wrap-admin">
+  <header class="head"><h1>Subscriptions</h1></header>
+  <div id="message"></div>
+  <section class="card">
+    <div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div>
+    <div id="content">Loading…</div>
+  </section>
+  <section class="card" id="detail" style="display:none"></section>
+</main>
+</div>
+<script>
+const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const date=(v)=>v?new Date(v).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}):"-";
+const rupees=(paise)=>"₹"+(paise/100).toLocaleString("en-IN");
+let currentCompanyId=null;
+
+async function load(){
+  const query=search.value.trim();
+  const r=await fetch(`/api/platform-admin/dashboard${query?`?search=${encodeURIComponent(query)}`:""}`);
+  if(r.status===401){location.href="/admin/login.html";return}
+  const d=await r.json();
+  if(!r.ok){content.textContent=d.error||"Unable to load accounts.";return}
+  content.innerHTML=d.companies.length?`<div class="table-wrap"><table class="admin-table"><thead><tr><th>Account</th><th>Type</th><th>Subscription</th><th>Trial / expiry</th><th></th></tr></thead><tbody>${d.companies.map(c=>`<tr><td><strong>${esc(c.name)}</strong><br><small>${esc(c.slug)}</small></td><td><span class="pill">${esc(c.accountType)}</span></td><td>${esc(c.subscriptionStatus)}</td><td>${c.subscriptionStatus==="trialing"?`${date(c.trialEndsAt)} trial end`:date(c.subscriptionExpiresAt)}</td><td><button class="btn" data-company-id="${esc(c.id)}">Manage</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="state-block"><p class="state-title">No accounts found</p></div>`;
+  content.querySelectorAll("[data-company-id]").forEach(btn=>btn.addEventListener("click",()=>loadDetail(btn.dataset.companyId)));
+}
+
+async function loadDetail(companyId){
+  currentCompanyId=companyId;
+  const r=await fetch(`/api/platform-admin/companies/${encodeURIComponent(companyId)}`);
+  if(r.status===401){location.href="/admin/login.html";return}
+  const d=await r.json();
+  if(!r.ok){message.innerHTML=`<div class="banner error">${esc(d.error||"Unable to load account.")}</div>`;return}
+  const company=d.company;
+  detail.style.display="block";
+  const isTrialing=company.subscriptionStatus==="trialing";
+  const isSubscribed=company.subscriptionStatus==="active"&&company.subscriptionExpiresAt&&new Date(company.subscriptionExpiresAt)>new Date();
+  detail.innerHTML=`
+    <div class="detail-head">
+      <div><h2>${esc(company.name)}</h2><p class="detail-meta"><span class="pill">${esc(company.accountType)}</span> · ${esc(company.subscriptionStatus)} · ${esc(company.status)}</p></div>
+    </div>
+    <p class="detail-meta">Trial: ${date(company.trialStartedAt)} → ${date(company.trialEndsAt)} &nbsp;·&nbsp; Subscription cycle: ${esc(company.subscriptionCycle||"-")} &nbsp;·&nbsp; Expires: ${date(company.subscriptionExpiresAt)}</p>
+    <div class="actions-grid">
+      <div class="action-card">
+        <h3>Extend trial</h3>
+        <form id="extendForm">
+          <label>Days to add</label><input name="days" type="number" min="1" max="365" value="14" required ${isTrialing?"":"disabled"} />
+          <label>Reason</label><input name="reason" placeholder="Why (required)" required ${isTrialing?"":"disabled"} />
+          <button class="btn" type="submit" ${isTrialing?"":"disabled"}>${isTrialing?"Extend trial":"Not currently on trial"}</button>
+        </form>
+      </div>
+      <div class="action-card">
+        <h3>Force-activate subscription</h3>
+        <form id="activateForm">
+          <label>Billing cycle</label>
+          <select name="cycle"><option value="monthly">Monthly</option><option value="quarterly">Quarterly (3mo)</option><option value="halfyearly">Half-yearly (6mo)</option><option value="yearly">Yearly</option></select>
+          <label>Reason</label><input name="reason" placeholder="Why (required)" required />
+          <button class="btn" type="submit">Force-activate</button>
+        </form>
+      </div>
+      <div class="action-card">
+        <h3>Cancel subscription</h3>
+        <form id="cancelForm">
+          <p style="font-size:12px;color:var(--text-muted);margin:0 0 6px">Ends the subscription immediately (lazy-expiry, same as a normal lapse). ${isSubscribed?"":"No active paid subscription to cancel."}</p>
+          <label>Reason</label><input name="reason" placeholder="Why (required)" required ${isSubscribed?"":"disabled"} />
+          <button class="btn" type="submit" ${isSubscribed?"":"disabled"}>${isSubscribed?"Cancel subscription":"Not currently subscribed"}</button>
+        </form>
+      </div>
+    </div>
+    <h3 class="section-title">Payment orders</h3>
+    <div class="table-wrap"><table class="payments-table"><thead><tr><th>Date</th><th>Kind</th><th>Amount</th><th>Status</th><th>Razorpay order</th><th></th></tr></thead><tbody>${d.payments.length?d.payments.map(p=>`
+      <tr>
+        <td>${date(p.createdAt)}</td>
+        <td>${esc(p.kind)}${p.cycle?` · ${esc(p.cycle)}`:""}${p.quantity>1?` × ${p.quantity}`:""}</td>
+        <td>${rupees(p.amountInPaise)} ${esc(p.currency||"INR")}</td>
+        <td>${esc(p.status)}${p.refundedAt?`<br><span class="refunded-tag">Refunded ${rupees(p.refundAmountInPaise)}</span>`:""}</td>
+        <td><small>${esc(p.razorpayOrderId||"-")}</small></td>
+        <td>${p.status==="paid"&&!p.refundedAt?`<button class="btn" data-refund-order="${esc(p.id)}" data-refund-amount="${p.amountInPaise}">Mark refunded</button>`:""}</td>
+      </tr>`).join(""):`<tr><td colspan="6"><p class="hint">No payment orders yet.</p></td></tr>`}</tbody></table></div>
+  `;
+
+  extendForm?.addEventListener("submit",async(e)=>{
+    e.preventDefault();
+    const fd=new FormData(extendForm);
+    await runAction({action:"extend_trial",days:Number(fd.get("days")),reason:fd.get("reason")},"Trial extended.");
+  });
+  activateForm?.addEventListener("submit",async(e)=>{
+    e.preventDefault();
+    const fd=new FormData(activateForm);
+    await runAction({action:"force_activate",cycle:fd.get("cycle"),reason:fd.get("reason")},"Subscription force-activated.");
+  });
+  cancelForm?.addEventListener("submit",async(e)=>{
+    e.preventDefault();
+    const fd=new FormData(cancelForm);
+    if(!window.confirm("Cancel this subscription immediately?")) return;
+    await runAction({action:"cancel",reason:fd.get("reason")},"Subscription cancelled.");
+  });
+  detail.querySelectorAll("[data-refund-order]").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      const orderId=btn.dataset.refundOrder;
+      const maxAmount=Number(btn.dataset.refundAmount);
+      const reason=window.prompt("Reason for marking this order refunded (the real refund must already be issued via the Razorpay Dashboard):");
+      if(reason===null||!reason.trim()) return;
+      const amountInput=window.prompt(`Refund amount in ₹ (max ${(maxAmount/100).toLocaleString("en-IN")}):`,(maxAmount/100).toString());
+      if(amountInput===null) return;
+      const refundAmountInPaise=Math.round(Number(amountInput)*100);
+      await runAction({action:"refund_order",orderId,refundAmountInPaise,reason:reason.trim()},"Payment order marked refunded.");
+    });
+  });
+}
+
+async function runAction(body,successMessage){
+  const r=await fetch(`/api/platform-admin/subscriptions/${encodeURIComponent(currentCompanyId)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json();
+  message.innerHTML=r.ok?`<div class="banner success">${esc(successMessage)}</div>`:`<div class="banner error">${esc(d.error||"Action failed.")}</div>`;
+  if(r.ok){await load();await loadDetail(currentCompanyId)}
+}
+
+searchBtn.addEventListener("click",()=>load().catch(err=>{content.textContent=err.message}));
+search.addEventListener("keydown",(e)=>{if(e.key==="Enter")load().catch(err=>{content.textContent=err.message})});
+topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});
+load();
+</script>
+</body>
+</html>

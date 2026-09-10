@@ -10,6 +10,7 @@
 // dynamic route now uses the same explicit-rewrite pattern api/system.ts
 // already relied on).
 
+import { getEnv } from "../../src/infrastructure/env";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAuth, requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
@@ -55,7 +56,8 @@ function getQueryString(req: VercelRequest, key: string): string | undefined {
 }
 
 function getBaseUrl(req: VercelRequest): string {
-  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;
+  const publicBaseUrl = getEnv("PUBLIC_BASE_URL");
+  if (publicBaseUrl) return publicBaseUrl;
   const proto = (req.headers["x-forwarded-proto"] as string) ?? "https";
   return `${proto}://${req.headers.host}`;
 }

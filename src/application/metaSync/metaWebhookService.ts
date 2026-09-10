@@ -14,6 +14,7 @@
 // meta_pages' webhook_* columns; nothing is ever left unrecorded ("Do not
 // silently fail").
 
+import { getEnv } from "../../infrastructure/env";
 import { ensureAppLeadgenSubscription, subscribePageToLeadgen, MetaApiError } from "../../infrastructure/meta/graphClient";
 import { getAppId, getAppSecret } from "../metaOAuth";
 import { getMetaPageInternal, markPageWebhookActive, markPageWebhookFailed } from "../../infrastructure/db/repositories/metaIntegration";
@@ -39,7 +40,7 @@ export class MetaWebhookConfigError extends Error {}
  * app-level callback URL" behavior this always had, just pointed at a new
  * path. */
 function getLeadgenWebhookCallbackUrl(): string {
-  const base = process.env.PUBLIC_BASE_URL;
+  const base = getEnv("PUBLIC_BASE_URL");
   if (!base) throw new MetaWebhookConfigError("PUBLIC_BASE_URL is not set. See .env.example.");
   return `${base.replace(/\/$/, "")}/api/webhooks/meta/leadgen`;
 }
@@ -48,7 +49,7 @@ function getLeadgenWebhookCallbackUrl(): string {
 // var / error type - one Meta App, one verify token, shared by both the
 // leadgen and WhatsApp-messages webhook subscriptions.
 export function getWebhookVerifyToken(): string {
-  const value = process.env.META_WEBHOOK_VERIFY_TOKEN;
+  const value = getEnv("META_WEBHOOK_VERIFY_TOKEN");
   if (!value) throw new MetaWebhookConfigError("META_WEBHOOK_VERIFY_TOKEN is not set. See .env.example.");
   return value;
 }

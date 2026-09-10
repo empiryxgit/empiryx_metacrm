@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Platform Audit Logs</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
+<style>
+.wrap-admin{max-width:1100px;margin:0 auto;padding:28px 20px}.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.head h1{margin:0}.table-wrap{overflow:auto}.audit{width:100%;min-width:800px;border-collapse:collapse}.audit th,.audit td{padding:11px 9px;border-bottom:1px solid var(--border);text-align:left;font-size:12px}.audit th{font-size:11px;color:var(--text-muted);text-transform:uppercase}
+</style>
+</head>
+<body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/notifications.html">Notifications</a><a class="active" href="/admin/audit.html">Audit Logs</a><a href="/admin/index.html#subscriptions">Subscriptions</a><a href="/admin/index.html#packages">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
+<main class="wrap-admin">
+  <header class="head"><h1>Platform Audit Logs</h1></header>
+  <section class="card"><div id="content">Loading...</div></section>
+</main>
+</div>
+<script>
+const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function load(){const r=await fetch("/api/platform-admin/audit");const d=await r.json();if(r.status===401){location.href="/admin/login.html";return}if(!r.ok){content.textContent=d.error||"Unable to load logs.";return}content.innerHTML=d.logs.length?`<div class="table-wrap"><table class="audit"><thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Entity</th><th>Change</th><th>Reason</th></tr></thead><tbody>${d.logs.map(log=>`<tr><td>${new Date(log.createdAt).toLocaleString()}</td><td>${esc(log.adminEmail)}</td><td>${esc(log.action)}</td><td>${esc(log.entityType)}<br><small>${esc(log.entityId)}</small></td><td>${esc(JSON.stringify(log.previousValue))} → ${esc(JSON.stringify(log.newValue))}</td><td>${esc(log.reason||"-")}</td></tr>`).join("")}</tbody></table></div>`:"<p class=hint>No audit activity yet.</p>"}
+topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});load();
+</script>
+</body>
+</html>

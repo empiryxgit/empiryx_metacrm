@@ -7,6 +7,7 @@
 // request body for signature verification, so bodyParser stays disabled
 // for the whole function and each handler reads it itself.
 
+import { getEnv } from "../../src/infrastructure/env";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { Receiver } from "@upstash/qstash";
 import { timingSafeEqual } from "node:crypto";
@@ -37,8 +38,8 @@ async function readRawBody(req: VercelRequest): Promise<string> {
 }
 
 function getQstashReceiver(): Receiver {
-  const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
-  const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
+  const currentSigningKey = getEnv("QSTASH_CURRENT_SIGNING_KEY");
+  const nextSigningKey = getEnv("QSTASH_NEXT_SIGNING_KEY");
   if (!currentSigningKey || !nextSigningKey) {
     throw new Error("QSTASH_CURRENT_SIGNING_KEY / QSTASH_NEXT_SIGNING_KEY are not set. See .env.example.");
   }
@@ -222,7 +223,7 @@ async function handleProcessWhatsappMessage(message: WhatsappMessageReceivedBody
 // Either path is independently sufficient to authenticate the request; if
 // neither credential matches, the request is rejected.
 function isAuthorizedVercelCron(req: VercelRequest): boolean {
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = getEnv("CRON_SECRET");
   if (!cronSecret) return false;
   const header = req.headers.authorization;
   if (!header) return false;
@@ -254,8 +255,8 @@ async function handleReconciliation(req: VercelRequest, res: VercelResponse) {
     const rawBody = await readRawBody(req);
     const signatureHeader = getSignatureHeader(req);
 
-    const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
-    const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
+    const currentSigningKey = getEnv("QSTASH_CURRENT_SIGNING_KEY");
+    const nextSigningKey = getEnv("QSTASH_NEXT_SIGNING_KEY");
     if (!currentSigningKey || !nextSigningKey) {
       res.status(500).json({ error: "QStash signing keys are not configured" });
       return;
@@ -311,8 +312,8 @@ async function handleDeadLetter(req: VercelRequest, res: VercelResponse) {
   const rawBody = await readRawBody(req);
   const signatureHeader = getSignatureHeader(req);
 
-  const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
-  const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
+  const currentSigningKey = getEnv("QSTASH_CURRENT_SIGNING_KEY");
+  const nextSigningKey = getEnv("QSTASH_NEXT_SIGNING_KEY");
   if (currentSigningKey && nextSigningKey) {
     try {
       const isValid = await new Receiver({ currentSigningKey, nextSigningKey }).verify({

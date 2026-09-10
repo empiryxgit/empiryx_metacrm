@@ -1,0 +1,1 @@
+ALTER TABLE "crm"."sessions" ADD COLUMN "remember_me" boolean DEFAULT false NOT NULL;

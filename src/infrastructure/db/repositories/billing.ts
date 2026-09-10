@@ -29,6 +29,17 @@ export async function getBillingOrderByRazorpayOrderId(razorpayOrderId: string) 
   return row ?? null;
 }
 
+/** Platform Admin "Subscriptions" full billing management - looked up by
+ * this app's own id (never razorpayOrderId - that column is what the two
+ * PAYMENT confirmation paths join on; an admin acting from
+ * public/admin/subscriptions.html always has this row's own id already,
+ * from listBillingOrdersForCompany's own output). */
+export async function getBillingOrderById(id: string) {
+  const db = await getDb();
+  const [row] = await db.select().from(billingOrders).where(eq(billingOrders.id, id)).limit(1);
+  return row ?? null;
+}
+
 export async function listBillingOrdersForCompany(companyId: string) {
   const db = await getDb();
   return db
@@ -44,6 +55,9 @@ export async function listBillingOrdersForCompany(companyId: string) {
       status: billingOrders.status,
       verifiedAt: billingOrders.verifiedAt,
       webhookConfirmedAt: billingOrders.webhookConfirmedAt,
+      refundedAt: billingOrders.refundedAt,
+      refundAmountInPaise: billingOrders.refundAmountInPaise,
+      refundReason: billingOrders.refundReason,
       createdAt: billingOrders.createdAt,
     })
     .from(billingOrders)
@@ -123,4 +137,36 @@ export async function markBillingOrderPaidAndApply(input: {
 export async function stampBillingOrderWebhookConfirmed(razorpayOrderId: string) {
   const db = await getDb();
   await db.update(billingOrders).set({ webhookConfirmedAt: new Date(), updatedAt: new Date() }).where(eq(billingOrders.razorpayOrderId, razorpayOrderId));
+}
+
+/** Platform Admin "Subscriptions" full billing management - records that an
+ * admin has marked one specific payment order refunded. Gated on
+ * status = 'paid' AND refunded_at IS NULL, same conditional-UPDATE shape as
+ * markBillingOrderPaidAndApply's own "WHERE status = 'created'" guard -
+ * never marks an unpaid order refunded, and never lets a second refund
+ * attempt silently overwrite the first refund's own recorded amount/reason/
+ * admin. Returns null (no row updated) if either guard fails, so the
+ * caller (refundPaymentOrder, src/application/platformAdmin.ts) can turn
+ * that into a real 404/409 rather than silently reporting success. See
+ * this column's own doc comment in schema.ts - this is an audit-trail
+ * fact, never a live call to Razorpay's Refunds API. */
+export async function markBillingOrderRefunded(input: {
+  id: string;
+  refundAmountInPaise: number;
+  refundReason: string | null;
+  refundedBy: string;
+}) {
+  const db = await getDb();
+  const rows = await db
+    .update(billingOrders)
+    .set({
+      refundedAt: new Date(),
+      refundAmountInPaise: input.refundAmountInPaise,
+      refundReason: input.refundReason,
+      refundedBy: input.refundedBy,
+      updatedAt: new Date(),
+    })
+    .where(sql`${billingOrders.id} = ${input.id} AND ${billingOrders.status} = 'paid' AND ${billingOrders.refundedAt} IS NULL`)
+    .returning();
+  return rows[0] ?? null;
 }

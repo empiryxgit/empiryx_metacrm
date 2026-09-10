@@ -13,15 +13,13 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
 <div class="admin-shell">
 <nav class="admin-topbar" aria-label="Platform administration">
   <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
-  <div class="admin-nav"><a class="active" href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/notifications.html">Notifications</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/index.html#subscriptions">Subscriptions</a><a href="/admin/index.html#packages">Packages</a></div>
+  <div class="admin-nav"><a class="active" href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/subscriptions.html">Subscriptions</a><a href="/admin/notifications.html">Notifications</a><a href="/admin/customer-activity.html">Customer Activity</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/packages.html">Packages</a></div>
   <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
 </nav>
 <main class="admin-wrap">
-  <header class="admin-head"><div><h1>Platform Administration</h1><p>System-wide visibility across independent customer accounts.</p></div><div><a class="btn" href="/admin/notifications.html">Notifications</a> <a class="btn" href="/admin/audit.html">Audit logs</a> <button class="btn" id="logout">Sign out</button></div></header>
+  <header class="admin-head"><div><h1>Platform Administration</h1><p>System-wide visibility across independent customer accounts.</p></div><div><a class="btn" href="/admin/subscriptions.html">Subscriptions</a> <a class="btn" href="/admin/notifications.html">Notifications</a> <a class="btn" href="/admin/audit.html">Audit logs</a> <button class="btn" id="logout">Sign out</button></div></header>
   <section class="stats" id="stats"></section>
   <section class="card" id="customers"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div></section>
-  <div id="subscriptions"></div>
-  <div id="packages"></div>
   <section class="card" id="detail" style="display:none"></section>
 </main>
 </div>

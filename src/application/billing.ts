@@ -17,23 +17,27 @@
 // shared limit, exactly the same as an agency user creating it while
 // "inside" that client.
 
+import { getEnv } from "../infrastructure/env";
 import { AuthError } from "./auth";
 import type { AccountType } from "../domain/accountType";
 import { resolveAccountType } from "../domain/accountType";
 import {
-  BASE_CLIENT_LIMIT_AGENCY,
   BASE_SUBSCRIPTION_KIND,
-  baseCampaignLimit,
-  computeBaseSubscriptionAmountInPaise,
-  computeOverageAmountInPaise,
   cycleEndDate,
   overageKindForAccountType,
-  CYCLE_DISCOUNT,
   CYCLE_LABELS,
   BILLING_CYCLE_KEYS,
   type BillingCycle,
   type OverageKind,
 } from "../domain/billing";
+import {
+  resolvePricingConfig,
+  effectiveBaseCampaignLimit,
+  effectiveBaseClientLimitAgency,
+  effectiveBaseSubscriptionAmountInPaise,
+  effectiveCycleDiscountPct,
+  effectiveOverageAmountInPaise,
+} from "./pricing";
 import { resolveEntitlementState, effectiveCampaignLimit, effectiveClientLimit, isEntitlementBlocked, type EntitlementState } from "../domain/trial";
 import { selectExcessForDowngrade, type DowngradeCandidate } from "../domain/capacityDowngrade";
 import {
@@ -220,7 +224,8 @@ export async function getCampaignLimitStatus(companyId: string): Promise<Campaig
   }
 
   const { extraCampaigns } = activeExtraSlots(rootCompany);
-  const baseLimit = baseCampaignLimit(accountType);
+  const pricingConfig = await resolvePricingConfig();
+  const baseLimit = effectiveBaseCampaignLimit(pricingConfig, accountType);
   // Trial-aware: during an active trial this overrides baseLimit+extra down
   // to TRIAL_CAMPAIGN_LIMIT (1); once trial_expired/subscription_expired it
   // is pinned to `used` (blocking new creation while leaving existing
@@ -274,9 +279,11 @@ export async function getClientLimitStatus(agencyCompanyId: string): Promise<Cli
   // Trial-aware, same rule as getCampaignLimitStatus above - see
   // effectiveClientLimit's own doc comment in src/domain/trial.ts.
   const entitlement = resolveEntitlementState(company);
-  const limit = effectiveClientLimit(entitlement, BASE_CLIENT_LIMIT_AGENCY + extraClients, used);
+  const pricingConfig = await resolvePricingConfig();
+  const baseClientLimit = effectiveBaseClientLimitAgency(pricingConfig);
+  const limit = effectiveClientLimit(entitlement, baseClientLimit + extraClients, used);
 
-  return { used, baseLimit: BASE_CLIENT_LIMIT_AGENCY, extra: extraClients, limit, remaining: Math.max(0, limit - used) };
+  return { used, baseLimit: baseClientLimit, extra: extraClients, limit, remaining: Math.max(0, limit - used) };
 }
 
 /** Called right before addClientOrganization/inviteExistingClient (see
@@ -340,6 +347,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
   const accountType = resolveAccountType(rootCompany.accountType);
   const entitlement = resolveEntitlementState(rootCompany);
   const { extraCampaigns, extraClients } = activeExtraSlots(rootCompany);
+  const pricingConfig = await resolvePricingConfig();
 
   // --- Campaigns (pooled the same way getCampaignLimitStatus pools them) ---
   let campaignRows: Awaited<ReturnType<typeof listCampaigns>>;
@@ -352,7 +360,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
     campaignRows = await listCampaigns(rootCompanyId);
   }
 
-  const campaignLimit = effectiveCampaignLimit(entitlement, baseCampaignLimit(accountType) + extraCampaigns, campaignRows.length);
+  const campaignLimit = effectiveCampaignLimit(entitlement, effectiveBaseCampaignLimit(pricingConfig, accountType) + extraCampaigns, campaignRows.length);
   const campaignCandidates: DowngradeCandidate[] = campaignRows.map((c) => ({
     id: c.id,
     createdAt: c.createdAt,
@@ -368,7 +376,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
   // own campaigns, which the pooled count above already covers) ---
   let clientsSuspended = 0;
   if (accountType === "agency") {
-    const clientLimit = effectiveClientLimit(entitlement, BASE_CLIENT_LIMIT_AGENCY + extraClients, claimed.length);
+    const clientLimit = effectiveClientLimit(entitlement, effectiveBaseClientLimitAgency(pricingConfig) + extraClients, claimed.length);
     const clientCandidates: DowngradeCandidate[] = claimed.map((c) => ({
       id: c.clientCompanyId,
       createdAt: c.linkedAt,
@@ -456,6 +464,7 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
   const entitlement = serializeEntitlementState(entitlementState);
 
   const kind = overageKindForAccountType(accountType);
+  const pricingConfig = await resolvePricingConfig();
   return {
     accountType,
     managedExternally,
@@ -469,8 +478,8 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
       pricing: BILLING_CYCLE_KEYS.map((cycle) => ({
         cycle,
         label: CYCLE_LABELS[cycle],
-        unitAmountInPaise: computeOverageAmountInPaise(kind, 1, cycle),
-        discountPct: Math.round(CYCLE_DISCOUNT[cycle] * 100),
+        unitAmountInPaise: effectiveOverageAmountInPaise(pricingConfig, kind, 1, cycle),
+        discountPct: effectiveCycleDiscountPct(pricingConfig, cycle),
       })),
     },
     subscribe:
@@ -480,8 +489,8 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
             pricing: BILLING_CYCLE_KEYS.map((cycle) => ({
               cycle,
               label: CYCLE_LABELS[cycle],
-              amountInPaise: computeBaseSubscriptionAmountInPaise(accountType, cycle),
-              discountPct: Math.round(CYCLE_DISCOUNT[cycle] * 100),
+              amountInPaise: effectiveBaseSubscriptionAmountInPaise(pricingConfig, accountType, cycle),
+              discountPct: effectiveCycleDiscountPct(pricingConfig, cycle),
             })),
           },
   };
@@ -547,7 +556,8 @@ export async function createOverageOrder(input: {
   }
 
   const kind = overageKindForAccountType(accountType);
-  const amountInPaise = computeOverageAmountInPaise(kind, input.quantity, input.cycle);
+  const pricingConfig = await resolvePricingConfig();
+  const amountInPaise = effectiveOverageAmountInPaise(pricingConfig, kind, input.quantity, input.cycle);
   const localId = randomUUID();
 
   const razorpayOrder = await createRazorpayOrder({
@@ -574,7 +584,7 @@ export async function createOverageOrder(input: {
     razorpayOrderId: razorpayOrder.id,
     amountInPaise,
     currency: "INR",
-    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+    keyId: getEnv("RAZORPAY_KEY_ID") ?? "",
   };
 }
 
@@ -595,7 +605,8 @@ export async function createBaseSubscriptionOrder(input: {
     throw new AuthError("Your plan is managed by your agency - ask them to subscribe.", 403);
   }
 
-  const amountInPaise = computeBaseSubscriptionAmountInPaise(accountType, input.cycle);
+  const pricingConfig = await resolvePricingConfig();
+  const amountInPaise = effectiveBaseSubscriptionAmountInPaise(pricingConfig, accountType, input.cycle);
   const localId = randomUUID();
 
   const razorpayOrder = await createRazorpayOrder({
@@ -622,7 +633,7 @@ export async function createBaseSubscriptionOrder(input: {
     razorpayOrderId: razorpayOrder.id,
     amountInPaise,
     currency: "INR",
-    keyId: process.env.RAZORPAY_KEY_ID ?? "",
+    keyId: getEnv("RAZORPAY_KEY_ID") ?? "",
   };
 }
 

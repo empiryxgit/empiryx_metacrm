@@ -5,6 +5,7 @@
 // src/infrastructure/db/repositories/metaIntegration.ts, same layering the
 // rest of this codebase already uses (see src/application/processLead.ts).
 
+import { getEnv } from "../infrastructure/env";
 import {
   exchangeCodeForToken,
   exchangeForLongLivedToken,
@@ -117,7 +118,7 @@ export async function validateGrantedPermissions(accessToken: string): Promise<v
 // `access_token=appId|appSecret` pair the App-level subscribe call needs,
 // without duplicating these env lookups or their error messages.
 export function getAppId(): string {
-  const value = process.env.META_APP_ID;
+  const value = getEnv("META_APP_ID");
   if (!value) throw new MetaOAuthConfigError("META_APP_ID is not set. See .env.example.");
   return value;
 }
@@ -125,7 +126,7 @@ export function getAppId(): string {
 export function getAppSecret(): string {
   // Server-side only - never read, logged, or returned from any HTTP
   // handler; only ever passed straight into a Graph API call below.
-  const value = process.env.META_APP_SECRET;
+  const value = getEnv("META_APP_SECRET");
   if (!value) throw new MetaOAuthConfigError("META_APP_SECRET is not set. See .env.example.");
   return value;
 }
@@ -137,7 +138,7 @@ export function getAppSecret(): string {
  * token-exchange step, and that URL cannot vary per-environment without
  * also updating the Meta App's own allow-list. */
 export function getRedirectUri(): string {
-  const base = process.env.PUBLIC_BASE_URL;
+  const base = getEnv("PUBLIC_BASE_URL");
   if (!base) throw new MetaOAuthConfigError("PUBLIC_BASE_URL is not set. See .env.example.");
   return `${base.replace(/\/$/, "")}/api/integrations/meta/callback`;
 }

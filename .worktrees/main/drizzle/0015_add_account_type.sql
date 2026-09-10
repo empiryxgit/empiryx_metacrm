@@ -1,0 +1,1 @@
+ALTER TABLE "crm"."companies" ADD COLUMN "account_type" text DEFAULT 'individual' NOT NULL;

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Customer Activity</title>
+<link rel="stylesheet" href="/assets/app.css" />
+<link rel="stylesheet" href="/admin/admin.css" />
+<style>
+.wrap-admin{max-width:1100px;margin:0 auto;padding:28px 20px}.head{margin-bottom:8px}.head h1{margin:0}.hint{color:var(--text-muted);font-size:12.5px;margin:0 0 20px}.toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}.toolbar input{max-width:320px;margin:0}.table-wrap{overflow:auto}.audit{width:100%;min-width:820px;border-collapse:collapse}.audit th,.audit td{padding:11px 9px;border-bottom:1px solid var(--border);text-align:left;font-size:12px}.audit th{font-size:11px;color:var(--text-muted);text-transform:uppercase}.pager{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="admin-shell">
+<nav class="admin-topbar" aria-label="Platform administration">
+  <a class="admin-brand" href="/admin/index.html"><span class="admin-brand-mark">R</span><span>Platform Admin</span></a>
+  <div class="admin-nav"><a href="/admin/index.html">Dashboard</a><a href="/admin/index.html#customers">Customers</a><a href="/admin/subscriptions.html">Subscriptions</a><a href="/admin/notifications.html">Notifications</a><a class="active" href="/admin/customer-activity.html">Customer Activity</a><a href="/admin/audit.html">Audit Logs</a><a href="/admin/packages.html">Packages</a></div>
+  <div class="admin-top-actions"><button id="topLogout" type="button">Sign out</button></div>
+</nav>
+<main class="wrap-admin">
+  <header class="head"><h1>Customer Activity</h1></header>
+  <p class="hint">Agency/client relationship activity across all customer accounts (client invites, approvals, access changes, and similar) — sourced from the agency audit trail. Individual accounts and general in-app actions (campaigns, leads, users) are not currently captured here.</p>
+  <section class="card">
+    <div class="toolbar"><input id="companyFilter" placeholder="Filter by company ID (agency or client side)" /><button class="btn" id="filterBtn">Filter</button><button class="btn" id="clearBtn" type="button">Clear</button></div>
+    <div id="content">Loading…</div>
+    <div class="pager"><button class="btn" id="prevBtn" type="button" disabled>← Newer</button><span id="pageInfo" style="font-size:12px;color:var(--text-muted)"></span><button class="btn" id="nextBtn" type="button" disabled>Older →</button></div>
+  </section>
+</main>
+</div>
+<script>
+const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const LIMIT=50;
+let offset=0;
+let hasMore=false;
+
+async function load(){
+  const companyId=companyFilter.value.trim();
+  const params=new URLSearchParams({limit:String(LIMIT),offset:String(offset)});
+  if(companyId) params.set("companyId",companyId);
+  const r=await fetch(`/api/platform-admin/customer-activity?${params.toString()}`);
+  if(r.status===401){location.href="/admin/login.html";return}
+  const d=await r.json();
+  if(!r.ok){content.textContent=d.error||"Unable to load customer activity.";return}
+  hasMore=d.hasMore;
+  content.innerHTML=d.entries.length?`<div class="table-wrap"><table class="audit"><thead><tr><th>Time</th><th>Action</th><th>Agency</th><th>Agency user</th><th>Client</th><th>Detail</th></tr></thead><tbody>${d.entries.map(entry=>`<tr><td>${new Date(entry.createdAt).toLocaleString()}</td><td>${esc(entry.action)}</td><td>${esc(entry.agencyCompanyName||"-")}<br><small>${esc(entry.agencyCompanyId)}</small></td><td>${esc(entry.agencyUserEmail||"-")}</td><td>${entry.clientCompanyName?`${esc(entry.clientCompanyName)}<br><small>${esc(entry.clientCompanyId)}</small>`:"-"}</td><td>${esc(entry.detail||"-")}</td></tr>`).join("")}</tbody></table></div>`:"<p class=hint>No activity recorded yet for this filter.</p>";
+  pageInfo.textContent=`Showing ${offset+1}–${offset+d.entries.length}`;
+  prevBtn.disabled=offset===0;
+  nextBtn.disabled=!hasMore;
+}
+
+filterBtn.addEventListener("click",()=>{offset=0;load()});
+clearBtn.addEventListener("click",()=>{companyFilter.value="";offset=0;load()});
+companyFilter.addEventListener("keydown",(e)=>{if(e.key==="Enter"){offset=0;load()}});
+prevBtn.addEventListener("click",()=>{offset=Math.max(0,offset-LIMIT);load()});
+nextBtn.addEventListener("click",()=>{offset+=LIMIT;load()});
+topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});
+load();
+</script>
+</body>
+</html>
