@@ -13,7 +13,25 @@ import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
 import { requireAuth, requirePermission, requirePlatformAdmin } from "../src/infrastructure/auth/context";
 import { PLATFORM_ADMIN_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../src/infrastructure/auth/tokens";
-import { getPlatformAuditLogList, getPlatformCompanyDetail, getPlatformDashboard, getPlatformNotificationList, getUserNotificationList, loginPlatformAdmin, publishPlatformNotification, readUserNotification, setPlatformCompanyStatus } from "../src/application/platformAdmin";
+import {
+  cancelSubscription,
+  extendCompanyTrial,
+  forceActivateSubscription,
+  getCustomerActivityList,
+  getPlatformAuditLogList,
+  getPlatformCompanyDetail,
+  getPlatformDashboard,
+  getPlatformNotificationList,
+  getPlatformPackagesOverview,
+  getUserNotificationList,
+  loginPlatformAdmin,
+  publishPlatformNotification,
+  readUserNotification,
+  refundPaymentOrder,
+  setPlatformCompanyStatus,
+  updateCycleDiscount,
+  updatePlatformPackage,
+} from "../src/application/platformAdmin";
 import { AuthError } from "../src/application/auth";
 import { getCompanyById } from "../src/infrastructure/db/repositories/tenancy";
 import { getIntegrationCounts, getLastReconciliationRun } from "../src/infrastructure/db/repositories";
@@ -146,6 +164,123 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
       return;
     }
     res.status(200).json({ logs: await getPlatformAuditLogList() });
+    return;
+  }
+  // Platform Admin "Packages" - editable pricing config. GET returns both
+  // packages and cycle discounts together (public/admin/packages.html
+  // renders them on one page); PATCH always targets exactly one row -
+  // body.kind picks which of the two tables ("package" | "cycle_discount"),
+  // same "one PATCH, a discriminant field picks the target" shape as
+  // handleCompanyPatch's own req.body.status branch above.
+  if (action === "packages") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    try {
+      if (req.method === "GET") {
+        res.status(200).json(await getPlatformPackagesOverview());
+        return;
+      }
+      if (req.method === "PATCH") {
+        const body = req.body as { kind?: string; accountType?: string; baseMonthlyPaise?: number; baseCampaignLimit?: number; baseClientLimit?: number | null; overageUnitMonthlyPaise?: number; cycle?: string; discountPercent?: number };
+        if (body?.kind === "cycle_discount") {
+          res.status(200).json(await updateCycleDiscount({ adminId: admin.adminId, cycle: body.cycle ?? "", discountPercent: Number(body.discountPercent) }));
+          return;
+        }
+        res.status(200).json(
+          await updatePlatformPackage({
+            adminId: admin.adminId,
+            accountType: body.accountType ?? "",
+            baseMonthlyPaise: Number(body.baseMonthlyPaise),
+            baseCampaignLimit: Number(body.baseCampaignLimit),
+            baseClientLimit: body.baseClientLimit == null ? null : Number(body.baseClientLimit),
+            overageUnitMonthlyPaise: Number(body.overageUnitMonthlyPaise),
+          }),
+        );
+        return;
+      }
+      res.status(405).json({ error: "Method not allowed" });
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[platform-admin/packages] Failed:", err);
+      res.status(500).json({ error: "Failed to manage pricing config." });
+    }
+    return;
+  }
+  // Platform Admin "Subscriptions" - full billing management for ONE
+  // customer. GET is deliberately NOT duplicated here - it is the exact
+  // same read as the "company" action above (getPlatformCompanyDetail),
+  // which public/admin/subscriptions.html calls directly; this branch is
+  // POST-only, dispatched on body.action so every write this feature added
+  // (extend trial / force-activate / cancel / refund one payment order)
+  // shares one rewrite rather than needing four.
+  if (action === "subscription") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    const companyId = typeof req.query.companyId === "string" ? req.query.companyId : "";
+    if (!companyId) {
+      res.status(400).json({ error: "companyId is required." });
+      return;
+    }
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    const body = req.body as { action?: string; days?: number; cycle?: string; orderId?: string; refundAmountInPaise?: number; reason?: string };
+    try {
+      if (body?.action === "extend_trial") {
+        res.status(200).json(await extendCompanyTrial({ adminId: admin.adminId, companyId, days: Number(body.days), reason: body.reason }));
+        return;
+      }
+      if (body?.action === "force_activate") {
+        res.status(200).json(await forceActivateSubscription({ adminId: admin.adminId, companyId, cycle: body.cycle ?? "", reason: body.reason }));
+        return;
+      }
+      if (body?.action === "cancel") {
+        res.status(200).json(await cancelSubscription({ adminId: admin.adminId, companyId, reason: body.reason }));
+        return;
+      }
+      if (body?.action === "refund_order") {
+        if (!body.orderId) {
+          res.status(400).json({ error: "orderId is required." });
+          return;
+        }
+        res.status(200).json(await refundPaymentOrder({ adminId: admin.adminId, companyId, orderId: body.orderId, refundAmountInPaise: body.refundAmountInPaise, reason: body.reason }));
+        return;
+      }
+      res.status(400).json({ error: "Unknown subscription action." });
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[platform-admin/subscription] Failed:", err);
+      res.status(500).json({ error: "Failed to manage subscription." });
+    }
+    return;
+  }
+  // Platform Admin "Customer Activity" - agency/client activity across ALL
+  // customers (see getCustomerActivityList's own doc comment in
+  // src/application/platformAdmin.ts for scope/limits). GET-only, filtered
+  // by an optional companyId and simple limit/offset paging.
+  if (action === "customer-activity") {
+    const admin = await requirePlatformAdmin(req, res);
+    if (!admin) return;
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+    try {
+      const companyId = typeof req.query.companyId === "string" && req.query.companyId ? req.query.companyId : undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const offset = req.query.offset ? Number(req.query.offset) : undefined;
+      res.status(200).json(await getCustomerActivityList({ companyId, limit, offset }));
+    } catch (err) {
+      console.error("[platform-admin/customer-activity] Failed:", err);
+      res.status(500).json({ error: "Failed to load customer activity." });
+    }
     return;
   }
   res.status(404).json({ error: "Not found" });
