@@ -49,7 +49,7 @@ import { getDb } from "../../infrastructure/db/client";
 import { campaigns, companies, leadFollowUps, leads, users } from "../../infrastructure/db/schema";
 import { getUserRoleAndPermissions } from "../../infrastructure/db/repositories/whatsapp";
 import { PERMISSIONS } from "../../domain/permissions";
-import { resolveEffectiveIndustryTemplate, type StageDef } from "../../domain/industryTemplates";
+import { LEAD_SOURCES, resolveEffectiveIndustryTemplate, type StageDef } from "../../domain/industryTemplates";
 import type { DateRange } from "./rutaDateRange";
 
 export interface CrmAuthContext {
@@ -75,14 +75,20 @@ export class CrmToolValidationError extends Error {
   }
 }
 
-function validateAuth(auth: CrmAuthContext): Record<string, string> {
+// validateAuth/validateDateRange/assertValid/RangeOut/rangeOut are exported
+// (not just used internally) so analyticsTools.ts - a sibling of this file,
+// built on top of it rather than duplicating its conventions - can reuse
+// the EXACT same validation error shape (CrmToolValidationError) and the
+// EXACT same date-range JSON encoding. Nothing outside this metaSync
+// module imports them.
+export function validateAuth(auth: CrmAuthContext): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!auth || typeof auth.tenantId !== "string" || auth.tenantId.trim() === "") errors.tenantId = "tenantId is required.";
   if (!auth || typeof auth.userId !== "string" || auth.userId.trim() === "") errors.userId = "userId is required.";
   return errors;
 }
 
-function validateDateRange(range: DateRange): Record<string, string> {
+export function validateDateRange(range: DateRange): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!range || !(range.start instanceof Date) || Number.isNaN(range.start.getTime())) errors.start = "range.start must be a valid date.";
   if (!range || !(range.end instanceof Date) || Number.isNaN(range.end.getTime())) errors.end = "range.end must be a valid date.";
@@ -90,18 +96,18 @@ function validateDateRange(range: DateRange): Record<string, string> {
   return errors;
 }
 
-function assertValid(tool: string, ...errorMaps: Record<string, string>[]): void {
+export function assertValid(tool: string, ...errorMaps: Record<string, string>[]): void {
   const merged: Record<string, string> = Object.assign({}, ...errorMaps);
   if (Object.keys(merged).length > 0) throw new CrmToolValidationError(tool, merged);
 }
 
-interface RangeOut {
+export interface RangeOut {
   startIso: string;
   endIso: string;
   label: string;
 }
 
-function rangeOut(range: DateRange): RangeOut {
+export function rangeOut(range: DateRange): RangeOut {
   return { startIso: range.start.toISOString(), endIso: range.end.toISOString(), label: range.label };
 }
 
@@ -197,6 +203,39 @@ export async function get_campaign_leads(auth: CrmAuthContext, args: { range: Da
   const named = rows.map((r) => ({ name: r.crmName ?? r.rawName ?? "Unassigned/Other", count: Number(r.n) })).sort((a, b) => b.count - a.count);
   const totalCount = named.reduce((sum, r) => sum + r.count, 0);
   return { tool: "get_campaign_leads", scope: "company", range: rangeOut(args.range), totalCount, campaigns: named };
+}
+
+// ---------------------------------------------------------------------------
+// get_source_leads - breakdown of lead volume by source (Meta Lead Ads,
+// Website, Referral, Walk-in, ...). Not one of the six originally-named
+// tools, but pulled out of rutaTools.ts's sourceLeadCountsTool (which used
+// to query directly) so analyticsTools.ts's get_source_comparison can
+// reuse the exact same query/scoping rather than duplicating it.
+// ---------------------------------------------------------------------------
+
+export interface GetSourceLeadsResult {
+  tool: "get_source_leads";
+  scope: "company";
+  range: RangeOut;
+  totalCount: number;
+  sources: Array<{ source: string; label: string; count: number }>; // sorted desc by count
+}
+
+/** Same ungated, aggregate-only rationale as get_lead_count/get_campaign_leads
+ * above - per-source totals carry no per-lead PII. */
+export async function get_source_leads(auth: CrmAuthContext, args: { range: DateRange }): Promise<GetSourceLeadsResult> {
+  assertValid("get_source_leads", validateAuth(auth), validateDateRange(args.range));
+  const db = await getDb();
+  const rows = await db
+    .select({ source: leads.source, n: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(eq(leads.companyId, auth.tenantId), gte(leads.metaCreatedAt, args.range.start), lt(leads.metaCreatedAt, args.range.end)))
+    .groupBy(leads.source);
+  const labeled = rows
+    .map((r) => ({ source: r.source, label: LEAD_SOURCES.find((s) => s.key === r.source)?.label ?? r.source, count: Number(r.n) }))
+    .sort((a, b) => b.count - a.count);
+  const totalCount = labeled.reduce((sum, r) => sum + r.count, 0);
+  return { tool: "get_source_leads", scope: "company", range: rangeOut(args.range), totalCount, sources: labeled };
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +337,15 @@ export interface GetPipelineSummaryResult {
   tool: "get_pipeline_summary";
   scope: "self" | "company";
   totalCount: number;
-  stages: Array<{ key: string; label: string; count: number; isWon: boolean }>;
+  stages: Array<{ key: string; label: string; count: number; isWon: boolean; isQualified: boolean }>;
+  // Pipeline metrics, computed HERE (never left for an LLM to infer from
+  // the stage list) - wonCount/qualifiedCount are simple sums over
+  // `stages` above; conversionRatePct/qualifiedRatePct divide those by
+  // totalCount, 0 when totalCount is 0 (never a divide-by-zero NaN).
+  wonCount: number;
+  qualifiedCount: number; // leads currently in a stage flagged isQualified OR isWon (won implies having been qualified)
+  conversionRatePct: number;
+  qualifiedRatePct: number;
 }
 
 /** Personal-scoped unless the caller holds the broad-query grant (checked
@@ -317,13 +364,17 @@ export async function get_pipeline_summary(auth: CrmAuthContext): Promise<GetPip
   const byKey = new Map(rows.map((r) => [r.pipelineStage, Number(r.n)]));
   const known = new Set(stageDefs.map((s) => s.key));
   const stages = [
-    ...stageDefs.map((s) => ({ key: s.key, label: s.label, count: byKey.get(s.key) ?? 0, isWon: s.isWon === true })),
+    ...stageDefs.map((s) => ({ key: s.key, label: s.label, count: byKey.get(s.key) ?? 0, isWon: s.isWon === true, isQualified: s.isQualified === true })),
     // Any stray stage value present on a row but absent from the current
     // template (e.g. left over from a since-changed custom template).
-    ...rows.filter((r) => !known.has(r.pipelineStage)).map((r) => ({ key: r.pipelineStage, label: r.pipelineStage, count: Number(r.n), isWon: false })),
+    ...rows.filter((r) => !known.has(r.pipelineStage)).map((r) => ({ key: r.pipelineStage, label: r.pipelineStage, count: Number(r.n), isWon: false, isQualified: false })),
   ];
   const totalCount = stages.reduce((sum, s) => sum + s.count, 0);
-  return { tool: "get_pipeline_summary", scope: broad ? "company" : "self", totalCount, stages };
+  const wonCount = stages.reduce((sum, s) => sum + (s.isWon ? s.count : 0), 0);
+  const qualifiedCount = stages.reduce((sum, s) => sum + (s.isQualified || s.isWon ? s.count : 0), 0);
+  const conversionRatePct = totalCount > 0 ? Math.round((wonCount / totalCount) * 1000) / 10 : 0;
+  const qualifiedRatePct = totalCount > 0 ? Math.round((qualifiedCount / totalCount) * 1000) / 10 : 0;
+  return { tool: "get_pipeline_summary", scope: broad ? "company" : "self", totalCount, stages, wonCount, qualifiedCount, conversionRatePct, qualifiedRatePct };
 }
 
 // ---------------------------------------------------------------------------

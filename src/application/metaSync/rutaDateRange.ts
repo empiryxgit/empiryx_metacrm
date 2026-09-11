@@ -71,10 +71,19 @@ function localMidnightUtc(ymd: Ymd, timezone: string): Date {
   return new Date(midnightGuessMs - offsetMs);
 }
 
-function todayYmdInTimezone(timezone: string): Ymd {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+/** Generalizes todayYmdInTimezone to any instant, not just "now" - the
+ * calendar date a given UTC instant falls on in the given timezone. Used by
+ * dayBuckets below to re-derive each bucket's own Y/M/D from a real Date
+ * instant (never assumed from arithmetic alone, for the same DST-safety
+ * reason localMidnightUtc re-derives its offset per-date rather than once). */
+function ymdInTimezone(instant: Date, timezone: string): Ymd {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(instant);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
   return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+function todayYmdInTimezone(timezone: string): Ymd {
+  return ymdInTimezone(new Date(), timezone);
 }
 
 /** Pure calendar-day arithmetic (no timezone involved) - shifting a Y/M/D by
@@ -151,6 +160,69 @@ export function lastNDaysRange(timezone: string, n: number): DateRange {
 export function singleDateRange(ymd: Ymd, timezone: string): DateRange {
   const currentYear = todayYmdInTimezone(timezone).y;
   return rangeFromYmd(ymd, addDays(ymd, 1), timezone, `on ${formatShortDate(ymd, currentYear)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Analytics helpers (src/application/metaSync/analyticsTools.ts) - pure,
+// timezone-independent-once-you-already-have-a-DateRange building blocks
+// for trend/comparison/anomaly-detection work. Kept here, not in
+// analyticsTools.ts, for the same reason every other range helper lives in
+// this file: one place owns "how a DateRange's boundaries are computed,"
+// so analytics code never re-derives date arithmetic of its own.
+// ---------------------------------------------------------------------------
+
+/**
+ * The immediately-preceding period of the SAME duration as `range` -
+ * "this week" (Mon-Sun) -> the prior Mon-Sun; "the last 7 days" -> the 7
+ * days before that. Pure arithmetic on already-resolved instants (no
+ * timezone re-derivation needed - `range.start` is already a real UTC
+ * instant), so this needs no timezone parameter. This is what every
+ * comparison/trend tool in analyticsTools.ts (get_trend, get_campaign_
+ * comparison, get_source_comparison, explain_change) uses as its default
+ * "previous period" when the caller doesn't supply one explicitly.
+ */
+export function previousEquivalentRange(range: DateRange): DateRange {
+  const durationMs = range.end.getTime() - range.start.getTime();
+  const start = new Date(range.start.getTime() - durationMs);
+  const end = new Date(range.start.getTime());
+  const days = Math.max(1, Math.round(durationMs / (24 * 60 * 60 * 1000)));
+  const label = days === 1 ? "the previous day" : `the previous ${days} days`;
+  return { start, end, label };
+}
+
+export interface DayBucket {
+  start: Date;
+  end: Date;
+  label: string;
+}
+
+/**
+ * Splits `range` into one bucket per CALENDAR DAY in the company's own
+ * timezone - the building block get_date_range_aggregation/get_trend/
+ * detect_anomalies (analyticsTools.ts) all group leads into. Every
+ * DateRange this module produces (today/yesterday/this week/last month/
+ * last N days/an explicit "between X and Y") is already day-aligned in
+ * `timezone`, so this walks whole calendar days from range.start up to
+ * (not including) range.end - it does not assume that alignment though:
+ * an oddly-shaped range simply gets a final partial-looking bucket rather
+ * than an error. Capped at 400 buckets (~13 months) so a mis-specified
+ * huge range can never spin this into an unbounded loop.
+ */
+export function dayBuckets(range: DateRange, timezone: string): DayBucket[] {
+  const buckets: DayBucket[] = [];
+  const currentYear = todayYmdInTimezone(timezone).y;
+  let cursorYmd = ymdInTimezone(range.start, timezone);
+  let cursorStart = localMidnightUtc(cursorYmd, timezone);
+  let guard = 0;
+  while (cursorStart.getTime() < range.end.getTime() && guard < 400) {
+    const nextYmd = addDays(cursorYmd, 1);
+    const nextStart = localMidnightUtc(nextYmd, timezone);
+    buckets.push({ start: cursorStart, end: nextStart, label: formatShortDate(cursorYmd, currentYear) });
+    cursorYmd = nextYmd;
+    cursorStart = nextStart;
+    guard++;
+  }
+  return buckets;
 }
 
 export function explicitRange(startYmd: Ymd, endYmd: Ymd, timezone: string): DateRange {

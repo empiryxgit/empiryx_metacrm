@@ -83,3 +83,43 @@ describe("matchPattern - new natural-language query categories", () => {
     expect(matchPattern("and last week?")).toBeNull();
   });
 });
+
+describe("matchPattern - analytics tools (Phase D)", () => {
+  it("'why did leads decrease this week' routes to explainChange, checked before leadCount despite containing both 'lead' and a date phrase", () => {
+    expect(matchPattern("Why did leads decrease this week?")).toEqual({ name: "explainChange", arguments: { query: "Why did leads decrease this week?" } });
+    expect(matchPattern("why did we get fewer leads yesterday")).toEqual({ name: "explainChange", arguments: { query: "why did we get fewer leads yesterday" } });
+  });
+
+  it("trend questions route to trend", () => {
+    expect(matchPattern("what's the lead trend this week")).toEqual({ name: "trend", arguments: { query: "what's the lead trend this week" } });
+    expect(matchPattern("are leads trending up or down")).toEqual({ name: "trend", arguments: { query: "are leads trending up or down" } });
+  });
+
+  it("anomaly questions route to anomalies", () => {
+    expect(matchPattern("any unusual days this month for leads")).toEqual({ name: "anomalies", arguments: { query: "any unusual days this month for leads" } });
+    expect(matchPattern("were there any lead anomalies last week")).toEqual({ name: "anomalies", arguments: { query: "were there any lead anomalies last week" } });
+  });
+
+  it("'team performance' routes to teamPerformance, checked before both campaignPerformance's and userLeadCounts' bare rules", () => {
+    expect(matchPattern("team performance this week")).toEqual({ name: "teamPerformance", arguments: { query: "team performance this week" } });
+    expect(matchPattern("how's my team performing")).toEqual({ name: "teamPerformance", arguments: { query: "how's my team performing" } });
+  });
+
+  it("'compare campaigns' routes to campaignComparison, checked before campaignPerformance's and campaignLeadCounts' bare rules", () => {
+    expect(matchPattern("compare campaigns this week vs last")).toEqual({ name: "campaignComparison", arguments: { query: "compare campaigns this week vs last" } });
+    expect(matchPattern("campaign comparison")).toEqual({ name: "campaignComparison", arguments: { query: "campaign comparison" } });
+  });
+
+  it("'compare sources' routes to sourceComparison, checked before sourceLeadCounts' bare rule", () => {
+    expect(matchPattern("compare sources this month")).toEqual({ name: "sourceComparison", arguments: { query: "compare sources this month" } });
+    expect(matchPattern("source comparison")).toEqual({ name: "sourceComparison", arguments: { query: "source comparison" } });
+  });
+
+  it("'overall conversion rate' routes to conversionRate; a bare 'conversion rate' keeps its existing campaignPerformance behavior unchanged", () => {
+    expect(matchPattern("what's our overall conversion rate this month")).toEqual({ name: "conversionRate", arguments: { query: "what's our overall conversion rate this month" } });
+    expect(matchPattern("total conversion rate")).toEqual({ name: "conversionRate", arguments: { query: "total conversion rate" } });
+    // Unchanged from before this tool existed (see campaignPerformance's own comment).
+    expect(matchPattern("what's our conversion rate")).toEqual({ name: "campaignPerformance", arguments: { query: "what's our conversion rate" } });
+    expect(matchPattern("overall conversion rate by campaign")).toEqual({ name: "campaignPerformance", arguments: { query: "overall conversion rate by campaign" } });
+  });
+});

@@ -14,7 +14,7 @@
 
 import { vi } from "vitest";
 import { publishedMessages } from "./src/testSupport/qstashCapture";
-import { fakeTryClaim, fakeRelease } from "./src/testSupport/fakeRedis";
+import { fakeTryClaim, fakeRelease, fakeGet, fakeSet } from "./src/testSupport/fakeRedis";
 
 // Non-secret config every Meta code path guards on before doing anything
 // (getAppId/getAppSecret/getRedirectUri/getWebhookVerifyToken/AUTH_JWT_SECRET
@@ -63,4 +63,16 @@ vi.mock("./src/infrastructure/cache/redis", () => ({
   // test actually exercises real claim-then-reject semantics rather than
   // always reporting "not claimed yet".
   tryClaimRutaMessageId: vi.fn(async (tenantId: string, waMessageId: string) => fakeTryClaim(`rutamsg:${tenantId}:${waMessageId}`, 24 * 60 * 60)),
+  // RUTA analytics cache (analyticsTools.ts's getCachedAnalytics/
+  // setCachedAnalytics) - backed by the same in-memory value store as
+  // every other fake here, so a test that specifically wants to prove a
+  // cache hit/miss can still do so (set then get returns the same value;
+  // a fresh key returns null) without needing live Upstash credentials.
+  getCachedAnalytics: vi.fn(async (cacheKey: string) => {
+    const raw = fakeGet(`analytics:${cacheKey}`);
+    return raw ? JSON.parse(raw) : null;
+  }),
+  setCachedAnalytics: vi.fn(async (cacheKey: string, data: unknown) => {
+    fakeSet(`analytics:${cacheKey}`, JSON.stringify(data), 5 * 60);
+  }),
 }));

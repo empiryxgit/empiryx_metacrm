@@ -28,3 +28,35 @@ export function fakeTryClaim(key: string, ttlSeconds: number): boolean {
 export function fakeRelease(key: string): void {
   claims.delete(key);
 }
+
+// ---------------------------------------------------------------------
+// Generic get/set-with-TTL - backs the plain value caches
+// (analyticsTools.ts's getCachedAnalytics/setCachedAnalytics), distinct
+// from the claims Map above since these store a JSON value, not a claim
+// marker.
+// ---------------------------------------------------------------------
+
+interface ValueEntry {
+  value: string;
+  expiresAt: number;
+}
+
+const values = new Map<string, ValueEntry>();
+
+export function resetFakeRedisValues(): void {
+  values.clear();
+}
+
+export function fakeSet(key: string, value: string, ttlSeconds: number): void {
+  values.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
+}
+
+export function fakeGet(key: string): string | null {
+  const existing = values.get(key);
+  if (!existing) return null;
+  if (existing.expiresAt <= Date.now()) {
+    values.delete(key);
+    return null;
+  }
+  return existing.value;
+}

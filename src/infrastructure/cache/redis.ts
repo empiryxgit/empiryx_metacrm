@@ -218,6 +218,45 @@ export async function setCachedCampaignInsights(tenantId: string, metaCampaignId
   }
 }
 
+// ---------------------------------------------------------------------
+// RUTA analytics (src/application/metaSync/analyticsTools.ts) - a short,
+// generic cache for the handful of analytics functions that fan out into
+// several Postgres queries each (detect_anomalies, explain_change), NOT
+// applied blanket-wide to every analytics function - a single-query
+// lookup (get_lead_count-style) gains nothing from caching and loses
+// freshness, so those are deliberately left uncached. `cacheKey` is fully
+// composed by the caller (tool name + tenantId + date-range boundaries,
+// see analyticsCacheKey there) - this file only namespaces it so these
+// entries can never collide with any other key this file manages. Same
+// "fail OPEN on a Redis outage" posture as every other helper here: a
+// miss/error just means the caller recomputes from Postgres instead of
+// ever failing the request.
+// ---------------------------------------------------------------------
+
+const ANALYTICS_KEY_PREFIX = "analytics:";
+const ANALYTICS_CACHE_TTL_SECONDS = 5 * 60; // 5 minutes - see analyticsTools.ts's own comment on why this window is safe
+
+export async function getCachedAnalytics<T = unknown>(cacheKey: string): Promise<T | null> {
+  try {
+    const redis = getRedis();
+    const raw = await redis.get<T | string>(ANALYTICS_KEY_PREFIX + cacheKey);
+    if (!raw) return null;
+    return typeof raw === "string" ? (JSON.parse(raw) as T) : raw;
+  } catch (err) {
+    console.warn(`[analytics] Redis unavailable while reading cache for ${cacheKey}:`, err);
+    return null;
+  }
+}
+
+export async function setCachedAnalytics(cacheKey: string, data: unknown): Promise<void> {
+  try {
+    const redis = getRedis();
+    await redis.set(ANALYTICS_KEY_PREFIX + cacheKey, JSON.stringify(data), { ex: ANALYTICS_CACHE_TTL_SECONDS });
+  } catch (err) {
+    console.warn(`[analytics] Redis unavailable while writing cache for ${cacheKey}:`, err);
+  }
+}
+
 
 // ---------------------------------------------------------------------
 // Security hardening - fixed-window rate limiting for the auth endpoints

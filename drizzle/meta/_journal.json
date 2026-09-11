@@ -260,6 +260,13 @@
       "when": 1789200000000,
       "tag": "0036_fix_ruta_broad_query_permission_seeding",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789300000000,
+      "tag": "0037_ruta_analytics_indexes",
+      "breakpoints": true
     }
   ]
 }

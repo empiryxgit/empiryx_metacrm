@@ -34,7 +34,6 @@
 import { and, desc, eq, gte, ilike, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "../../infrastructure/db/client";
 import { leadFollowUps, leads, users } from "../../infrastructure/db/schema";
-import { LEAD_SOURCES } from "../../domain/industryTemplates";
 import type { AiToolSchema } from "../../infrastructure/ai/provider";
 import { containsDateRangePhrase, type DateRange, parseDateRangePhrase, todayRange } from "./rutaDateRange";
 import { composeReply } from "./rutaReplyComposer";
@@ -45,9 +44,19 @@ import {
   get_followup_summary,
   get_lead_count,
   get_pipeline_summary,
+  get_source_leads,
   get_user_leads,
   hasBroadGrant,
 } from "./crmTools";
+import {
+  detect_anomalies,
+  explain_change,
+  get_campaign_comparison,
+  get_conversion_rate,
+  get_source_comparison,
+  get_team_performance,
+  get_trend,
+} from "./analyticsTools";
 
 export type { DateRange } from "./rutaDateRange";
 // Re-exported for backward compatibility - hasBroadGrant now LIVES in
@@ -199,7 +208,7 @@ const helpTool: RutaTool = {
     return {
       kind: "text",
       text:
-        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
+        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n• "what\'s the lead trend this week"\n• "compare campaigns" / "compare sources" this week vs last\n• "overall conversion rate this month"\n• "team performance this week"\n• "any unusual days this month"\n• "why did leads decrease this week"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
     };
   },
 };
@@ -435,24 +444,19 @@ const sourceLeadCountsTool: RutaTool = {
     properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
   },
   // Same "aggregate counts only, no PII" ungated rationale as leadCount/
-  // campaignLeadCounts above.
+  // campaignLeadCounts above. Backed by the get_source_leads CRM tool
+  // (crmTools.ts) - previously queried leads.source directly here; pulled
+  // into crmTools.ts so analyticsTools.ts's get_source_comparison can reuse
+  // the exact same query/scoping instead of duplicating it.
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const db = await getDb();
-    const rows = await db
-      .select({ source: leads.source, n: sql<number>`count(*)::int` })
-      .from(leads)
-      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
-      .groupBy(leads.source);
-    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
-    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by source.`, dateRange: range };
-    const labeled = rows
-      .map((r) => ({ label: LEAD_SOURCES.find((s) => s.key === r.source)?.label ?? r.source, n: Number(r.n) }))
-      .sort((a, b) => b.n - a.n);
-    const top = labeled[0]!;
-    const list = labeled.slice(0, 8).map((r) => `• ${r.label} — ${r.n}`).join("\n");
-    return { kind: "text", text: `${top.label} led with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+    const structured = await get_source_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    if (structured.totalCount === 0) return { kind: "text", text: `No leads ${range.label} to break down by source.`, dateRange: range, structured };
+    const top = structured.sources[0]!;
+    const list = structured.sources.slice(0, 8).map((r) => `• ${r.label} — ${r.count}`).join("\n");
+    const fallbackText = `${top.label} led with ${top.count} lead${top.count === 1 ? "" : "s"} ${range.label} (${structured.totalCount} total).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
 
@@ -488,6 +492,190 @@ const userLeadCountsTool: RutaTool = {
     const top = structured.users[0]!;
     const list = structured.users.slice(0, 8).map((r) => `• ${r.name} — ${r.count}`).join("\n");
     const fallbackText = `${top.name} has the most with ${top.count} lead${top.count === 1 ? "" : "s"} ${range.label} (${structured.totalCount} total).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Analytics tools (analyticsTools.ts) - deterministic backend metrics, the
+// LLM only PHRASES an explanation of numbers already computed there (see
+// that file's own header). Same delegate-both-query-and-authorization
+// pattern as the CRM-tool-backed tools above.
+// ---------------------------------------------------------------------------
+
+const trendTool: RutaTool = {
+  name: "trend",
+  description:
+    "get_trend - whether the number of leads is trending up or down over a date range, compared to the immediately preceding period of the same length (e.g. this week vs the previous 7 days). If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // Company-wide, aggregate-only - same ungated rationale as leadCount.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_trend({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    const s = structured.stats;
+    const fallbackText =
+      s.direction === "flat"
+        ? `Leads are flat ${range.label} vs the previous equivalent period — ${s.currentCount} both times.`
+        : `Leads are ${s.direction} ${Math.abs(s.changeCount)} (${s.changePct === null ? "n/a" : `${s.changePct > 0 ? "+" : ""}${s.changePct}%`}) ${range.label} vs the previous equivalent period: ${s.currentCount} vs ${s.previousCount}.`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const campaignComparisonTool: RutaTool = {
+  name: "campaignComparison",
+  description:
+    "get_campaign_comparison - per-campaign lead-volume comparison between the current date range and the immediately preceding equivalent range - which campaigns gained or lost the most leads. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_campaign_comparison({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    if (structured.rows.length === 0) return { kind: "text", text: `No campaign data ${range.label} or the previous period to compare.`, dateRange: range, structured };
+    const list = structured.rows
+      .slice(0, 5)
+      .map((r) => `• ${r.name} — ${r.currentCount} vs ${r.previousCount} (${r.changeCount >= 0 ? "+" : ""}${r.changeCount}${r.changePct === null ? "" : `, ${r.changePct > 0 ? "+" : ""}${r.changePct}%`})`)
+      .join("\n");
+    const top = structured.rows[0]!;
+    const fallbackText = `${top.name} shifted the most ${range.label} vs the previous period (${top.changeCount >= 0 ? "+" : ""}${top.changeCount}).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const sourceComparisonTool: RutaTool = {
+  name: "sourceComparison",
+  description:
+    "get_source_comparison - per-source lead-volume comparison between the current date range and the immediately preceding equivalent range - which sources gained or lost the most leads. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_source_comparison({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    if (structured.rows.length === 0) return { kind: "text", text: `No source data ${range.label} or the previous period to compare.`, dateRange: range, structured };
+    const list = structured.rows
+      .slice(0, 5)
+      .map((r) => `• ${r.name} — ${r.currentCount} vs ${r.previousCount} (${r.changeCount >= 0 ? "+" : ""}${r.changeCount}${r.changePct === null ? "" : `, ${r.changePct > 0 ? "+" : ""}${r.changePct}%`})`)
+      .join("\n");
+    const top = structured.rows[0]!;
+    const fallbackText = `${top.name} shifted the most ${range.label} vs the previous period (${top.changeCount >= 0 ? "+" : ""}${top.changeCount}).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const conversionRateTool: RutaTool = {
+  name: "conversionRate",
+  description:
+    "get_conversion_rate - the OVERALL, company-wide won/qualified conversion rate over a date range (not broken down by campaign - see campaignPerformance for the per-campaign breakdown). If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // Company-wide/ungated - see analyticsTools.ts's own comment on
+  // get_conversion_rate for the consistency rationale with
+  // campaignPerformance (crmTools.ts), which is also ungated.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_conversion_rate({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const fallbackText =
+      structured.totalCount === 0
+        ? `No leads ${range.label} to calculate a conversion rate from.`
+        : `${structured.conversionRatePct}% conversion rate ${range.label} — ${structured.wonCount} won out of ${structured.totalCount} lead${structured.totalCount === 1 ? "" : "s"} (${structured.qualifiedCount} qualified, ${structured.qualifiedRatePct}%).`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const teamPerformanceTool: RutaTool = {
+  name: "teamPerformance",
+  description:
+    "get_team_performance - per-teammate performance breakdown over a date range: leads owned, wins, conversion rate, and follow-ups logged per teammate. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // A per-teammate breakdown reveals OTHER teammates' individual metrics -
+  // requires the broad-query grant, checked inside get_team_performance
+  // itself; falls back to a personal scope:"self" row rather than refusing
+  // outright, same posture as userLeadCounts/pipelineSummary above.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_team_performance({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+
+    if (structured.scope === "self") {
+      const r = structured.rows[0]!;
+      const fallbackText = `You had ${r.leadCount} lead${r.leadCount === 1 ? "" : "s"} ${range.label}, ${r.wonCount} won (${r.conversionRatePct}%), and logged ${r.followUpsLogged} follow-up${r.followUpsLogged === 1 ? "" : "s"}.`;
+      return { kind: "text", text: fallbackText, dateRange: range, structured };
+    }
+
+    if (structured.rows.length === 0) return { kind: "text", text: `No team activity ${range.label} to report.`, dateRange: range, structured };
+    const list = structured.rows
+      .slice(0, 8)
+      .map((r) => `• ${r.name} — ${r.leadCount} lead${r.leadCount === 1 ? "" : "s"}, ${r.wonCount} won (${r.conversionRatePct}%), ${r.followUpsLogged} follow-up${r.followUpsLogged === 1 ? "" : "s"} logged`)
+      .join("\n");
+    const top = structured.rows[0]!;
+    const fallbackText = `${top.name} leads the team with ${top.leadCount} lead${top.leadCount === 1 ? "" : "s"} ${range.label}.\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const anomaliesTool: RutaTool = {
+  name: "anomalies",
+  description:
+    "detect_anomalies - flags any unusually high or low days (spikes/drops in lead volume) within a date range, based on day-by-day lead counts. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await detect_anomalies({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    if (structured.anomalies.length === 0) return { kind: "text", text: `No unusual days ${range.label}.`, dateRange: range, structured };
+    const list = structured.anomalies.map((a) => `• ${a.label} — ${a.count} lead${a.count === 1 ? "" : "s"} (${a.kind}, z=${a.zScore})`).join("\n");
+    const fallbackText = `${structured.anomalies.length} unusual day${structured.anomalies.length === 1 ? "" : "s"} ${range.label}:\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const explainChangeTool: RutaTool = {
+  name: "explainChange",
+  description:
+    "explain_change - the composite 'why did leads change' explanation for a date range: the trend vs the previous equivalent period, any unusual day(s) (spikes/drops), and which campaigns/sources shifted the most. Matches questions like 'Why did leads decrease this week?'. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await explain_change({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    const s = structured.stats;
+    const trendLine =
+      s.direction === "flat"
+        ? `Leads were flat ${range.label} vs the previous period — ${s.currentCount} both times.`
+        : `Leads ${s.direction === "up" ? "increased" : "decreased"} by ${Math.abs(s.changeCount)}${s.changePct === null ? "" : ` (${s.changePct > 0 ? "+" : ""}${s.changePct}%)`} ${range.label} vs the previous period: ${s.currentCount} vs ${s.previousCount}.`;
+    const anomalyLine =
+      structured.anomalies.length > 0
+        ? `Unusual day${structured.anomalies.length === 1 ? "" : "s"}: ${structured.anomalies.map((a) => `${a.label} (${a.kind}, ${a.count})`).join(", ")}.`
+        : "";
+    const campaignLine =
+      structured.topCampaignShifts.length > 0
+        ? `Biggest campaign shift${structured.topCampaignShifts.length === 1 ? "" : "s"}: ${structured.topCampaignShifts.map((r) => `${r.name} (${r.changeCount >= 0 ? "+" : ""}${r.changeCount})`).join(", ")}.`
+        : "";
+    const sourceLine =
+      structured.topSourceShifts.length > 0
+        ? `Biggest source shift${structured.topSourceShifts.length === 1 ? "" : "s"}: ${structured.topSourceShifts.map((r) => `${r.name} (${r.changeCount >= 0 ? "+" : ""}${r.changeCount})`).join(", ")}.`
+        : "";
+    const fallbackText = [trendLine, anomalyLine, campaignLine, sourceLine].filter(Boolean).join("\n");
     return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
@@ -566,6 +754,14 @@ export const RUTA_TOOLS: RutaTool[] = [
   leadStatusTool,
   pipelineSummaryTool,
   updateOnXTool,
+  // Analytics tools (analyticsTools.ts) - see that section's own header.
+  trendTool,
+  campaignComparisonTool,
+  sourceComparisonTool,
+  conversionRateTool,
+  teamPerformanceTool,
+  anomaliesTool,
+  explainChangeTool,
 ];
 
 export function rutaToolSchemas(): AiToolSchema[] {
@@ -653,6 +849,37 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   // "my leads today" (personal LIST) is checked before every other
   // leads/count rule below, since it's the most specific match.
   if (/\bmy leads?\b/i.test(t) && /\btoday\b/i.test(t)) return { name: "myLeadsToday", arguments: {} };
+
+  // Analytics tools (analyticsTools.ts) - checked BEFORE every rule below
+  // that could otherwise also match (a "why did leads decrease this week"
+  // contains both "lead" and a date-range phrase, which would satisfy the
+  // generic leadCount rule further down; "team performance" contains
+  // "performance", which would satisfy campaignPerformance's rule; "compare
+  // campaigns" contains "campaign", which would satisfy campaignLeadCounts'
+  // bare rule - each analytics rule below is deliberately ordered ahead of
+  // the more generic rule it would otherwise collide with).
+  //
+  // explainChange - the flagship "why did leads change" composite - checked
+  // first among the analytics rules since "why...lead...this week" would
+  // otherwise satisfy several of the narrower rules below it too.
+  if (/\bwhy\b/i.test(t) && /\blead/i.test(t)) return { name: "explainChange", arguments: { query: t } };
+  if (/\btrend(ing)?\b/i.test(t)) return { name: "trend", arguments: { query: t } };
+  if (/\b(anomaly|anomalies|unusual|weird)\b/i.test(t) && /\blead/i.test(t)) return { name: "anomalies", arguments: { query: t } };
+  // "team performance" - checked before campaignPerformance's bare
+  // performance/conversion rule AND before userLeadCounts' bare team rule.
+  if (/\bteam\b/i.test(t) && /(performance|performing|productivity)/i.test(t)) return { name: "teamPerformance", arguments: { query: t } };
+  // "compare campaigns" / "campaign comparison" - checked before both
+  // campaignPerformance's and campaignLeadCounts' bare-keyword rules.
+  if (/\bcompar(e|ing|ison)\b/i.test(t) && /\bcampaign/i.test(t)) return { name: "campaignComparison", arguments: { query: t } };
+  // "compare sources" / "source comparison" - checked before sourceLeadCounts'
+  // bare-keyword rule.
+  if (/\bcompar(e|ing|ison)\b/i.test(t) && /\bsource/i.test(t)) return { name: "sourceComparison", arguments: { query: t } };
+  // Overall (not per-campaign) conversion rate - only the narrow
+  // "overall/total conversion" phrasing routes here; a bare "conversion
+  // rate" still falls to campaignPerformance's existing per-campaign
+  // breakdown below, unchanged from before this tool existed (see that
+  // tool's own comment for why that's the deliberate default).
+  if (/\b(overall|total)\b/i.test(t) && /\bconversion/i.test(t) && !/\bcampaign\b/i.test(t)) return { name: "conversionRate", arguments: { query: t } };
 
   // Breakdown/drill-down queries - checked BEFORE the generic leadCount
   // rule below, since a bare "leads" + a date phrase would otherwise also

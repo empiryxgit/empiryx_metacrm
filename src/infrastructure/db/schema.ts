@@ -1711,6 +1711,26 @@ export const leads = crm.table(
     // (companyId, phoneNumber) on every insert, so it's worth an index
     // rather than a table scan.
     companyPhoneIdx: index("ix_leads_company_id_phone_number").on(t.companyId, t.phoneNumber),
+    // Backs virtually every RUTA CRM-tool/analytics query (crmTools.ts,
+    // analyticsTools.ts) - every one of them filters
+    // "companyId = ? AND metaCreatedAt >= ? AND metaCreatedAt < ?" as its
+    // first predicate (lead counts, campaign/source breakdowns, campaign
+    // performance, trend buckets, anomaly detection). Before this index,
+    // that filter had no composite index to use at all - see migration
+    // 0037's own comment for the full "frequently queried metrics need a
+    // real index" rationale this was added under.
+    companyMetaCreatedAtIdx: index("ix_leads_company_id_meta_created_at").on(t.companyId, t.metaCreatedAt),
+    // Backs pendingFollowUpsTool / get_followup_summary's pending/overdue
+    // lookup ("companyId = ? [AND ownerId = ?] AND nextFollowUpAt <= now()")
+    // - previously unindexed on this column at all.
+    companyNextFollowUpAtIdx: index("ix_leads_company_id_next_follow_up_at").on(t.companyId, t.nextFollowUpAt),
+    // Backs the personal-scope branch of get_pipeline_summary/
+    // get_team_performance/get_conversion_rate ("companyId = ? AND
+    // ownerId = ?", sometimes with no date-range predicate at all, e.g. a
+    // full pipeline snapshot) - ownerId alone (ownerIdx above) doesn't
+    // help a companyId+ownerId equality filter nearly as well as a
+    // composite does.
+    companyOwnerIdx: index("ix_leads_company_id_owner_id").on(t.companyId, t.ownerId),
   }),
 );
 
@@ -1751,6 +1771,12 @@ export const leadFollowUps = crm.table(
     leadIdx: index("ix_lead_follow_ups_lead_id").on(t.leadId),
     companyIdx: index("ix_lead_follow_ups_company_id").on(t.companyId),
     createdAtIdx: index("ix_lead_follow_ups_created_at").on(t.createdAt),
+    // Backs get_followup_summary/get_team_performance's "follow-ups THIS
+    // user logged in THIS date range" query ("companyId = ? AND
+    // createdBy = ? AND createdAt >= ? AND createdAt < ?") - the three
+    // single-column indexes above each help only one predicate on their
+    // own; this composite backs the actual query shape directly.
+    companyCreatedByCreatedAtIdx: index("ix_lead_follow_ups_company_id_created_by_created_at").on(t.companyId, t.createdBy, t.createdAt),
   }),
 );
 
