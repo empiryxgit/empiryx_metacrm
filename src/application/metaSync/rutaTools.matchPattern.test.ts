@@ -47,6 +47,12 @@ describe("matchPattern - new natural-language query categories", () => {
     expect(matchPattern("Which campaign gave the most?")).toEqual({ name: "campaignLeadCounts", arguments: { query: "Which campaign gave the most?" } });
   });
 
+  it("campaign performance / conversion rate routes to campaignPerformance, checked before the bare campaign-breakdown rule", () => {
+    expect(matchPattern("campaign performance")).toEqual({ name: "campaignPerformance", arguments: { query: "campaign performance" } });
+    expect(matchPattern("what's our conversion rate")).toEqual({ name: "campaignPerformance", arguments: { query: "what's our conversion rate" } });
+    expect(matchPattern("conversion rate by campaign")).toEqual({ name: "campaignPerformance", arguments: { query: "conversion rate by campaign" } });
+  });
+
   it("source breakdown", () => {
     expect(matchPattern("leads by source")).toEqual({ name: "sourceLeadCounts", arguments: { query: "leads by source" } });
     expect(matchPattern("which source is best")).toEqual({ name: "sourceLeadCounts", arguments: { query: "which source is best" } });

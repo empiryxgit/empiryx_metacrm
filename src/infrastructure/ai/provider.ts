@@ -1,16 +1,25 @@
-// AI provider abstraction for the RUTA AI Assistant's classification
-// fallback (src/application/metaSync/rutaAiAssistant.ts) - only reached
-// when the fast-tier pattern matcher (matchPattern, in that file) finds no
-// match. Every provider implementation gets nothing but the one message's
-// raw text plus the fixed tool schema (src/application/metaSync/
-// rutaTools.ts's RUTA_TOOLS) - it can select at most one tool by name and,
-// for tools that take arguments, extract them; it can never see database
-// content, another user's data, or prior conversation turns, and it can
-// never itself produce the final answer (see AiProvider's own doc comment
-// below). That boundary is what keeps a wrong/hallucinated model response
-// bounded to "picked the wrong tool" or "picked nothing" - every actual
-// answer is still assembled entirely from real Drizzle query results in
-// rutaTools.ts, regardless of which provider is active.
+// AI provider abstraction for the RUTA AI Assistant. Used in exactly two,
+// separate stages of the pipeline (src/application/metaSync/
+// rutaAiAssistant.ts), and never anywhere else:
+//   - classify() - the classification FALLBACK, only reached when the
+//     fast-tier pattern matcher (matchPattern, rutaTools.ts) finds no
+//     match. Gets nothing but the one message's raw text plus the fixed
+//     tool schema (rutaTools.ts's RUTA_TOOLS) - it can select at most one
+//     tool by name and, for tools that take arguments, extract them; it
+//     can never see database content, another user's data, or prior
+//     conversation turns.
+//   - compose() - the "Structured Result -> LLM -> WhatsApp" composition
+//     step (rutaReplyComposer.ts), reached AFTER a CRM tool (crmTools.ts)
+//     has already run the real query and computed a structured result. Gets
+//     that already-computed JSON plus the user's question text, purely to
+//     phrase the reply - never a query, never database access.
+// Neither method can ever run a query or reach the database - see
+// AiProvider's own doc comment below for the full boundary. That is what
+// keeps a wrong/hallucinated model response bounded to "picked the wrong
+// tool," "picked nothing," or "phrased it a little off" - every actual
+// NUMBER in a reply is still sourced entirely from real Drizzle query
+// results in crmTools.ts, regardless of which provider is active or
+// whether one is configured at all.
 //
 // Swapping providers (Azure OpenAI today; OpenAI/Anthropic/etc. later) is a
 // single change in getAiProvider() below - nothing else in the orchestrator
@@ -33,19 +42,35 @@ export interface AiToolCall {
 }
 
 /**
- * A provider's ONLY job: given one message's raw text and the fixed set of
- * tools it's allowed to pick from, return at most one tool call (name +
- * extracted arguments) or null if nothing fits. Implementations must never
- * return a tool name outside the `tools` list they were given - the
- * orchestrator additionally re-validates this itself (never trusts a
- * provider's output blindly), but a well-behaved implementation should
- * enforce it up front too (e.g. via function-calling / tool-use APIs that
- * constrain the model's output to the given schema, rather than free-form
- * text parsing).
+ * A provider has two, deliberately separate jobs - never a third:
+ *   - classify(): given one message's raw text and the fixed set of tools
+ *     it's allowed to pick from, return at most one tool call (name +
+ *     extracted arguments) or null if nothing fits. Implementations must
+ *     never return a tool name outside the `tools` list they were given -
+ *     the orchestrator additionally re-validates this itself (never trusts
+ *     a provider's output blindly), but a well-behaved implementation
+ *     should enforce it up front too (e.g. via function-calling / tool-use
+ *     APIs that constrain the model's output to the given schema, rather
+ *     than free-form text parsing).
+ *   - compose() (optional): the "Structured Result -> LLM -> WhatsApp"
+ *     step (see rutaReplyComposer.ts) - given an ALREADY-COMPUTED,
+ *     tenant/permission-scoped structured result (plain JSON a CRM tool in
+ *     crmTools.ts produced) and the user's own original question text,
+ *     phrase a natural-language WhatsApp reply, or return null if it
+ *     can't/decides not to. The caller (rutaReplyComposer.ts) always has a
+ *     deterministic, AI-free fallback ready, so a provider that omits this
+ *     method, or that errors/times out/returns null, never blocks a reply.
+ *
+ * NEITHER method is ever given database access, a query function, or any
+ * credential beyond what's already in this file's own HTTP call - an
+ * AiProvider implementation has no way to reach the database even if it
+ * wanted to. That is what makes "LLM must never directly query DB" true by
+ * construction rather than by convention.
  */
 export interface AiProvider {
   readonly name: string;
   classify(text: string, tools: AiToolSchema[]): Promise<AiToolCall | null>;
+  compose?(structured: Record<string, unknown>, originalMessageText: string): Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +151,67 @@ class AzureOpenAiProvider implements AiProvider {
     } catch (err) {
       rutaLog.warn("ai_provider_failed", { provider: this.name, error: err instanceof Error ? err.message : String(err) });
       return null; // Fails closed to "didn't catch that" - never blocks the reply, never throws to the caller.
+    }
+  }
+
+  /**
+   * "Structured Result -> LLM" composition - see AiProvider.compose's own
+   * doc comment above and rutaReplyComposer.ts's file header for the full
+   * boundary. A plain chat completion, NOT function-calling (there is
+   * nothing to call - `structured` is already the complete, final answer);
+   * the model's only job is phrasing. Same timeout/retry shape as
+   * classify() above, reused verbatim.
+   */
+  async compose(structured: Record<string, unknown>, originalMessageText: string): Promise<string | null> {
+    const url = `${this.endpoint.replace(/\/$/, "")}/openai/deployments/${encodeURIComponent(this.deployment)}/chat/completions?api-version=2024-06-01`;
+
+    try {
+      const response = await withRetry(
+        async () => {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 8000);
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "api-key": this.apiKey },
+              signal: controller.signal,
+              body: JSON.stringify({
+                messages: [
+                  {
+                    role: "system",
+                    content:
+                      "You are phrasing a short WhatsApp reply for a CRM query. You are given the user's question and a JSON object that is the COMPLETE and ONLY source of truth for your answer. Use ONLY the numbers and names already present in the JSON - never invent, estimate, guess, or round a number differently than given. If the JSON doesn't actually answer the question, say so briefly. Plain text only, no markdown, no more than a few short lines.",
+                  },
+                  { role: "user", content: `Question: ${originalMessageText}\n\nData (JSON):\n${JSON.stringify(structured)}` },
+                ],
+                temperature: 0,
+                max_tokens: 300,
+              }),
+            });
+            if (!res.ok && res.status >= 500) {
+              throw new Error(`Azure OpenAI returned ${res.status}`);
+            }
+            return res;
+          } finally {
+            clearTimeout(timeout);
+          }
+        },
+        {
+          attempts: 3,
+          label: "azure-openai compose",
+          shouldRetry: (err) => err instanceof Error && (err.name === "AbortError" || err.message.includes("Azure OpenAI returned 5")),
+        },
+      );
+
+      if (!response.ok) {
+        rutaLog.error("ai_provider_http_error", { provider: this.name, stage: "compose", status: response.status });
+        return null;
+      }
+      const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      return data.choices?.[0]?.message?.content ?? null;
+    } catch (err) {
+      rutaLog.warn("ai_provider_failed", { provider: this.name, stage: "compose", error: err instanceof Error ? err.message : String(err) });
+      return null; // Fails closed to the caller's deterministic fallback - never blocks the reply.
     }
   }
 }

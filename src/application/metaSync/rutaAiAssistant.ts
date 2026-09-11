@@ -6,16 +6,24 @@
 // the lead-capture pipeline. Full design: claude/whatsapp-internal-query-
 // bot-flow.md (CRM Automation project).
 //
-// This file is the ORCHESTRATOR - it owns the pipeline every inbound
+// This file is the ORCHESTRATOR - it owns the exact pipeline every inbound
 // message goes through, end to end, and delegates each stage to its own
-// module rather than inlining everything. On every request this pipeline
-// resolves WhatsApp identity -> user_id -> tenant_id -> role -> permissions
-// -> data scope, ENTIRELY in this backend/services layer - the AI provider
-// (step 4 below) only ever sees raw message text and a fixed tool schema,
-// never a tenantId/userId/permission, and never decides what a user is
-// authorized to see (see AiProvider's own doc comment in
-// infrastructure/ai/provider.ts for that exact boundary). Authorization is
-// never delegated to, or trusted from, the LLM:
+// module rather than inlining everything:
+//
+//   WhatsApp -> Webhook -> Identity/Auth -> AI Orchestrator (this file) ->
+//   Intent/Tool Selection -> Authorization -> CRM Tool -> DB -> Structured
+//   Result -> LLM -> WhatsApp
+//
+// On every request this pipeline resolves WhatsApp identity -> user_id ->
+// tenant_id -> role -> permissions -> data scope, ENTIRELY in this
+// backend/services layer - the AI provider (steps 4 and 9 below) only ever
+// sees raw message text, a fixed tool schema, or an already-computed
+// structured result; never a tenantId/userId/permission, and never decides
+// what a user is authorized to see, and NEVER runs a database query itself,
+// directly or indirectly (see AiProvider's own doc comment in
+// infrastructure/ai/provider.ts for that exact boundary - it has no DB
+// client, no credential, and no query function anywhere in its interface).
+// Authorization is never delegated to, or trusted from, the LLM:
 //   1. WhatsApp -> RUTA user mapping + tenant identification - resolved
 //      upstream, before this file is even reached (see
 //      metaWhatsappEventService.ts's isRutaAssistantMessage /
@@ -49,18 +57,43 @@
 //      only ever returns a tool NAME + free-text arguments - it never runs
 //      a query and never sees a permission or a data scope.
 //   5. Authorization - each tool in rutaTools.ts enforces its own scoping
-//      rule (see hasBroadGrant's own comment there) against the VERIFIED
-//      tenantId/userId this file resolved in step 1, never anything the AI
-//      provider returned; this file never second-guesses or bypasses a
-//      tool's own check.
-//   6. Tool execution - rutaTools.ts's RutaTool.run(), real Drizzle query
+//      rule against the VERIFIED tenantId/userId this file resolved in step
+//      1, never anything the AI provider returned; this file never
+//      second-guesses or bypasses a tool's own check. For the six tools
+//      backed by a NAMED CRM tool (see below), the authorization decision
+//      itself is made INSIDE that CRM tool (crmTools.ts's hasBroadGrant),
+//      not by rutaTools.ts or this file - a single, non-bypassable place
+//      per rule.
+//   6. CRM Tool -> DB -> Structured Result - src/application/metaSync/
+//      crmTools.ts's six typed, validated, self-authorizing functions
+//      (get_lead_count / get_campaign_leads / get_campaign_performance /
+//      get_user_leads / get_pipeline_summary / get_followup_summary), each
+//      called by its matching rutaTools.ts tool's run(). Real Drizzle query
 //      results only, every query scoped by tenantId (and, for personal
 //      tools, userId) at the SQL WHERE clause - never filtered client-side
-//      after a wider fetch.
-//   7. Reply - sendWhatsappTextMessage (already retried internally, see
-//      graphClient.ts's fetchWithRetryJson), wrapped here so a send
-//      failure is logged, never thrown back at the caller.
-//   8. Error handling + structured logging - every stage above reports
+//      after a wider fetch - returning a plain JSON structured result, not
+//      reply text. Every other tool in rutaTools.ts (help, myLeadsToday,
+//      updateOnX, pendingFollowUps, leadStatus, followUpsToday,
+//      sourceLeadCounts) still queries the DB directly inside its own
+//      run() and returns finished reply text - the CRM/database is still
+//      the sole source of truth for these, they simply predate, and don't
+//      need, a separate structured-result shape of their own.
+//   7. Structured Result -> LLM - rutaReplyComposer.ts's composeReply,
+//      called below ONLY when the tool's result carries a `structured`
+//      payload (i.e. one of the six CRM-tool-backed tools from step 6).
+//      Hands the AI provider (AiProvider.compose - infrastructure/ai/
+//      provider.ts) nothing but that already-computed JSON plus the user's
+//      own question text, to phrase the reply - never a query, never
+//      database access, and grounded (see rutaReplyComposer.ts's own
+//      comment) against the same JSON so a hallucinated number can never
+//      reach the user. Falls back to a deterministic, AI-free formatted
+//      reply (built alongside the structured result, in rutaTools.ts) on
+//      any failure or when no AI provider is configured - RUTA fully works
+//      with zero AI configured, unchanged from before this stage existed.
+//   8. Reply -> WhatsApp - sendWhatsappTextMessage (already retried
+//      internally, see graphClient.ts's fetchWithRetryJson), wrapped here
+//      so a send failure is logged, never thrown back at the caller.
+//   9. Error handling + structured logging - every stage above reports
 //      through rutaLog (src/infrastructure/observability/rutaLogger.ts);
 //      a failure at any stage degrades to a safe, logged, user-visible
 //      "something went wrong" reply rather than a silent drop or an
@@ -92,6 +125,7 @@ import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
 import { checkRateLimit, tryClaimRutaMessageId } from "../../infrastructure/cache/redis";
 import { rutaLog } from "../../infrastructure/observability/rutaLogger";
 import { getAiProvider } from "../../infrastructure/ai/provider";
+import { composeReply } from "./rutaReplyComposer";
 import { matchBareDateFollowUp } from "./rutaDateRange";
 import {
   rutaToolSchemas,
@@ -300,7 +334,19 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     await clearPendingQueryContext(msg.tenantId, link.userId);
   }
 
-  await sendReply(sendCtx, msg, link, tool.name, result.text);
+  // "Structured Result -> LLM -> WhatsApp" - the final pipeline stage, run
+  // ONLY for tools backed by a named CRM tool (crmTools.ts) - see
+  // RutaToolResult's own doc comment (rutaTools.ts) for exactly which ones
+  // set `structured`. composeReply (rutaReplyComposer.ts) hands the AI
+  // provider nothing but this already-computed JSON plus the user's own
+  // question text - never a query, never database access - and always
+  // falls back to result.text (built with zero AI involvement) on any
+  // failure, so a missing/broken AI provider never blocks a reply, only
+  // its phrasing. Every other tool's result.text is sent completely
+  // unchanged, exactly as before this pipeline stage existed.
+  const replyText = result.kind === "text" && result.structured ? await composeReply(tool.name, result.structured, text, result.text) : result.text;
+
+  await sendReply(sendCtx, msg, link, tool.name, replyText);
 }
 
 function decodeAnchorRange(range: { startIso: string; endIso: string; label: string }): DateRange {

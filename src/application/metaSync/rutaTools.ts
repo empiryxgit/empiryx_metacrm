@@ -1,35 +1,62 @@
-// Structured CRM tools for the RUTA AI Assistant - the one place both
+// The INTENT/TOOL SELECTION layer of the RUTA pipeline - the one place both
 // classification tiers (the fast regex pattern matcher below, and the AI
 // provider fallback in src/infrastructure/ai/provider.ts) draw their tool
-// names/descriptions/parameter schemas from, and the one place every tool's
-// actual Drizzle query + reply text is assembled. Before this file existed
-// the pattern matcher's five-ish regex branches and the AI provider's own
-// fixed function array were two separately hand-maintained lists that had
-// to be kept in sync by hand - RUTA_TOOLS below is now the single source of
+// names/descriptions/parameter schemas from. Before this file existed the
+// pattern matcher's five-ish regex branches and the AI provider's own fixed
+// function array were two separately hand-maintained lists that had to be
+// kept in sync by hand - RUTA_TOOLS below is now the single source of
 // truth for "what RUTA can do," so adding a tool means adding one entry
 // here, not remembering to update two places.
 //
+//   WhatsApp -> Webhook -> Identity/Auth -> AI Orchestrator -> INTENT/TOOL
+//   SELECTION (this file) -> Authorization -> CRM Tool -> DB -> Structured
+//   Result -> LLM -> WhatsApp
+//
 // Every tool's run() is handed a RutaToolContext (tenantId/userId/timezone
-// only - never a raw request, never another user's data) and is entirely
-// responsible for its OWN authorization scoping - there is no single
-// uniform "requires permission X" gate here, because the actual rule varies
-// per tool (see hasBroadGrant's own comment, and each tool's individual
+// only - never a raw request, never another user's data). The six tools
+// backed by a NAMED CRM tool (leadCount/campaignLeadCounts/
+// campaignPerformance/userLeadCounts/pipelineSummary/followUpCount, each
+// noted in its own comment below) delegate BOTH the query and the
+// authorization decision to that CRM tool in crmTools.ts - see that file's
+// own header for the full "typed, validated, self-authorizing" contract -
+// and then format a deterministic reply from its structured result (the
+// "Structured Result" pipeline stage), which the orchestrator
+// (rutaAiAssistant.ts) may hand to the LLM composition step
+// (rutaReplyComposer.ts) to phrase, always with that deterministic text as
+// the fallback. Every other tool here (help, myLeadsToday, updateOnX,
+// pendingFollowUps, leadStatus, followUpsToday, sourceLeadCounts) still
+// queries the DB directly and enforces its own authorization inline (see
+// hasBroadGrant's own comment in crmTools.ts, and each tool's individual
 // comment below for exactly what it does and doesn't require the grant
-// for). This mirrors, unchanged, the authorization behavior already
-// audited and fixed in this codebase (Findings 2a/2b/2c) - this file is a
-// reorganization of that logic into named, independently testable units,
-// not a behavior change.
+// for) - this mirrors, unchanged, the authorization behavior already
+// audited and fixed in this codebase (Findings 2a/2b/2c).
 
 import { and, desc, eq, gte, ilike, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "../../infrastructure/db/client";
-import { campaigns, companies, leadFollowUps, leads, users } from "../../infrastructure/db/schema";
-import { getUserRoleAndPermissions } from "../../infrastructure/db/repositories/whatsapp";
-import { PERMISSIONS } from "../../domain/permissions";
-import { LEAD_SOURCES, resolveEffectiveIndustryTemplate, type StageDef } from "../../domain/industryTemplates";
+import { leadFollowUps, leads, users } from "../../infrastructure/db/schema";
+import { LEAD_SOURCES } from "../../domain/industryTemplates";
 import type { AiToolSchema } from "../../infrastructure/ai/provider";
 import { containsDateRangePhrase, type DateRange, parseDateRangePhrase, todayRange } from "./rutaDateRange";
+import { composeReply } from "./rutaReplyComposer";
+import {
+  companyStages,
+  get_campaign_leads,
+  get_campaign_performance,
+  get_followup_summary,
+  get_lead_count,
+  get_pipeline_summary,
+  get_user_leads,
+  hasBroadGrant,
+} from "./crmTools";
 
 export type { DateRange } from "./rutaDateRange";
+// Re-exported for backward compatibility - hasBroadGrant now LIVES in
+// crmTools.ts (it's a CRM-tool-layer authorization primitive, called by
+// every permission-gated CRM tool itself rather than by any caller - see
+// its own comment there), but nothing outside this file imported it
+// directly before this refactor, so this re-export costs nothing and keeps
+// the public surface of "where RUTA's authorization helper lives" stable.
+export { hasBroadGrant } from "./crmTools";
 
 export interface RutaToolContext {
   tenantId: string;
@@ -40,7 +67,7 @@ export interface RutaToolContext {
   timezone: string;
   /** The date range resolved by the most recent ANCHOR query in this same
    * conversation thread (see the "sessionRole" doc comment on RutaTool
-   * below), when one is still live. A drill-down tool (campaignLeadCounts /
+   * below), when one is still live. A drill-down tool (campaignLeadCounts/campaignPerformance/
    * sourceLeadCounts / userLeadCounts) falls back to this when its OWN
    * message text names no date range of its own, so "Which campaign gave
    * the most?" right after "How many leads today?" inherits "today" without
@@ -74,8 +101,30 @@ export type PendingQueryContext =
   | { kind: "disambiguation"; options: PendingOption[] }
   | { kind: "anchor"; tool: string; range: { startIso: string; endIso: string; label: string } };
 
+/**
+ * `text` is ALWAYS the deterministic, AI-free reply (see each CRM-backed
+ * tool below) - the whole answer when no AI provider is configured, and
+ * the safety net whenever one is. `structured`, when present, is the
+ * CRM tool's own JSON structured result (crmTools.ts) for that same
+ * answer - only tools backed directly by one of the six named CRM tools
+ * (get_lead_count/get_campaign_leads/get_campaign_performance/
+ * get_user_leads/get_pipeline_summary/get_followup_summary) set it. When
+ * set, the orchestrator (rutaAiAssistant.ts) runs the "Structured Result
+ * -> LLM -> WhatsApp" composition step (rutaReplyComposer.ts) to phrase the
+ * FINAL reply from it, falling back to `text` on any failure; tools that
+ * omit `structured` (help, myLeadsToday, updateOnX, pendingFollowUps,
+ * leadStatus, followUpsToday, sourceLeadCounts, ...) always send `text`
+ * as-is, unchanged from before this pipeline stage existed.
+ *
+ * Typed `unknown` here (not `Record<string, unknown>`) purely so each
+ * CRM tool's own named result interface (GetLeadCountResult, ...) can be
+ * assigned here directly with no cast - every one of them is already
+ * plain, JSON-serializable data by construction (see crmTools.ts's file
+ * header); rutaReplyComposer.ts's composeReply is the one place this is
+ * treated as JSON (via JSON.stringify), and is typed accordingly.
+ */
 export type RutaToolResult =
-  | { kind: "text"; text: string; dateRange?: DateRange }
+  | { kind: "text"; text: string; dateRange?: DateRange; structured?: unknown }
   | { kind: "disambiguate"; text: string; options: PendingOption[] };
 
 export interface RutaTool {
@@ -96,7 +145,7 @@ export interface RutaTool {
    *     orchestrator stores its resolved date range as the new anchor,
    *     overwriting any previous one - this is what "What about yesterday?"
    *     re-runs.
-   *   - "drilldown": a secondary/breakdown query (campaignLeadCounts /
+   *   - "drilldown": a secondary/breakdown query (campaignLeadCounts/campaignPerformance/
    *     sourceLeadCounts / userLeadCounts) that CONSULTS ctx.defaultDateRange
    *     but never overwrites or clears the anchor - so asking a drill-down
    *     question doesn't lose the ability to later say "what about
@@ -110,32 +159,6 @@ export interface RutaTool {
    *     any pending anchor/disambiguation - the conversation has moved on.
    */
   sessionRole?: "anchor" | "drilldown";
-}
-
-/**
- * Whether this user's role grants company/branch-wide RUTA queries against
- * OTHER teammates' data - see PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY's
- * own comment in domain/permissions.ts for the full "deliberately off by
- * default, opt-in only, WhatsApp is a weaker identity channel" rationale.
- *
- * Important asymmetry with the web app: getUserRoleAndPermissions reads the
- * role's STORED `permissions` column directly - unlike
- * src/application/auth.ts's effectivePermissions(), which live-recomputes a
- * full-access role's permission set at JWT-issue time (see fixedRoles.ts's
- * fullAccessPermissionsForRoleName), this bot has no session/JWT to read,
- * only the verified phone->userId binding, so it has no live-recompute step
- * to go through. This is exactly why audit Finding 2a mattered: it's the
- * STORED value this function reads that must never carry
- * RUTA_AI_ASSISTANT_BROAD_QUERY for an auto-seeded system role. That's now
- * enforced going forward at seed time (fixedRoles.ts's BASE_ALL_PERMISSIONS,
- * tenancy.ts's createOwnerRole) plus a one-time cleanup migration
- * (drizzle/0036_fix_ruta_broad_query_permission_seeding.sql) for roles
- * already seeded before that fix - there is no runtime safety net here
- * beyond that stored value being correct.
- */
-export async function hasBroadGrant(tenantId: string, userId: string): Promise<boolean> {
-  const info = await getUserRoleAndPermissions(tenantId, userId);
-  return info?.permissions.includes(PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY) ?? false;
 }
 
 /** "Today" resolved in the COMPANY's own timezone. Thin wrapper over
@@ -176,7 +199,7 @@ const helpTool: RutaTool = {
     return {
       kind: "text",
       text:
-        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "leads by source"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
+        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
     };
   },
 };
@@ -233,15 +256,18 @@ const leadCountTool: RutaTool = {
   // campaign gave the most?" -> "What about yesterday?") - see
   // RutaTool.sessionRole's own comment for exactly what that means.
   sessionRole: "anchor",
+  // Backed by the get_lead_count CRM tool (crmTools.ts) - that function
+  // both queries the DB and decides authorization (none needed, aggregate
+  // only); this run() is now just: resolve the range, call the CRM tool,
+  // format the deterministic fallback, then hand the structured result to
+  // the "Structured Result -> LLM" composition step (see RutaToolResult's
+  // own comment above).
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const db = await getDb();
-    const [row] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(leads)
-      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)));
-    const n = row?.n ?? 0;
-    return { kind: "text", text: `You received ${n} lead${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
+    const structured = await get_lead_count({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const n = structured.count;
+    const fallbackText = `You received ${n} lead${n === 1 ? "" : "s"} ${range.label}.`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
 
@@ -329,21 +355,24 @@ const updateOnXTool: RutaTool = {
 
 const followUpCountTool: RutaTool = {
   name: "followUpCount",
-  description: "How many follow-ups the asking user logged over a date range - today by default. Generalizes followUpsToday to any range ('yesterday', 'this week', 'last month', ...).",
+  description:
+    "Summary of the asking user's follow-up activity over a date range (today by default) - how many follow-ups they logged, plus how many are pending/overdue right now. Generalizes followUpsToday to any range ('yesterday', 'this week', 'last month', ...).",
   parameters: {
     type: "object",
     properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
   },
   sessionRole: "anchor",
+  // Backed by the get_followup_summary CRM tool (crmTools.ts).
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const db = await getDb();
-    const [row] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(leadFollowUps)
-      .where(and(eq(leadFollowUps.companyId, ctx.tenantId), eq(leadFollowUps.createdBy, ctx.userId), gte(leadFollowUps.createdAt, range.start), lt(leadFollowUps.createdAt, range.end)));
-    const n = row?.n ?? 0;
-    return { kind: "text", text: `You logged ${n} follow-up${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
+    const structured = await get_followup_summary({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const loggedLine = `You logged ${structured.loggedCount} follow-up${structured.loggedCount === 1 ? "" : "s"} ${range.label}.`;
+    const pendingLine =
+      structured.pendingCount === 0
+        ? `No pending follow-ups${structured.pendingScope === "company" ? " company-wide" : ""} right now.`
+        : `${structured.pendingCount} pending follow-up${structured.pendingCount === 1 ? "" : "s"}${structured.pendingScope === "company" ? " (company-wide)" : ""} due or overdue.`;
+    const fallbackText = `${loggedLine}\n${pendingLine}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
 
@@ -358,22 +387,42 @@ const campaignLeadCountsTool: RutaTool = {
   // Company-wide aggregate counts by campaign NAME only (no per-lead PII) -
   // deliberately ungated, same rationale as leadCount above. Drill-down
   // role: consults ctx.defaultDateRange, never sets/clears the anchor.
+  // Backed by the get_campaign_leads CRM tool (crmTools.ts).
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const db = await getDb();
-    const rows = await db
-      .select({ crmName: campaigns.name, rawName: leads.campaignName, n: sql<number>`count(*)::int` })
-      .from(leads)
-      .leftJoin(campaigns, eq(leads.crmCampaignId, campaigns.id))
-      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
-      .groupBy(campaigns.name, leads.campaignName);
-    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
-    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign.`, dateRange: range };
-    const named = rows.map((r) => ({ label: r.crmName ?? r.rawName ?? "Unassigned/Other", n: Number(r.n) })).sort((a, b) => b.n - a.n);
-    const top = named[0]!;
-    const list = named.slice(0, 5).map((r) => `• ${r.label} — ${r.n}`).join("\n");
-    return { kind: "text", text: `${top.label} led with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+    const structured = await get_campaign_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    if (structured.totalCount === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign.`, dateRange: range, structured };
+    const top = structured.campaigns[0]!;
+    const list = structured.campaigns.slice(0, 5).map((r) => `• ${r.name} — ${r.count}`).join("\n");
+    const fallbackText = `${top.name} led with ${top.count} lead${top.count === 1 ? "" : "s"} ${range.label} (${structured.totalCount} total).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
+  },
+};
+
+const campaignPerformanceTool: RutaTool = {
+  name: "campaignPerformance",
+  description:
+    "get_campaign_performance - CRM-native performance breakdown by campaign over a date range: lead volume, how many of those leads reached the won/closed stage, and the resulting conversion rate. Not Meta ad-spend/impression metrics - the CRM/database is the source of truth for this. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // Same ungated, aggregate-only rationale as campaignLeadCounts above -
+  // per-campaign totals and a conversion rate carry no per-lead PII. Backed
+  // by the get_campaign_performance CRM tool (crmTools.ts).
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const structured = await get_campaign_performance({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    if (structured.campaigns.length === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign performance.`, dateRange: range, structured };
+    const best = [...structured.campaigns].sort((a, b) => b.conversionRatePct - a.conversionRatePct)[0]!;
+    const list = structured.campaigns
+      .slice(0, 5)
+      .map((c) => `• ${c.name} — ${c.leadCount} lead${c.leadCount === 1 ? "" : "s"}, ${c.wonCount} won (${c.conversionRatePct}%)`)
+      .join("\n");
+    const fallbackText = `${best.name} has the best conversion rate at ${best.conversionRatePct}% ${range.label}.\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
 
@@ -421,33 +470,25 @@ const userLeadCountsTool: RutaTool = {
   // comment. Without it, this quietly falls back to just the asking user's
   // own count rather than refusing outright, same "personal fallback"
   // posture pendingFollowUpsTool already uses.
+  // Backed by the get_user_leads CRM tool (crmTools.ts) - it decides the
+  // broad-grant fallback itself; this run() only formats whichever shape
+  // (self vs company) it comes back with.
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const db = await getDb();
-    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+    const structured = await get_user_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
 
-    if (!broad) {
-      const [row] = await db
-        .select({ n: sql<number>`count(*)::int` })
-        .from(leads)
-        .where(and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)));
-      const n = row?.n ?? 0;
-      return { kind: "text", text: `You have ${n} lead${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
+    if (structured.scope === "self") {
+      const n = structured.totalCount;
+      const fallbackText = `You have ${n} lead${n === 1 ? "" : "s"} ${range.label}.`;
+      return { kind: "text", text: fallbackText, dateRange: range, structured };
     }
 
-    const rows = await db
-      .select({ ownerId: leads.ownerId, ownerName: users.fullName, n: sql<number>`count(*)::int` })
-      .from(leads)
-      .leftJoin(users, eq(leads.ownerId, users.id))
-      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
-      .groupBy(leads.ownerId, users.fullName);
-    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
-    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by teammate.`, dateRange: range };
-    const named = rows.map((r) => ({ label: r.ownerId ? (r.ownerName ?? "Unknown teammate") : "Unassigned", n: Number(r.n) })).sort((a, b) => b.n - a.n);
-    const top = named[0]!;
-    const list = named.slice(0, 8).map((r) => `• ${r.label} — ${r.n}`).join("\n");
-    return { kind: "text", text: `${top.label} has the most with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+    if (structured.totalCount === 0) return { kind: "text", text: `No leads ${range.label} to break down by teammate.`, dateRange: range, structured };
+    const top = structured.users[0]!;
+    const list = structured.users.slice(0, 8).map((r) => `• ${r.name} — ${r.count}`).join("\n");
+    const fallbackText = `${top.name} has the most with ${top.count} lead${top.count === 1 ? "" : "s"} ${range.label} (${structured.totalCount} total).\n\n${list}`;
+    return { kind: "text", text: fallbackText, dateRange: range, structured };
   },
 };
 
@@ -458,43 +499,24 @@ const userLeadCountsTool: RutaTool = {
 // assuming a fixed set of stage keys.
 // ---------------------------------------------------------------------------
 
-async function companyStages(tenantId: string): Promise<StageDef[]> {
-  const db = await getDb();
-  const [row] = await db.select({ industryTemplate: companies.industryTemplate, customTemplateConfig: companies.customTemplateConfig }).from(companies).where(eq(companies.id, tenantId)).limit(1);
-  const template = resolveEffectiveIndustryTemplate(row?.industryTemplate, row?.customTemplateConfig);
-  return template.stages;
-}
-
-async function pipelineBreakdownRows(ctx: RutaToolContext, broad: boolean): Promise<Array<{ pipelineStage: string; n: number }>> {
-  const db = await getDb();
-  const scope = broad ? eq(leads.companyId, ctx.tenantId) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
-  const rows = await db
-    .select({ pipelineStage: leads.pipelineStage, n: sql<number>`count(*)::int` })
-    .from(leads)
-    .where(scope)
-    .groupBy(leads.pipelineStage);
-  return rows.map((r) => ({ pipelineStage: r.pipelineStage, n: Number(r.n) }));
-}
+// companyStages() itself now lives in crmTools.ts (imported above) - shared
+// by get_pipeline_summary, get_campaign_performance's won/conversion
+// calculation, and leadStatusTool below.
 
 const pipelineSummaryTool: RutaTool = {
   name: "pipelineSummary",
-  description: "Full breakdown of leads currently in each pipeline stage (New, Contacted, Qualified, ...) - a live snapshot, not scoped to a date range.",
+  description: "get_pipeline_summary - full breakdown of leads currently in each pipeline stage (New, Contacted, Qualified, ...) - a live snapshot, not scoped to a date range.",
   parameters: { type: "object", properties: {} },
+  // Backed by the get_pipeline_summary CRM tool (crmTools.ts) - it decides
+  // the broad-grant fallback (personal vs company-wide) itself.
   async run(ctx) {
-    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
-    const [stages, rows] = await Promise.all([companyStages(ctx.tenantId), pipelineBreakdownRows(ctx, broad)]);
-    const byKey = new Map(rows.map((r) => [r.pipelineStage, r.n]));
-    const total = rows.reduce((sum, r) => sum + r.n, 0);
-    if (total === 0) return { kind: "text", text: broad ? "No leads in the pipeline yet." : "You have no leads in the pipeline yet." };
-    // Known stages first, in the company's own template order, then any
-    // stray stage value present on a row but absent from the current
-    // template (e.g. left over from a since-changed custom template).
-    const known = new Set(stages.map((s) => s.key));
-    const lines = [
-      ...stages.map((s) => `• ${s.label} — ${byKey.get(s.key) ?? 0}`),
-      ...rows.filter((r) => !known.has(r.pipelineStage)).map((r) => `• ${r.pipelineStage} — ${r.n}`),
-    ];
-    return { kind: "text", text: `${total} lead${total === 1 ? "" : "s"} in the pipeline${broad ? "" : " (yours)"}:\n${lines.join("\n")}` };
+    const structured = await get_pipeline_summary({ tenantId: ctx.tenantId, userId: ctx.userId });
+    if (structured.totalCount === 0) {
+      return { kind: "text", text: structured.scope === "company" ? "No leads in the pipeline yet." : "You have no leads in the pipeline yet.", structured };
+    }
+    const lines = structured.stages.map((s) => `• ${s.label} — ${s.count}`);
+    const fallbackText = `${structured.totalCount} lead${structured.totalCount === 1 ? "" : "s"} in the pipeline${structured.scope === "company" ? "" : " (yours)"}:\n${lines.join("\n")}`;
+    return { kind: "text", text: fallbackText, structured };
   },
 };
 
@@ -537,6 +559,7 @@ export const RUTA_TOOLS: RutaTool[] = [
   myLeadsTodayTool,
   leadCountTool,
   campaignLeadCountsTool,
+  campaignPerformanceTool,
   sourceLeadCountsTool,
   userLeadCountsTool,
   pendingFollowUpsTool,
@@ -637,6 +660,13 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   // "lead" here - a natural follow-up like "Which campaign gave the most?"
   // (see the spec's own conversational example) never says "lead" at all,
   // relying entirely on the conversation's anchor/drill-down context.
+  // Performance/conversion - checked BEFORE the bare campaign-breakdown
+  // rule right below, since "campaign performance" / "conversion rate by
+  // campaign" would otherwise also satisfy that rule's bare "campaign"
+  // trigger. Deliberately does not require the word "campaign" either - a
+  // bare "what's our conversion rate" is naturally answered as a
+  // per-campaign breakdown here, the CRM-native metric this tool reports.
+  if (/\b(performance|conversion)/i.test(t)) return { name: "campaignPerformance", arguments: { query: t } };
   if (/\bcampaign/i.test(t)) return { name: "campaignLeadCounts", arguments: { query: t } };
   if (/\bsource/i.test(t)) return { name: "sourceLeadCounts", arguments: { query: t } };
   if (/\b(team|teammate|salesperson|by (user|owner|agent))\b/i.test(t)) return { name: "userLeadCounts", arguments: { query: t } };
