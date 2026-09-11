@@ -57,6 +57,8 @@ import {
   get_team_performance,
   get_trend,
 } from "./analyticsTools";
+import { getInsightById } from "../insights/insightStore";
+import { DEFAULT_PREFERENCES, getPreferences, updatePreferences } from "../insights/notificationPreferences";
 
 export type { DateRange } from "./rutaDateRange";
 // Re-exported for backward compatibility - hasBroadGrant now LIVES in
@@ -84,6 +86,13 @@ export interface RutaToolContext {
    * orchestrator (rutaAiAssistant.ts), and never trusted blindly - a tool
    * still prefers a date range parsed from its own text first. */
   defaultDateRange?: DateRange;
+  /** RUTA Insight/Alert Engine (Phase E) - the most recent INSIGHT actually
+   * DELIVERED to this user (userWhatsappLinks.lastInsightId), when still
+   * within its own reference window - see rutaAiAssistant.ts's own comment
+   * on why this is checked against a separate, longer expiry than
+   * pendingQueryContext's 3-minute TTL. Consulted ONLY by explainLastInsightTool
+   * below, for a bare "Why?" follow-up to a proactive alert. */
+  lastInsightId?: string;
 }
 
 export interface PendingOption {
@@ -208,7 +217,7 @@ const helpTool: RutaTool = {
     return {
       kind: "text",
       text:
-        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n• "what\'s the lead trend this week"\n• "compare campaigns" / "compare sources" this week vs last\n• "overall conversion rate this month"\n• "team performance this week"\n• "any unusual days this month"\n• "why did leads decrease this week"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
+        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n• "what\'s the lead trend this week"\n• "compare campaigns" / "compare sources" this week vs last\n• "overall conversion rate this month"\n• "team performance this week"\n• "any unusual days this month"\n• "why did leads decrease this week"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.\n\nI\'ll also proactively message you about things worth knowing (uncontacted leads piling up, overdue follow-ups, a campaign underperforming, ...) - just reply "why?" on one of those to get the details. Send "mute alerts", "unmute alerts", or "alert settings" any time to control that.',
     };
   },
 };
@@ -733,6 +742,82 @@ const leadStatusTool: RutaTool = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// RUTA Insight/Alert Engine (Phase E) - the "Why?" follow-up to a proactive
+// alert, plus WhatsApp-native notification preference commands ("mute
+// alerts" / "unmute alerts" / "alert settings"). See
+// src/application/insights/ for the detection/queueing/delivery pipeline
+// that produces the insight this tool explains - the LLM's ONLY role
+// anywhere in that pipeline is PHRASING the metrics payload below (see
+// insightRules.ts's own header comment); it never recomputes anything.
+// ---------------------------------------------------------------------------
+
+const explainLastInsightTool: RutaTool = {
+  name: "explainLastInsight",
+  description: "The user is asking 'Why?' (or 'why is that', 'explain', 'what happened') right after receiving a proactive RUTA alert, and wants the underlying metrics behind it explained.",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    if (!ctx.lastInsightId) {
+      return { kind: "text", text: "I don't have a recent alert to explain — ask me something specific, or I'll flag you the next time something needs attention." };
+    }
+    const insight = await getInsightById(ctx.tenantId, ctx.lastInsightId);
+    if (!insight) {
+      return { kind: "text", text: "I don't have a recent alert to explain — ask me something specific, or I'll flag you the next time something needs attention." };
+    }
+    // fallbackText is the alert's own deterministic text (never LLM-written
+    // - see this section's header) - a perfectly good "explanation" on its
+    // own when no AI provider is configured; `structured` hands the LLM the
+    // full metrics payload to phrase further, same "Structured Result ->
+    // LLM" pattern as every analytics tool.
+    const structured = { tool: "explainLastInsight", kind: insight.kind, severity: insight.severity, title: insight.title, message: insight.message, metrics: insight.metrics, detectedAt: insight.detectedAt.toISOString() };
+    return { kind: "text", text: insight.message, structured };
+  },
+};
+
+function formatMinuteOfDay(minute: number): string {
+  const h = Math.floor(minute / 60) % 24;
+  const m = minute % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+const muteAlertsTool: RutaTool = {
+  name: "muteAlerts",
+  description: "The user wants to stop receiving proactive RUTA alerts (mute/disable/turn off/stop alerts or notifications).",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    await updatePreferences(ctx.tenantId, ctx.userId, { enabled: false });
+    return { kind: "text", text: "🔕 RUTA alerts are now muted. Send \"unmute alerts\" any time to turn them back on." };
+  },
+};
+
+const unmuteAlertsTool: RutaTool = {
+  name: "unmuteAlerts",
+  description: "The user wants to resume receiving proactive RUTA alerts (unmute/enable/turn on/resume alerts or notifications).",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    await updatePreferences(ctx.tenantId, ctx.userId, { enabled: true });
+    return { kind: "text", text: "🔔 RUTA alerts are back on." };
+  },
+};
+
+const alertSettingsTool: RutaTool = {
+  name: "alertSettings",
+  description: "The user is asking about their current RUTA alert/notification settings (whether alerts are on, how many per day, quiet hours).",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    const prefs = await getPreferences(ctx.tenantId, ctx.userId);
+    const statusLine = prefs.enabled ? "🔔 Alerts are ON." : "🔕 Alerts are MUTED.";
+    const capLine = `Up to ${prefs.maxPerDay} alert${prefs.maxPerDay === 1 ? "" : "s"} per day.`;
+    const quietLine =
+      prefs.quietHoursStartMinute !== null && prefs.quietHoursEndMinute !== null
+        ? `Quiet hours: ${formatMinuteOfDay(prefs.quietHoursStartMinute)}–${formatMinuteOfDay(prefs.quietHoursEndMinute)} (alerts due in this window are held until it ends).`
+        : "No quiet hours configured.";
+    const isDefault = prefs === DEFAULT_PREFERENCES;
+    const footer = isDefault ? "\n\n(These are the default settings — nothing has been customized yet.)" : "";
+    return { kind: "text", text: `${statusLine}\n${capLine}\n${quietLine}${footer}` };
+  },
+};
+
 /**
  * Single source of truth for what RUTA can do - both the fast pattern
  * matcher (matchPattern below) and every AI provider's function-calling
@@ -762,6 +847,11 @@ export const RUTA_TOOLS: RutaTool[] = [
   teamPerformanceTool,
   anomaliesTool,
   explainChangeTool,
+  // RUTA Insight/Alert Engine (Phase E) - see that section's own header.
+  explainLastInsightTool,
+  muteAlertsTool,
+  unmuteAlertsTool,
+  alertSettingsTool,
 ];
 
 export function rutaToolSchemas(): AiToolSchema[] {
@@ -843,6 +933,13 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   if (!t) return null;
   if (/^help$/i.test(t)) return { name: "help", arguments: {} };
 
+  // RUTA Insight/Alert Engine (Phase E) - notification preference commands,
+  // checked early since "alert" doesn't otherwise collide with any rule
+  // below.
+  if (/\b(mute|silence|stop|disable|turn off)\b/i.test(t) && /\b(alert|notification)/i.test(t)) return { name: "muteAlerts", arguments: {} };
+  if (/\b(unmute|resume|enable|turn on)\b/i.test(t) && /\b(alert|notification)/i.test(t)) return { name: "unmuteAlerts", arguments: {} };
+  if (/\b(alert|notification)/i.test(t) && /\b(setting|preference|status)/i.test(t)) return { name: "alertSettings", arguments: {} };
+
   const updateMatch = UPDATE_ON_RE.exec(t);
   if (updateMatch && updateMatch[1]) return { name: "updateOnX", arguments: { query: updateMatch[1].trim() } };
 
@@ -863,6 +960,12 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   // first among the analytics rules since "why...lead...this week" would
   // otherwise satisfy several of the narrower rules below it too.
   if (/\bwhy\b/i.test(t) && /\blead/i.test(t)) return { name: "explainChange", arguments: { query: t } };
+  // RUTA Insight/Alert Engine (Phase E) - a bare "Why?" (or "why is that",
+  // "why did this happen", ...) with no mention of "lead" is the follow-up
+  // to a proactive alert, not a leads-trend question - checked right after
+  // explainChange's own "why" + "lead" rule above so the two can never
+  // collide (this only ever fires when that one's "lead" condition failed).
+  if (/\bwhy\b/i.test(t)) return { name: "explainLastInsight", arguments: {} };
   if (/\btrend(ing)?\b/i.test(t)) return { name: "trend", arguments: { query: t } };
   if (/\b(anomaly|anomalies|unusual|weird)\b/i.test(t) && /\blead/i.test(t)) return { name: "anomalies", arguments: { query: t } };
   // "team performance" - checked before campaignPerformance's bare

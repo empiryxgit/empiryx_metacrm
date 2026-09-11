@@ -267,6 +267,13 @@
       "when": 1789300000000,
       "tag": "0037_ruta_analytics_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789400000000,
+      "tag": "0038_ruta_insight_alert_engine",
+      "breakpoints": true
     }
   ]
 }

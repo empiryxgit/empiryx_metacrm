@@ -140,3 +140,86 @@ export async function ensureReconciliationSchedule({ cron }: ScheduleReconciliat
   });
   return created.scheduleId;
 }
+
+// ---------------------------------------------------------------------------
+// RUTA Insight/Alert Engine (Phase E) - see src/application/insights/ for the
+// full pipeline. Two new QStash primitives, following the exact conventions
+// already established above:
+//   - ensureInsightScanSchedule: ONE global schedule (like
+//     ensureReconciliationSchedule), not one-per-tenant - the scan endpoint
+//     itself loops over every eligible tenant internally (see
+//     insightScanService.ts's own header comment for why, and
+//     src/application/reconcile.ts's header for the precedent this mirrors).
+//   - publishInsightNotification: DOES fan out one publish per notification
+//     (like publishLeadReceived/publishWhatsappMessageReceived above) -
+//     each recipient's delivery gets its own independent QStash retry/
+//     backoff and dead-letter target.
+// ---------------------------------------------------------------------------
+
+export interface ScheduleInsightScanInput {
+  cron: string; // e.g. "*/30 * * * *" - every 30 minutes
+}
+
+/** Idempotent: creates the recurring insight-scan schedule if it does not
+ * already exist. Run once via `npm run setup:schedules` (see
+ * scripts/setup-schedules.ts), not on every request - mirrors
+ * ensureReconciliationSchedule exactly. */
+export async function ensureInsightScanSchedule({ cron }: ScheduleInsightScanInput): Promise<string> {
+  const client = getClient();
+  const destination = `${getBaseUrl()}/api/internal/insights-scan`;
+
+  const existing = await client.schedules.list();
+  const already = existing.find((s) => s.destination === destination);
+  if (already) {
+    return already.scheduleId;
+  }
+
+  const created = await client.schedules.create({
+    destination,
+    cron,
+    retries: 3,
+  });
+  return created.scheduleId;
+}
+
+export interface PublishInsightNotificationInput {
+  queueId: string; // crm.ruta_notification_queue.id
+  tenantId: string;
+}
+
+// Discriminator handleDeadLetter (api/internal/handler.ts) switches on to
+// mark the right row on exhausted retries - same "kind" convention as
+// publishTenantLeadReceived/publishWhatsappMessageReceived's bodies above.
+const RUTA_NOTIFICATION_KIND = "ruta_notification" as const;
+
+export interface PublishInsightNotificationOpts {
+  // Unix seconds - QStash holds the message undelivered until this instant,
+  // the mechanism notificationQueue.ts uses to honor quiet hours without any
+  // polling/sweep endpoint of its own. Omit to deliver as soon as possible.
+  notBefore?: number;
+}
+
+/**
+ * Publishes the "go attempt this queued notification's delivery" message.
+ * Same retries/failureCallback shape as publishLeadReceived - once QStash's
+ * own retries (3, deliberately fewer than the 5 used for lead processing:
+ * a stale alert delivered a day late after 5 backoff attempts is worse than
+ * one that fails cleanly and gets marked so) are exhausted, the failure
+ * callback (api/internal/handler.ts's handleDeadLetter, extended with a
+ * "ruta_notification" kind) marks the corresponding queue row
+ * status='failed', failure_reason='exhausted_retries'.
+ */
+export async function publishInsightNotification(input: PublishInsightNotificationInput, opts: PublishInsightNotificationOpts = {}): Promise<string> {
+  const client = getClient();
+  const result = await client.publishJSON({
+    url: `${getBaseUrl()}/api/internal/notify-deliver`,
+    body: { kind: RUTA_NOTIFICATION_KIND, ...input },
+    retries: 3,
+    notBefore: opts.notBefore,
+    failureCallback: `${getBaseUrl()}/api/internal/dead-letter`,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  return result.messageId;
+}

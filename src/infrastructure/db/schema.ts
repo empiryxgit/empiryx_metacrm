@@ -1501,6 +1501,26 @@ export const userWhatsappLinks = crm.table(
     pendingQueryContext: jsonb("pending_query_context"),
     pendingQueryContextExpiresAt: timestamp("pending_query_context_expires_at", { withTimezone: true }),
     linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
+    // Insight/Alert Engine additions (Phase E) - see
+    // src/application/insights/ for the full pipeline.
+    //
+    // Stamped on every inbound message this user sends the bot
+    // (rutaAiAssistant.ts's handleOneMessage) - the notification delivery
+    // worker (notificationDelivery.ts) reads this to know whether a
+    // PROACTIVE alert is still inside Meta's 24-hour customer-service
+    // window (free-form text allowed) or would need a pre-approved message
+    // template (not yet provisioned - see that file's own comment).
+    lastInboundMessageAt: timestamp("last_inbound_message_at", { withTimezone: true }),
+    // The most recent insight actually DELIVERED to this user, so a bare
+    // "Why?" reply can retrieve and explain it (rutaTools.ts's
+    // explainLastInsight tool) without recomputing anything - it reads
+    // ruta_insights.metrics, already computed at detection time.
+    // Deliberately a SEPARATE field from pendingQueryContext above (a
+    // 3-minute TTL, disambiguation-only) - an alert can sit unread for
+    // hours before someone asks "why?", so this is checked against its own
+    // longer expiry (see rutaAiAssistant.ts's INSIGHT_REFERENCE_TTL_HOURS).
+    lastInsightId: uuid("last_insight_id").references((): AnyPgColumn => rutaInsights.id, { onDelete: "set null" }),
+    lastInsightAt: timestamp("last_insight_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),
   },
@@ -1509,6 +1529,117 @@ export const userWhatsappLinks = crm.table(
     // per tenant - the identity guarantee the whole feature depends on.
     tenantPhoneIdx: uniqueIndex("ux_user_whatsapp_links_tenant_phone").on(t.tenantId, t.phoneNumber),
     tenantUserIdx: uniqueIndex("ux_user_whatsapp_links_tenant_user").on(t.tenantId, t.userId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// RUTA Insight/Alert Engine (Phase E) - a backend detection engine,
+// separate from any LLM, that scans each tenant's own data on a schedule
+// for operationally meaningful events and pushes a proactive WhatsApp
+// alert to eligible teammates. Full pipeline:
+//   Scheduled Job/Event -> Tenant-scoped Analytics -> Rules/Detection ->
+//   Insight Record (rutaInsights below) -> Notification Queue
+//   (rutaNotificationQueue below) -> WhatsApp
+// See src/application/insights/ for every stage's implementation.
+// ---------------------------------------------------------------------------
+
+/** One row per DETECTED event. The (tenantId, dedupeKey) unique index is
+ * the idempotency mechanism for DETECTION itself - see insightStore.ts's
+ * use of onConflictDoNothing keyed by this index; the same rule re-firing
+ * for the same tenant/entity/period (the scan runs every 30 minutes while
+ * a condition remains true) inserts nothing new. */
+export const rutaInsights = crm.table(
+  "ruta_insights",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    // InsightKind (src/domain/insightRules.ts) - not a DB enum, same
+    // convention as every other status/kind column in this schema.
+    kind: text("kind").notNull(),
+    severity: text("severity").notNull().default("warning"), // "info" | "warning" | "critical"
+    dedupeKey: text("dedupe_key").notNull(),
+    title: text("title").notNull(),
+    // The deterministic "⚠️ RUTA Alert\n..." text sent to WhatsApp - never
+    // LLM-generated (see insightRules.ts's file header: the LLM is used
+    // ONLY to answer a follow-up "Why?", never to compose the alert
+    // itself).
+    message: text("message").notNull(),
+    // Structured backing data for the "Why?" follow-up (rutaTools.ts's
+    // explainLastInsight) to hand to composeReply - the SAME "Structured
+    // Result -> LLM" pattern as every analytics tool, so the LLM only ever
+    // phrases an explanation of numbers already computed here.
+    metrics: jsonb("metrics").notNull().default(sql`'{}'::jsonb`),
+    windowStart: timestamp("window_start", { withTimezone: true }),
+    windowEnd: timestamp("window_end", { withTimezone: true }),
+    detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    tenantDedupeIdx: uniqueIndex("ux_ruta_insights_tenant_dedupe").on(t.tenantId, t.dedupeKey),
+    tenantDetectedAtIdx: index("ix_ruta_insights_tenant_detected_at").on(t.tenantId, t.detectedAt),
+  }),
+);
+
+/** Per (tenant, user) notification settings. A MISSING row means "use the
+ * defaults" (see notificationPreferences.ts's DEFAULT_PREFERENCES) - a row
+ * only exists once a user has actually changed something (muted, adjusted
+ * quiet hours, ...) via a WhatsApp command (rutaTools.ts), so most
+ * tenants never need one. */
+export const rutaNotificationPreferences = crm.table(
+  "ruta_notification_preferences",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true), // master on/off ("mute alerts")
+    maxPerDay: integer("max_per_day").notNull().default(5), // frequency control
+    // Quiet hours, in minutes since local midnight (company timezone) -
+    // both null means no quiet hours configured. A window that wraps
+    // midnight (start > end, e.g. 22:00-08:00) is valid and handled by
+    // notificationPreferences.ts's isWithinQuietHours.
+    quietHoursStartMinute: integer("quiet_hours_start_minute"),
+    quietHoursEndMinute: integer("quiet_hours_end_minute"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantUserIdx: uniqueIndex("ux_ruta_notification_preferences_tenant_user").on(t.tenantId, t.userId),
+  }),
+);
+
+/** One row per (insight, recipient) delivery attempt - the "Notification
+ * Queue" pipeline stage. The (tenantId, idempotencyKey) unique index
+ * (idempotencyKey = "<insightId>:<userId>") is what prevents ever
+ * double-notifying the same user for the same insight, even if the scan or
+ * the QStash delivery message is redelivered - see notificationQueue.ts /
+ * notificationDelivery.ts. */
+export const rutaNotificationQueue = crm.table(
+  "ruta_notification_queue",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    insightId: uuid("insight_id").notNull().references(() => rutaInsights.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    // "pending" | "sending" | "sent" | "failed" | "skipped_muted" |
+    // "skipped_frequency_cap" - not a DB enum, same convention as every
+    // other status column in this schema. Quiet hours are handled by
+    // DELAYING delivery (scheduledFor + QStash's own notBefore), never a
+    // "skipped_quiet_hours" terminal state - a quiet-hours alert still
+    // arrives, just later.
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    failureReason: text("failure_reason"),
+    qstashMessageId: text("qstash_message_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantIdempotencyIdx: uniqueIndex("ux_ruta_notification_queue_tenant_idempotency").on(t.tenantId, t.idempotencyKey),
+    statusScheduledForIdx: index("ix_ruta_notification_queue_status_scheduled_for").on(t.status, t.scheduledFor),
   }),
 );
 

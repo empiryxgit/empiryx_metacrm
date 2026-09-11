@@ -43,6 +43,12 @@ vi.mock("./src/infrastructure/queue/qstash", () => ({
     return `mock-msg-${publishedMessages.length}`;
   }),
   ensureReconciliationSchedule: vi.fn(async () => "mock-schedule-id"),
+  // RUTA Insight/Alert Engine (Phase E) - mirrors the mocks above exactly.
+  publishInsightNotification: vi.fn(async (input: { queueId: string; tenantId: string }, opts: { notBefore?: number } = {}) => {
+    publishedMessages.push({ kind: "ruta_notification", ...input, notBefore: opts.notBefore });
+    return `mock-msg-${publishedMessages.length}`;
+  }),
+  ensureInsightScanSchedule: vi.fn(async () => "mock-schedule-id"),
 }));
 
 vi.mock("./src/infrastructure/cache/redis", () => ({

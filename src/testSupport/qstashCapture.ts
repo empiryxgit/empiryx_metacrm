@@ -34,7 +34,16 @@ export interface CapturedWhatsappPublish {
   tenantId: string;
 }
 
-export type CapturedPublish = CapturedLegacyPublish | CapturedTenantPublish | CapturedWhatsappPublish;
+// RUTA Insight/Alert Engine (Phase E) - mirrors CapturedTenantPublish for
+// src/infrastructure/queue/qstash.ts's publishInsightNotification.
+export interface CapturedRutaNotificationPublish {
+  kind: "ruta_notification";
+  queueId: string;
+  tenantId: string;
+  notBefore?: number;
+}
+
+export type CapturedPublish = CapturedLegacyPublish | CapturedTenantPublish | CapturedWhatsappPublish | CapturedRutaNotificationPublish;
 
 export const publishedMessages: CapturedPublish[] = [];
 

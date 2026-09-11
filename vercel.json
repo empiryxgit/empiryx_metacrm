@@ -55,6 +55,8 @@
     { "source": "/api/internal/process-lead", "destination": "/api/internal/handler?action=process-lead" },
     { "source": "/api/internal/reconciliation", "destination": "/api/internal/handler?action=reconciliation" },
     { "source": "/api/internal/dead-letter", "destination": "/api/internal/handler?action=dead-letter" },
+    { "source": "/api/internal/insights-scan", "destination": "/api/internal/handler?action=insights-scan" },
+    { "source": "/api/internal/notify-deliver", "destination": "/api/internal/handler?action=notify-deliver" },
 
     { "source": "/api/leads", "destination": "/api/leads/handler" },
     { "source": "/api/leads/:leadId/stage", "destination": "/api/leads/handler?leadId=:leadId&sub=stage" },
@@ -148,6 +150,10 @@
     {
       "path": "/api/internal/reconciliation",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/internal/insights-scan",
+      "schedule": "0 4 * * *"
     }
   ]
 }

@@ -123,3 +123,27 @@ describe("matchPattern - analytics tools (Phase D)", () => {
     expect(matchPattern("overall conversion rate by campaign")).toEqual({ name: "campaignPerformance", arguments: { query: "overall conversion rate by campaign" } });
   });
 });
+
+describe("matchPattern - RUTA Insight/Alert Engine (Phase E)", () => {
+  it("a bare 'why' with no 'lead' routes to explainLastInsight, distinct from explainChange's 'why' + 'lead' rule", () => {
+    expect(matchPattern("Why?")).toEqual({ name: "explainLastInsight", arguments: {} });
+    expect(matchPattern("why is that")).toEqual({ name: "explainLastInsight", arguments: {} });
+    expect(matchPattern("why did this happen")).toEqual({ name: "explainLastInsight", arguments: {} });
+    // Still routes to explainChange when "lead" is present, unchanged.
+    expect(matchPattern("why did leads drop")).toEqual({ name: "explainChange", arguments: { query: "why did leads drop" } });
+  });
+
+  it("mute/unmute alert commands", () => {
+    expect(matchPattern("mute alerts")).toEqual({ name: "muteAlerts", arguments: {} });
+    expect(matchPattern("stop notifications")).toEqual({ name: "muteAlerts", arguments: {} });
+    expect(matchPattern("turn off alerts")).toEqual({ name: "muteAlerts", arguments: {} });
+    expect(matchPattern("unmute alerts")).toEqual({ name: "unmuteAlerts", arguments: {} });
+    expect(matchPattern("turn on notifications")).toEqual({ name: "unmuteAlerts", arguments: {} });
+    expect(matchPattern("resume alerts")).toEqual({ name: "unmuteAlerts", arguments: {} });
+  });
+
+  it("alert settings status", () => {
+    expect(matchPattern("alert settings")).toEqual({ name: "alertSettings", arguments: {} });
+    expect(matchPattern("notification preferences")).toEqual({ name: "alertSettings", arguments: {} });
+  });
+});

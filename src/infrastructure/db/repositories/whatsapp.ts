@@ -527,7 +527,7 @@ export async function insertWhatsappLead(input: InsertWhatsappLeadInput): Promis
 // caller of everything below.
 
 import { desc, gt, isNull } from "drizzle-orm";
-import { roles, userWhatsappLinks, users, whatsappLinkCodes } from "../schema";
+import { companies, roles, userWhatsappLinks, users, whatsappLinkCodes } from "../schema";
 
 const LINK_CODE_TTL_MINUTES = 10;
 const LINK_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I - avoids misread-over-WhatsApp codes
@@ -694,4 +694,99 @@ export async function getUserRoleAndPermissions(tenantId: string, userId: string
     .limit(1);
   if (!row) return null;
   return { fullName: row.fullName, permissions: (row.permissions as string[] | null) ?? [] };
+}
+
+// ---- RUTA Insight/Alert Engine (Phase E) -----------------------------------
+// See src/application/insights/ for the full pipeline this supports. This
+// repository stays permission-AGNOSTIC on purpose (same layering every other
+// function in this file already follows: getUserRoleAndPermissions returns
+// raw permissions, hasBroadGrant in crmTools.ts is what actually interprets
+// them) - listRutaAlertCandidates below returns every active, WhatsApp-linked
+// user's raw permissions array; the caller (notificationQueue.ts) is what
+// decides which of them hold PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY. This
+// keeps src/domain/permissions.ts out of the infrastructure/db/repositories
+// layer entirely, matching every other file in this directory.
+
+export interface RutaAlertCandidate {
+  userId: string;
+  phoneNumber: string;
+  permissions: string[];
+}
+
+/** Every active user in the tenant who has BOTH a linked WhatsApp number
+ * (userWhatsappLinks) AND a role - i.e. every technically-reachable
+ * recipient for a proactive alert, before the caller narrows this down by
+ * permission (PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY) and by notification
+ * preferences (notificationPreferences.ts). */
+export async function listRutaAlertCandidates(tenantId: string): Promise<RutaAlertCandidate[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ userId: users.id, phoneNumber: userWhatsappLinks.phoneNumber, permissions: roles.permissions })
+    .from(userWhatsappLinks)
+    .innerJoin(users, eq(userWhatsappLinks.userId, users.id))
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(users.companyId, tenantId), eq(users.status, "active")));
+  return rows.map((r) => ({ userId: r.userId, phoneNumber: r.phoneNumber, permissions: (r.permissions as string[] | null) ?? [] }));
+}
+
+/** Stamped on every inbound message a linked user sends the bot
+ * (rutaAiAssistant.ts's handleOneMessage) - see userWhatsappLinks.
+ * lastInboundMessageAt's own schema comment for why this exists
+ * (notificationDelivery.ts's 24-hour customer-service-window check). A
+ * no-op if this phone isn't actually a linked user's (defensive only - the
+ * caller only reaches this after a successful link lookup). */
+export async function touchLastInboundMessage(tenantId: string, userId: string): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(userWhatsappLinks)
+    .set({ lastInboundMessageAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
+}
+
+/** Records the most recently DELIVERED insight for this user, so a later
+ * bare "Why?" can retrieve it (rutaTools.ts's explainLastInsight) - called
+ * by notificationDelivery.ts only after a genuinely successful WhatsApp
+ * send, never on a skipped/failed attempt. */
+export async function setLastInsight(tenantId: string, userId: string, insightId: string): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(userWhatsappLinks)
+    .set({ lastInsightId: insightId, lastInsightAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
+}
+
+/** Tenant-scoped lookup used by rutaAiAssistant.ts to populate
+ * RutaToolContext.lastInsightId for the "Why?" follow-up, and by
+ * notificationDelivery.ts's own eligibility checks. */
+export async function getUserWhatsappLinkLastInsight(tenantId: string, userId: string): Promise<{ lastInsightId: string | null; lastInsightAt: Date | null } | null> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ lastInsightId: userWhatsappLinks.lastInsightId, lastInsightAt: userWhatsappLinks.lastInsightAt })
+    .from(userWhatsappLinks)
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export interface InsightScanTenant {
+  tenantId: string;
+  timezone: string;
+}
+
+/** Every active company with at least one WhatsApp-linked user - insight
+ * detection/notification for a tenant with nobody to alert would be pure
+ * wasted work, so this is the eligibility list insightScanService.ts's
+ * runInsightScan loops over (one global QStash schedule internally looping
+ * per tenant - same "one sweep, not one schedule per tenant" pattern
+ * reconcile.ts's own header comment establishes for reconciliation).
+ * DISTINCT because a tenant can have many linked users - this returns one
+ * row per tenant, not one per link. */
+export async function listInsightScanTenants(): Promise<InsightScanTenant[]> {
+  const db = await getDb();
+  const rows = await db
+    .selectDistinct({ tenantId: companies.id, timezone: companies.timezone })
+    .from(companies)
+    .innerJoin(userWhatsappLinks, eq(userWhatsappLinks.tenantId, companies.id))
+    .where(eq(companies.status, "active"));
+  return rows;
 }

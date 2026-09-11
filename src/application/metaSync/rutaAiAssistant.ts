@@ -116,7 +116,7 @@
 // automated tests proving user/tenant/role/session isolation, concurrent
 // conversations, and webhook duplicate/retry handling.
 
-import { getUserWhatsappLinkByPhone, clearPendingQueryContext, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, setPendingQueryContext } from "../../infrastructure/db/repositories/whatsapp";
+import { getUserWhatsappLinkByPhone, clearPendingQueryContext, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, setPendingQueryContext, touchLastInboundMessage } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
 import { getDb } from "../../infrastructure/db/client";
 import { companies } from "../../infrastructure/db/schema";
@@ -181,6 +181,19 @@ const USER_RATE_WINDOW_SECONDS = 60;
 const TENANT_RATE_LIMIT = 120; // messages, aggregate ceiling across all of a tenant's users
 const TENANT_RATE_WINDOW_SECONDS = 60;
 
+// RUTA Insight/Alert Engine (Phase E) - how long a delivered insight stays
+// available for a bare "Why?" follow-up (userWhatsappLinks.lastInsightId/
+// lastInsightAt - see that column's own schema comment). Deliberately far
+// longer than pendingQueryContext's 3-minute TTL: an alert can sit unread
+// for hours before someone gets to it.
+const INSIGHT_REFERENCE_TTL_HOURS = 48;
+
+function resolveLastInsightId(link: RutaAssistantLink): string | undefined {
+  if (!link.lastInsightId || !link.lastInsightAt) return undefined;
+  const ageMs = Date.now() - link.lastInsightAt.getTime();
+  return ageMs <= INSIGHT_REFERENCE_TTL_HOURS * 60 * 60 * 1000 ? link.lastInsightId : undefined;
+}
+
 async function isRateLimited(tenantId: string, userId: string): Promise<boolean> {
   const [userOk, tenantOk] = await Promise.all([
     checkRateLimit(`ruta:user:${tenantId}:${userId}`, USER_RATE_LIMIT, USER_RATE_WINDOW_SECONDS),
@@ -216,6 +229,19 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   const link = await getUserWhatsappLinkByPhone(msg.tenantId, msg.fromPhoneNumber);
   if (!link) return; // Defensive no-op - the router should never send an unlinked number here.
 
+  // RUTA Insight/Alert Engine (Phase E) - stamps this message as proof the
+  // recipient is currently inside Meta's 24h customer-service window, so a
+  // later PROACTIVE alert (notificationDelivery.ts) knows a free-form send
+  // is still safe. Best-effort: a failure here must never block the reply
+  // pipeline below - a stale lastInboundMessageAt only ever makes a future
+  // alert delivery fail closed (see that file's own comment), it can't
+  // corrupt anything.
+  try {
+    await touchLastInboundMessage(msg.tenantId, link.userId);
+  } catch (err) {
+    rutaLog.error("touch_last_inbound_failed", { tenantId: msg.tenantId, userId: link.userId, error: err instanceof Error ? err.message : String(err) });
+  }
+
   if (await isRateLimited(msg.tenantId, link.userId)) {
     rutaLog.warn("rate_limited", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId });
     return;
@@ -248,7 +274,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     const picked = resolvePendingSelection(text, pending);
     if (picked) {
       await clearPendingQueryContext(msg.tenantId, link.userId);
-      const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone };
+      const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone, lastInsightId: resolveLastInsightId(link) };
       const replyText = await runResolvedPick(toolCtx, picked.kind, picked.id);
       await sendReply(sendCtx, msg, link, "resolvedPick", replyText);
       return;
@@ -261,6 +287,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     userId: link.userId,
     timezone: sendCtx.timezone,
     defaultDateRange: anchor ? decodeAnchorRange(anchor.range) : undefined,
+    lastInsightId: resolveLastInsightId(link),
   };
 
   // Classification - fast pattern matcher first, AI provider only on a
