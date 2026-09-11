@@ -1,44 +1,75 @@
-// RUTA AI Assistant - a WhatsApp interface where RUTA's OWN users
-// (salespeople/admins) talk to RUTA about their authorized CRM/business
-// data ("How many leads did we get today?", "update on Rohan Shah").
-// Natural language only - no slash commands. Never customer/lead-facing:
-// no message here is ever sent to a lead, and this never touches the
-// lead-capture pipeline. Full design: claude/whatsapp-internal-query-bot-flow.md
-// (CRM Automation project) - this file supersedes the earlier
-// "Link WhatsApp" / whatsappQueryBot.ts naming; behavior is the same
-// engine, rebranded and extended.
+// RUTA AI Assistant - the AI orchestration layer for RUTA's OWN users
+// (salespeople/admins) talking to RUTA about their authorized CRM/business
+// data over WhatsApp ("How many leads did we get today?", "update on Rohan
+// Shah"). Natural language only - no slash commands. Never customer/lead-
+// facing: no message here is ever sent to a lead, and this never touches
+// the lead-capture pipeline. Full design: claude/whatsapp-internal-query-
+// bot-flow.md (CRM Automation project).
 //
-// Entry point: handleRutaAssistantMessages, called from api/webhooks/meta/
-// handler.ts AFTER the webhook has already ack'd Meta (same post-ack timing
-// as enqueueCapturedWhatsappEvents) for every message
-// metaWhatsappEventService.ts's captureWhatsappEvents routed here instead of
-// the lead-capture pipeline - mandatory and admin-provisioned from a
-// user's profile phone number (see api/admin/users/handler.ts), so
-// "routed here" simply means the sender is a verified active user.
+// This file is the ORCHESTRATOR - it owns the pipeline every inbound
+// message goes through, end to end, and delegates each stage to its own
+// module rather than inlining everything:
+//   1. WhatsApp -> RUTA user mapping + tenant identification - resolved
+//      upstream, before this file is even reached (see
+//      metaWhatsappEventService.ts's isRutaAssistantMessage /
+//      getUserWhatsappLinkByPhone) - by the time handleOneMessage runs, the
+//      sender is already a verified linked user of a known tenant.
+//   2. Rate limiting - src/infrastructure/cache/redis.ts's checkRateLimit,
+//      applied per-user AND per-tenant before anything else runs.
+//   3. Conversation/session management - the numbered-list disambiguation
+//      state on userWhatsappLinks.pendingQueryContext (3-minute TTL),
+//      scoped per (tenantId, userId) so two users' in-flight
+//      conversations can never collide (see rutaTools.ts's
+//      PendingQueryContext doc comment).
+//   4. Classification - fast-tier regex pattern matching, then (only on a
+//      miss) the AI provider abstraction (src/infrastructure/ai/
+//      provider.ts) as a fallback. Both draw from the SAME tool schema
+//      (src/application/metaSync/rutaTools.ts's RUTA_TOOLS).
+//   5. Authorization - each tool in rutaTools.ts enforces its own scoping
+//      rule (see hasBroadGrant's own comment there); this file never
+//      second-guesses or bypasses it.
+//   6. Tool execution - rutaTools.ts's RutaTool.run(), real Drizzle query
+//      results only.
+//   7. Reply - sendWhatsappTextMessage (already retried internally, see
+//      graphClient.ts's fetchWithRetryJson), wrapped here so a send
+//      failure is logged, never thrown back at the caller.
+//   8. Error handling + structured logging - every stage above reports
+//      through rutaLog (src/infrastructure/observability/rutaLogger.ts);
+//      a failure at any stage degrades to a safe, logged, user-visible
+//      "something went wrong" reply rather than a silent drop or an
+//      unhandled throw.
 //
-// The model boundary (worth stating plainly, since it's the whole point of
-// keeping answers trustworthy): the optional Azure OpenAI fallback (used
-// ONLY when the fast pattern matcher below finds no match) is sent nothing
-// but that one message's raw text, and can only return one of a fixed set
-// of function calls + a plain search string - never a query, never an
-// answer. Every actual answer is assembled here, in this file, from real
-// Drizzle query results. See classifyWithAzureOpenAI's own comment.
+// Concurrency: nothing in this file (or any module it depends on) holds
+// per-user or per-request state in a module-level variable. Every request
+// is fully parameterized by the RutaAssistantInboundMessage/RutaToolContext
+// passed through the call chain; the only durable state is in Postgres
+// (userWhatsappLinks.pendingQueryContext, keyed by tenantId+userId) and
+// Redis (rate-limit counters, keyed the same way) - so two concurrent
+// invocations handling two different users' messages (even in the same
+// warm Node process) can never read or write each other's state. See
+// src/infrastructure/ai/provider.ts's own comment on why its one cached
+// value (the provider's immutable config) is safe to share regardless.
 
-import { and, desc, eq, gte, ilike, isNotNull, lt, lte } from "drizzle-orm";
-import { getDb } from "../../infrastructure/db/client";
-import { companies, leadFollowUps, leads, users } from "../../infrastructure/db/schema";
-import {
-  clearPendingQueryContext,
-  getSelectedMetaWhatsappAccount,
-  getUserRoleAndPermissions,
-  getUserWhatsappLinkByPhone,
-  getUserWhatsappLinkByUserId,
-  setPendingQueryContext,
-} from "../../infrastructure/db/repositories/whatsapp";
+import { getUserWhatsappLinkByPhone, clearPendingQueryContext, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, setPendingQueryContext } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
+import { getDb } from "../../infrastructure/db/client";
+import { companies } from "../../infrastructure/db/schema";
+import { eq } from "drizzle-orm";
 import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
-import { getEnv } from "../../infrastructure/env";
-import { PERMISSIONS } from "../../domain/permissions";
+import { checkRateLimit } from "../../infrastructure/cache/redis";
+import { rutaLog } from "../../infrastructure/observability/rutaLogger";
+import { getAiProvider } from "../../infrastructure/ai/provider";
+import {
+  rutaToolSchemas,
+  getRutaTool,
+  matchPattern,
+  resolveLeadPick,
+  resolveTeammatePick,
+  type PendingOption,
+  type PendingQueryContext,
+  type RutaToolContext,
+  type RutaToolResult,
+} from "./rutaTools";
 
 export interface RutaAssistantInboundMessage {
   tenantId: string;
@@ -49,14 +80,9 @@ export interface RutaAssistantInboundMessage {
 
 type RutaAssistantLink = NonNullable<Awaited<ReturnType<typeof getUserWhatsappLinkByPhone>>>;
 
-type Intent = "help" | "followUpsToday" | "myLeadsToday" | "leadsToday" | "pendingFollowUps" | "updateOnX";
-
-interface IntentCall {
-  intent: Intent;
-  query?: string; // only set for updateOnX
-}
-
-// ---- Entry point ------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Entry point.
+// ---------------------------------------------------------------------------
 
 /** Never throws - one bad message must never block the rest of the batch
  * (same "log and move on" contract as enqueueCapturedWhatsappEvents). */
@@ -65,153 +91,152 @@ export async function handleRutaAssistantMessages(messages: RutaAssistantInbound
     try {
       await handleOneMessage(msg);
     } catch (err) {
-      console.error(`[ruta-ai-assistant] Failed to handle message ${msg.waMessageId}:`, err);
+      rutaLog.error("message_failed_unhandled", { tenantId: msg.tenantId, waMessageId: msg.waMessageId, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Rate limiting - applied before ANY other work (including the DB lookup
+// for the WhatsApp link) so a flood of messages from one user or one tenant
+// can't run up AI provider spend or hammer the database. Fixed-window,
+// fail-open on a Redis outage (checkRateLimit's own posture) - a degraded
+// rate limiter is preferable to RUTA going fully unresponsive tenant-wide
+// because Redis is down. A rate-limited message is silently dropped (logged
+// only, no reply) rather than answered with a "slow down" message every
+// time - replying to every throttled message would itself become the flood.
+// ---------------------------------------------------------------------------
+
+const USER_RATE_LIMIT = 20; // messages
+const USER_RATE_WINDOW_SECONDS = 60;
+const TENANT_RATE_LIMIT = 120; // messages, aggregate ceiling across all of a tenant's users
+const TENANT_RATE_WINDOW_SECONDS = 60;
+
+async function isRateLimited(tenantId: string, userId: string): Promise<boolean> {
+  const [userOk, tenantOk] = await Promise.all([
+    checkRateLimit(`ruta:user:${tenantId}:${userId}`, USER_RATE_LIMIT, USER_RATE_WINDOW_SECONDS),
+    checkRateLimit(`ruta:tenant:${tenantId}`, TENANT_RATE_LIMIT, TENANT_RATE_WINDOW_SECONDS),
+  ]);
+  return !userOk || !tenantOk;
+}
+
+// ---------------------------------------------------------------------------
+// Per-message pipeline.
+// ---------------------------------------------------------------------------
 
 async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void> {
   const text = (msg.messageText ?? "").trim();
 
-  // No LINK/UNLINK commands - RUTA AI Assistant is mandatory and
-  // provisioned automatically from the user's profile phone number (see
-  // api/admin/users/handler.ts), so a sender is either already a verified
-  // active user or this message never reaches this function at all (see
-  // metaWhatsappEventService.ts's isRutaAssistantMessage router check).
+  // WhatsApp -> RUTA user mapping. No LINK/UNLINK commands - RUTA AI
+  // Assistant is mandatory and provisioned automatically from the user's
+  // profile phone number (see api/admin/users/handler.ts), so a sender is
+  // either already a verified active user or this message never reaches
+  // this function at all (see metaWhatsappEventService.ts's
+  // isRutaAssistantMessage router check).
   const link = await getUserWhatsappLinkByPhone(msg.tenantId, msg.fromPhoneNumber);
   if (!link) return; // Defensive no-op - the router should never send an unlinked number here.
 
-  const sendCtx = await getSendContext(msg.tenantId);
-  if (!sendCtx) {
-    console.error(`[ruta-ai-assistant] No sendable WhatsApp account for tenant ${msg.tenantId}; cannot reply.`);
+  if (await isRateLimited(msg.tenantId, link.userId)) {
+    rutaLog.warn("rate_limited", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId });
     return;
   }
 
-  // Numbered-list disambiguation from a PRIOR message in this same user's
-  // thread - resolved before any fresh intent parsing.
+  const sendCtx = await getSendContext(msg.tenantId);
+  if (!sendCtx) {
+    rutaLog.error("no_send_context", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId });
+    return;
+  }
+
+  const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone };
+
+  // Session/conversation management - a numbered-list pick from a PRIOR
+  // message in this same user's thread, resolved before any fresh intent
+  // classification. Scoped per (tenantId, userId) by the column's own
+  // lookup key - see rutaTools.ts's PendingQueryContext doc comment for why
+  // this can never leak between concurrent users.
   if (link.pendingQueryContext && link.pendingQueryContextExpiresAt && link.pendingQueryContextExpiresAt.getTime() > Date.now()) {
-    const pick = resolvePendingSelection(text, link.pendingQueryContext as PendingQueryContext);
-    if (pick) {
+    const picked = resolvePendingSelection(text, link.pendingQueryContext as PendingQueryContext);
+    if (picked) {
       await clearPendingQueryContext(msg.tenantId, link.userId);
-      return runIntentAndReply(pick, msg, link, sendCtx);
+      const replyText = await runResolvedPick(toolCtx, picked.kind, picked.id);
+      await sendReply(sendCtx, msg, link, "resolvedPick", replyText);
+      return;
     }
   }
 
-  const patternCall = matchPattern(text);
-  if (patternCall) return runIntentAndReply(patternCall, msg, link, sendCtx);
+  // Classification - fast pattern matcher first, AI provider only on a
+  // miss. Both draw from the same RUTA_TOOLS schema (rutaTools.ts).
+  const call = matchPattern(text) ?? (await classifyWithAiProvider(text, msg));
+  if (!call) {
+    await sendReply(
+      sendCtx,
+      msg,
+      link,
+      "unmatched",
+      'Didn\'t catch that — try asking things like "how many leads did we get today", "follow-ups today", "update on <name>", or send HELP for the full list.',
+    );
+    return;
+  }
 
-  const classified = await classifyWithAzureOpenAI(text);
-  if (classified) return runIntentAndReply(classified, msg, link, sendCtx);
+  const tool = getRutaTool(call.name);
+  if (!tool) {
+    // A provider naming something outside the fixed set is already
+    // filtered out in provider.ts, but this file never trusts that alone -
+    // re-validated here too before anything runs.
+    rutaLog.error("unknown_tool", { tenantId: msg.tenantId, userId: link.userId, tool: call.name });
+    await sendReply(sendCtx, msg, link, "unmatched", "Didn't catch that — send HELP for a list of things I can answer.");
+    return;
+  }
 
-  await reply(
-    sendCtx,
-    msg.fromPhoneNumber,
-    'Didn\'t catch that — try asking things like "how many leads did we get today", "follow-ups today", "update on <name>", or send HELP for the full list.',
-  );
-}
-
-// ---- Pattern matching (fast tier, no external call) -------------------------
-
-const UPDATE_ON_RE = /^(?:update (?:on|for|about)|status (?:of|on)|what'?s (?:the )?update (?:on|for))\s+(.+)$/i;
-
-function matchPattern(text: string): IntentCall | null {
-  const t = text.trim();
-  if (!t) return null;
-  if (/^help$/i.test(t)) return { intent: "help" };
-
-  const updateMatch = UPDATE_ON_RE.exec(t);
-  if (updateMatch && updateMatch[1]) return { intent: "updateOnX", query: updateMatch[1].trim() };
-
-  // "my leads today" (personal) is checked BEFORE the generic company-wide
-  // "leads today" rule below, since it's the more specific match.
-  if (/\bmy leads?\b/i.test(t) && /\btoday\b/i.test(t)) return { intent: "myLeadsToday" };
-  if (/\bleads?\b/i.test(t) && /\btoday\b/i.test(t) && !/\bmy\b/i.test(t)) return { intent: "leadsToday" };
-  if (/\bpending\b/i.test(t) && /follow[\s-]?ups?/i.test(t)) return { intent: "pendingFollowUps" };
-  if (/follow[\s-]?ups?/i.test(t) && /\btoday\b/i.test(t) && /(how many|count|number of)/i.test(t)) return { intent: "followUpsToday" };
-  // Loose fallbacks for short, common phrasings the specific rules above miss.
-  if (/^follow[\s-]?ups?\s*today$/i.test(t)) return { intent: "followUpsToday" };
-  if (/^pending$/i.test(t)) return { intent: "pendingFollowUps" };
-
-  return null;
-}
-
-// ---- Azure OpenAI fallback (feature-flagged, function-calling only) --------
-//
-// Only reached when matchPattern finds nothing. Sends ONLY the raw message
-// text - no database content, no other user's data, nothing from prior
-// messages. Uses function-calling against a FIXED function schema; the
-// model can select one of these (or none) and, for updateOnX, extract
-// a plain search string - it cannot invent a function, emit SQL, or return
-// free text as the answer. If AZURE_OPENAI_ENDPOINT/API_KEY/DEPLOYMENT_NAME
-// are not set, this returns null immediately (no error) - matchPattern-only
-// is a fully working v1 on its own.
-const AZURE_FUNCTIONS = [
-  { name: "followUpsToday", description: "How many follow-ups the asking user logged today.", parameters: { type: "object", properties: {} } },
-  { name: "myLeadsToday", description: "Leads newly assigned to or created for the asking user today.", parameters: { type: "object", properties: {} } },
-  { name: "leadsToday", description: "Total number of leads the company received today, company-wide - not just the asking user's own.", parameters: { type: "object", properties: {} } },
-  { name: "pendingFollowUps", description: "Leads with a follow-up due today or overdue.", parameters: { type: "object", properties: {} } },
-  {
-    name: "updateOnX",
-    description: "Status/update on a specific lead or teammate, identified by name or phone number.",
-    parameters: { type: "object", properties: { query: { type: "string", description: "The name or phone number asked about." } }, required: ["query"] },
-  },
-  { name: "help", description: "The user is asking what RUTA AI Assistant can do.", parameters: { type: "object", properties: {} } },
-] as const;
-
-async function classifyWithAzureOpenAI(text: string): Promise<IntentCall | null> {
-  const endpoint = getEnv("AZURE_OPENAI_ENDPOINT");
-  const apiKey = getEnv("AZURE_OPENAI_API_KEY");
-  const deployment = getEnv("AZURE_OPENAI_DEPLOYMENT_NAME");
-  if (!endpoint || !apiKey || !deployment) return null; // Not provisioned yet - graceful no-op, never an error.
-
+  let result: RutaToolResult;
   try {
-    const url = `${endpoint.replace(/\/$/, "")}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=2024-06-01`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "api-key": apiKey },
-        signal: controller.signal,
-        body: JSON.stringify({
-          messages: [
-            { role: "system", content: "Classify the user's WhatsApp message into exactly one of the provided functions. If none fit, do not call any function." },
-            { role: "user", content: text },
-          ],
-          tools: AZURE_FUNCTIONS.map((f) => ({ type: "function", function: f })),
-          tool_choice: "auto",
-          temperature: 0,
-          max_tokens: 200,
-        }),
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!response.ok) {
-      console.error(`[ruta-ai-assistant] Azure OpenAI classification failed: ${response.status}`);
-      return null;
-    }
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
-    };
-    const call = data.choices?.[0]?.message?.tool_calls?.[0]?.function;
-    if (!call?.name) return null;
-    const name = AZURE_FUNCTIONS.find((f) => f.name === call.name)?.name;
-    if (!name) return null; // Model named something outside the fixed set - ignored, not trusted.
-    if (name === "updateOnX") {
-      const args = call.arguments ? (JSON.parse(call.arguments) as { query?: string }) : {};
-      if (!args.query || typeof args.query !== "string") return null;
-      return { intent: "updateOnX", query: args.query.trim() };
-    }
-    return { intent: name };
+    result = await tool.run(toolCtx, { query: typeof call.arguments.query === "string" ? call.arguments.query : undefined });
   } catch (err) {
-    console.error("[ruta-ai-assistant] Azure OpenAI classification error:", err);
-    return null; // Fails closed to "didn't catch that" - never blocks the reply.
+    // Error handling: a tool failure (a DB error, a bad query) must never
+    // leave the user with silence - log the real error, reply with a safe
+    // generic message.
+    rutaLog.error("tool_failed", { tenantId: msg.tenantId, userId: link.userId, tool: tool.name, error: err instanceof Error ? err.message : String(err) });
+    await sendReply(sendCtx, msg, link, tool.name, "Something went wrong looking that up - please try again in a moment.");
+    return;
   }
+
+  if (result.kind === "disambiguate") {
+    await setPendingQueryContext(msg.tenantId, link.userId, { options: result.options } satisfies PendingQueryContext);
+  }
+  await sendReply(sendCtx, msg, link, tool.name, result.text);
 }
 
-// ---- Query handlers (the only place answers are actually assembled) -------
+async function runResolvedPick(ctx: RutaToolContext, kind: "lead" | "teammate", id: string): Promise<string> {
+  return kind === "lead" ? resolveLeadPick(ctx, id) : resolveTeammatePick(ctx, id);
+}
+
+function resolvePendingSelection(text: string, ctx: PendingQueryContext): PendingOption | null {
+  const n = Number(text.trim());
+  if (!Number.isInteger(n) || n < 1 || n > ctx.options.length) return null;
+  return ctx.options[n - 1] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// AI provider fallback - only reached when matchPattern finds nothing.
+// Sends ONLY the raw message text and the fixed tool schema - see
+// AiProvider's own doc comment in infrastructure/ai/provider.ts for the
+// full boundary. Retried internally by the provider implementation itself
+// (infrastructure/ai/retry.ts); never retried again here.
+// ---------------------------------------------------------------------------
+
+async function classifyWithAiProvider(text: string, msg: RutaAssistantInboundMessage): Promise<{ name: string; arguments: Record<string, unknown> } | null> {
+  const provider = getAiProvider();
+  if (!provider) return null; // Not provisioned - graceful no-op, pattern matching alone is a fully working v1.
+  const startedAt = Date.now();
+  const call = await provider.classify(text, rutaToolSchemas());
+  rutaLog.info("ai_classify", { tenantId: msg.tenantId, waMessageId: msg.waMessageId, provider: provider.name, matched: Boolean(call), tool: call?.name, durationMs: Date.now() - startedAt });
+  return call;
+}
+
+// ---------------------------------------------------------------------------
+// Send context + reply - unchanged from the original implementation, just
+// wrapped with structured logging on the way out.
+// ---------------------------------------------------------------------------
 
 interface SendContext {
   phoneNumberId: string;
@@ -237,6 +262,18 @@ async function reply(ctx: SendContext, to: string, body: string): Promise<void> 
   }
 }
 
+/** Every outbound reply funnels through here so it's logged consistently,
+ * regardless of which stage produced it (a resolved pick, a matched tool, a
+ * fallback "didn't catch that"). */
+async function sendReply(ctx: SendContext, msg: RutaAssistantInboundMessage, link: RutaAssistantLink, intent: string, text: string): Promise<void> {
+  rutaLog.info("reply_sent", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId, intent });
+  await reply(ctx, msg.fromPhoneNumber, text);
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding welcome message - unchanged from before this refactor.
+// ---------------------------------------------------------------------------
+
 /**
  * Sent once, right after a company FINISHES onboarding - the very first
  * message a brand-new user gets from RUTA. RUTA AI Assistant itself is
@@ -261,7 +298,7 @@ export async function sendOnboardingWelcomeMessage(tenantId: string, userId: str
     if (!link) return;
     const ctx = await getSendContext(tenantId);
     if (!ctx) {
-      console.error(`[ruta-ai-assistant] No sendable WhatsApp account for tenant ${tenantId}; cannot send onboarding welcome message.`);
+      rutaLog.error("welcome_no_send_context", { tenantId, userId });
       return;
     }
     await reply(
@@ -280,258 +317,9 @@ export async function sendOnboardingWelcomeMessage(tenantId: string, userId: str
         "• Invite your team so everyone can ask RUTA too\n\n" +
         "Send HELP any time to see this again.",
     );
+    rutaLog.info("welcome_sent", { tenantId, userId });
   } catch (err) {
-    console.error(`[ruta-ai-assistant] Failed to send onboarding welcome message to user ${userId} (tenant ${tenantId}):`, err);
+    rutaLog.error("welcome_failed", { tenantId, userId, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
-/** "Today" resolved in the COMPANY's own timezone (companies.timezone),
- * never server UTC or the sender's device time - same source every other
- * date in the app already uses. */
-function todayRangeInTimezone(timezone: string): { start: Date; end: Date } {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  const wallMs = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
-  const offsetMs = wallMs - now.getTime(); // how far ahead of UTC this timezone currently is
-  const midnightAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), 0, 0, 0, 0);
-  const start = new Date(midnightAsUtc - offsetMs);
-  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
-}
-
-async function runIntentAndReply(call: IntentCall, msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext): Promise<void> {
-  switch (call.intent) {
-    case "help":
-      return reply(
-        ctx,
-        msg.fromPhoneNumber,
-        'I can answer things like:\n• "how many leads did we get today"\n• "follow-ups today"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"',
-      );
-    case "followUpsToday":
-      return handleFollowUpsToday(msg, link, ctx);
-    case "myLeadsToday":
-      return handleMyLeadsToday(msg, link, ctx);
-    case "leadsToday":
-      return handleLeadsToday(msg, ctx);
-    case "pendingFollowUps":
-      return handlePendingFollowUps(msg, link, ctx);
-    case "updateOnX":
-      return handleUpdateOnX(msg, link, ctx, call.query ?? "");
-  }
-}
-
-async function hasBroadGrant(tenantId: string, userId: string): Promise<boolean> {
-  const info = await getUserRoleAndPermissions(tenantId, userId);
-  return info?.permissions.includes(PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY) ?? false;
-}
-
-async function handleFollowUpsToday(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext): Promise<void> {
-  const { start, end } = todayRangeInTimezone(ctx.timezone);
-  const db = await getDb();
-  const rows = await db
-    .select({ id: leadFollowUps.id })
-    .from(leadFollowUps)
-    .where(and(eq(leadFollowUps.companyId, msg.tenantId), eq(leadFollowUps.createdBy, link.userId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
-  await reply(ctx, msg.fromPhoneNumber, rows.length === 1 ? "You logged 1 follow-up today." : `You logged ${rows.length} follow-ups today.`);
-}
-
-async function handleMyLeadsToday(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext): Promise<void> {
-  const { start, end } = todayRangeInTimezone(ctx.timezone);
-  const db = await getDb();
-  const rows = await db
-    .select({ fullName: leads.fullName, phoneNumber: leads.phoneNumber })
-    .from(leads)
-    .where(and(eq(leads.companyId, msg.tenantId), eq(leads.ownerId, link.userId), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end)))
-    .orderBy(desc(leads.metaCreatedAt))
-    .limit(10);
-  if (rows.length === 0) {
-    await reply(ctx, msg.fromPhoneNumber, "No leads assigned to you today.");
-    return;
-  }
-  const list = rows.map((r) => `• ${r.fullName ?? "Unnamed"}${r.phoneNumber ? ` — ${r.phoneNumber}` : ""}`).join("\n");
-  await reply(ctx, msg.fromPhoneNumber, `${rows.length} lead${rows.length === 1 ? "" : "s"} today:\n${list}`);
-}
-
-/** Company-wide COUNT ONLY (no names/phone numbers) - the exact "How many
- * leads did we get today?" -> "You received 87 leads today." example.
- * Deliberately ungated (no broad-query permission check): an aggregate
- * number carries no per-lead PII, unlike the detail lists in
- * handlePendingFollowUps/replyTeammateUpdate, which DO require the grant. */
-async function handleLeadsToday(msg: RutaAssistantInboundMessage, ctx: SendContext): Promise<void> {
-  const { start, end } = todayRangeInTimezone(ctx.timezone);
-  const db = await getDb();
-  const rows = await db
-    .select({ id: leads.id })
-    .from(leads)
-    .where(and(eq(leads.companyId, msg.tenantId), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end)));
-  await reply(ctx, msg.fromPhoneNumber, rows.length === 1 ? "You received 1 lead today." : `You received ${rows.length} leads today.`);
-}
-
-async function handlePendingFollowUps(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext): Promise<void> {
-  const broad = await hasBroadGrant(msg.tenantId, link.userId);
-  const db = await getDb();
-  const scope = broad
-    ? eq(leads.companyId, msg.tenantId)
-    : and(eq(leads.companyId, msg.tenantId), eq(leads.ownerId, link.userId));
-  const rows = await db
-    .select({ fullName: leads.fullName, phoneNumber: leads.phoneNumber, nextFollowUpAt: leads.nextFollowUpAt })
-    .from(leads)
-    .where(and(scope, isNotNull(leads.nextFollowUpAt), lte(leads.nextFollowUpAt, new Date())))
-    .orderBy(leads.nextFollowUpAt)
-    .limit(10);
-  if (rows.length === 0) {
-    await reply(ctx, msg.fromPhoneNumber, broad ? "No pending follow-ups company-wide." : "No pending follow-ups for you.");
-    return;
-  }
-  const list = rows.map((r) => `• ${r.fullName ?? "Unnamed"}${r.phoneNumber ? ` — ${r.phoneNumber}` : ""} (due ${r.nextFollowUpAt?.toLocaleDateString("en-IN")})`).join("\n");
-  await reply(ctx, msg.fromPhoneNumber, `${rows.length} pending follow-up${rows.length === 1 ? "" : "s"}${broad ? " (company-wide)" : ""}:\n${list}`);
-}
-
-interface PendingOption {
-  kind: "lead" | "teammate";
-  id: string;
-  label: string;
-}
-interface PendingQueryContext {
-  options: PendingOption[];
-}
-
-function resolvePendingSelection(text: string, ctx: PendingQueryContext): IntentCall | null {
-  const n = Number(text.trim());
-  if (!Number.isInteger(n) || n < 1 || n > ctx.options.length) return null;
-  const picked = ctx.options[n - 1];
-  if (!picked) return null;
-  return { intent: "updateOnX", query: `__resolved__:${picked.kind}:${picked.id}` };
-}
-
-async function handleUpdateOnX(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext, query: string): Promise<void> {
-  const db = await getDb();
-
-  // A resolved numbered-list pick skips straight to fetching that one
-  // record - both branches re-verify authorization themselves (fix for
-  // audit Finding 2c: a resolved LEAD pick previously skipped straight to
-  // replyLeadUpdate with no re-check, asymmetric with the teammate branch,
-  // which always re-checked). Options were scoped correctly at search time,
-  // but the grant could have changed since, or the pick could in principle
-  // be replayed/tampered with - re-checking here costs nothing and closes
-  // that gap the same way the teammate branch already does.
-  const resolved = /^__resolved__:(lead|teammate):(.+)$/.exec(query);
-  if (resolved && resolved[1] && resolved[2]) {
-    const kind = resolved[1];
-    const id = resolved[2];
-    if (kind === "lead") return replyLeadUpdate(msg, link, ctx, id);
-    return replyTeammateUpdate(msg, link, ctx, id);
-  }
-
-  const broad = await hasBroadGrant(msg.tenantId, link.userId);
-  const digitsOnly = query.replace(/[^\d]/g, "");
-  const leadScope = broad ? eq(leads.companyId, msg.tenantId) : and(eq(leads.companyId, msg.tenantId), eq(leads.ownerId, link.userId));
-  const leadMatches = await db
-    .select({ id: leads.id, fullName: leads.fullName, phoneNumber: leads.phoneNumber })
-    .from(leads)
-    .where(and(leadScope, digitsOnly.length >= 6 ? ilike(leads.phoneNumber, `%${digitsOnly}%`) : ilike(leads.fullName, `%${query}%`)))
-    .limit(5);
-
-  // Teammate name search is gated by the SAME broad-query grant as the lead
-  // search above (fix for audit Finding 2b: previously this always searched
-  // every active teammate company-wide regardless of the grant, letting a
-  // user without it enumerate teammate names via the multi-match
-  // disambiguation list even though they could never see their activity).
-  // Self-lookup by name isn't needed here - "my leads today" / "follow-ups
-  // today" already cover that without a broad grant.
-  const teammateMatches = broad
-    ? await db
-        .select({ id: users.id, fullName: users.fullName })
-        .from(users)
-        .where(and(eq(users.companyId, msg.tenantId), eq(users.status, "active"), ilike(users.fullName, `%${query}%`)))
-        .limit(5)
-    : [];
-
-  const options: PendingOption[] = [
-    ...leadMatches.map((l) => ({ kind: "lead" as const, id: l.id, label: `${l.fullName ?? "Unnamed"} — lead${l.phoneNumber ? `, ${l.phoneNumber}` : ""}` })),
-    ...teammateMatches.map((u) => ({ kind: "teammate" as const, id: u.id, label: `${u.fullName} — teammate` })),
-  ];
-
-  if (options.length === 0) {
-    await reply(ctx, msg.fromPhoneNumber, `No lead or teammate found matching "${query}".`);
-    return;
-  }
-  if (options.length === 1) {
-    const only = options[0];
-    if (only) return only.kind === "lead" ? replyLeadUpdate(msg, link, ctx, only.id) : replyTeammateUpdate(msg, link, ctx, only.id);
-  }
-  const numbered = options.map((o, i) => `${i + 1}. ${o.label}`).join("\n");
-  await setPendingQueryContext(msg.tenantId, link.userId, { options } satisfies PendingQueryContext);
-  await reply(ctx, msg.fromPhoneNumber, `Multiple matches — reply with a number:\n${numbered}`);
-}
-
-async function replyLeadUpdate(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext, leadId: string): Promise<void> {
-  const db = await getDb();
-  const [lead] = await db
-    .select({ fullName: leads.fullName, pipelineStage: leads.pipelineStage, nextFollowUpAt: leads.nextFollowUpAt, id: leads.id, ownerId: leads.ownerId })
-    .from(leads)
-    .where(and(eq(leads.id, leadId), eq(leads.companyId, msg.tenantId)))
-    .limit(1);
-  if (!lead) {
-    await reply(ctx, msg.fromPhoneNumber, "That lead is no longer available.");
-    return;
-  }
-  // Own-lead lookup is always allowed; anyone else's lead requires the
-  // broad-query grant - re-checked here (not just at search time) since a
-  // resolved numbered pick skips the search step entirely (audit
-  // Finding 2c, symmetric with replyTeammateUpdate's own check below).
-  if (lead.ownerId !== link.userId) {
-    const broad = await hasBroadGrant(msg.tenantId, link.userId);
-    if (!broad) {
-      await reply(ctx, msg.fromPhoneNumber, "You don't have access to that lead.");
-      return;
-    }
-  }
-  const [lastNote] = await db
-    .select({ remarks: leadFollowUps.remarks, createdAt: leadFollowUps.createdAt })
-    .from(leadFollowUps)
-    .where(eq(leadFollowUps.leadId, lead.id))
-    .orderBy(desc(leadFollowUps.createdAt))
-    .limit(1);
-  const lines = [
-    `${lead.fullName ?? "Unnamed lead"}`,
-    `Stage: ${lead.pipelineStage}`,
-    lead.nextFollowUpAt ? `Next follow-up: ${lead.nextFollowUpAt.toLocaleDateString("en-IN")}` : "No follow-up scheduled",
-    lastNote ? `Last note (${lastNote.createdAt.toLocaleDateString("en-IN")}): ${lastNote.remarks}` : "No follow-up notes yet",
-  ];
-  await reply(ctx, msg.fromPhoneNumber, lines.join("\n"));
-}
-
-async function replyTeammateUpdate(msg: RutaAssistantInboundMessage, link: RutaAssistantLink, ctx: SendContext, teammateUserId: string): Promise<void> {
-  // Self-lookup is always allowed; anyone else's activity requires the
-  // broad-query grant - checked here (not just at search time) since a
-  // resolved numbered pick skips the search step entirely.
-  if (teammateUserId !== link.userId) {
-    const broad = await hasBroadGrant(msg.tenantId, link.userId);
-    if (!broad) {
-      await reply(ctx, msg.fromPhoneNumber, "You don't have access to other teammates' activity.");
-      return;
-    }
-  }
-  const { start, end } = todayRangeInTimezone(ctx.timezone);
-  const db = await getDb();
-  const [teammate] = await db.select({ fullName: users.fullName }).from(users).where(and(eq(users.id, teammateUserId), eq(users.companyId, msg.tenantId))).limit(1);
-  if (!teammate) {
-    await reply(ctx, msg.fromPhoneNumber, "That teammate is no longer available.");
-    return;
-  }
-  const rows = await db
-    .select({ id: leadFollowUps.id })
-    .from(leadFollowUps)
-    .where(and(eq(leadFollowUps.companyId, msg.tenantId), eq(leadFollowUps.createdBy, teammateUserId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
-  await reply(ctx, msg.fromPhoneNumber, `${teammate.fullName} logged ${rows.length} follow-up${rows.length === 1 ? "" : "s"} today.`);
-}
