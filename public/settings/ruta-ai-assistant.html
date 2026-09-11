@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RUTA AI Assistant — RUTA Lead Management System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/assets/app.css" />
+<style>
+  .wa-wrap{ max-width:640px; }
+  .wa-card{ padding:22px; border:1px solid var(--border); border-radius:12px; background:var(--surface); margin-top:16px; }
+  .wa-hint{ font-size:13px; color:var(--text-muted); }
+  .wa-status{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .wa-dot{ width:9px; height:9px; border-radius:50%; background:#b8b0a4; flex:none; }
+  .wa-dot.on{ background:#2fa86b; }
+  .wa-examples{ margin:14px 0 0; padding-left:18px; font-size:13px; color:var(--text-muted); }
+  .wa-examples li{ margin-bottom:4px; }
+</style>
+</head>
+<body>
+  <nav class="topnav" id="topnav"></nav>
+  <div class="wrap wa-wrap">
+    <div class="page-head">
+      <div class="page-head-text">
+        <h1 class="page-title">RUTA AI Assistant</h1>
+        <p class="page-sub">Every RUTA user gets this automatically — ask about your own leads and follow-ups from WhatsApp, in plain language, no commands. This never messages leads; it only talks to you.</p>
+      </div>
+    </div>
+    <div id="banner"></div>
+
+    <div class="wa-card">
+      <div class="wa-status"><span class="wa-dot" id="statusDot"></span><span id="statusText">Checking…</span></div>
+      <p class="wa-hint" id="statusHint"></p>
+      <ul class="wa-examples">
+        <li>"how many leads did we get today"</li>
+        <li>"follow-ups today"</li>
+        <li>"update on &lt;name&gt;"</li>
+        <li>"my leads today"</li>
+        <li>"pending follow-ups"</li>
+      </ul>
+    </div>
+  </div>
+
+<script src="/assets/app.js"></script>
+<script>
+  (async () => {
+    const me = await App.requireAuth();
+    if (!me) return;
+    App.renderNav(me, "/settings/ruta-ai-assistant.html");
+
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const statusHint = document.getElementById("statusHint");
+    const banner = document.getElementById("banner");
+
+    function showError(err) {
+      banner.innerHTML = `<div class="state-block"><p class="state-title">${(err && err.message) || "Something went wrong."}</p></div>`;
+    }
+
+    try {
+      const res = await fetch("/api/settings/ruta-ai-status");
+      if (res.status === 401) { window.location.href = "/login.html"; return; }
+      const data = await res.json();
+      if (!res.ok) { showError(new Error(data.error)); return; }
+      statusDot.classList.toggle("on", data.active);
+      if (data.active) {
+        statusText.textContent = `Active — ${data.phoneNumber}`;
+        statusHint.textContent = "Just message that number on WhatsApp to start asking RUTA questions.";
+      } else {
+        statusText.textContent = "Not active yet";
+        statusHint.textContent = "No WhatsApp number is on file for your account. Ask an admin to add one from Users → your profile.";
+      }
+    } catch (err) { showError(err); }
+  })();
+</script>
+</body>
+</html>

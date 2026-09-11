@@ -2,7 +2,6 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 import { getDb } from "../client";
 import { companies, roles, sessions, users } from "../schema";
 import { firstOrThrow } from "../util";
-import { ALL_PERMISSIONS } from "../../../domain/permissions";
 import {
   AGENCY_ROLE_DESCRIPTIONS,
   AGENCY_ROLE_NAMES,
@@ -10,6 +9,7 @@ import {
   CLIENT_ROLE_DESCRIPTIONS,
   CLIENT_ROLE_NAMES,
   CLIENT_ROLE_PERMISSIONS,
+  fullAccessPermissionsForRoleName,
   type AgencyRoleName,
   type ClientRoleName,
 } from "../../../domain/fixedRoles";
@@ -295,7 +295,20 @@ export async function setOnboardingStep(companyId: string, step: OnboardingStep)
 
 // ---- Roles --------------------------------------------------------------
 
-/** Every new company gets one non-editable Owner role holding every permission. */
+/**
+ * Every new company gets one non-editable Owner role holding every
+ * permission EXCEPT the ones deliberately opt-in-only (see
+ * fullAccessPermissionsForRoleName / BASE_ALL_PERMISSIONS in fixedRoles.ts -
+ * currently just RUTA_AI_ASSISTANT_BROAD_QUERY; AGENCY_CLIENTS_VIEW_ALL is
+ * meaningless for a plain Owner anyway). Previously seeded literal
+ * ALL_PERMISSIONS, unfiltered - that was audit Finding 2a: it silently
+ * granted RUTA_AI_ASSISTANT_BROAD_QUERY to every Owner despite that
+ * permission's own "opt-in, never inherited" contract. Using
+ * fullAccessPermissionsForRoleName("Owner") here keeps the stored snapshot
+ * consistent with what effectivePermissions() (src/application/auth.ts)
+ * already recomputes live at token-issue time for this role name, instead
+ * of the two silently diverging.
+ */
 export async function createOwnerRole(companyId: string) {
   const db = await getDb();
   const rows = await db
@@ -304,7 +317,7 @@ export async function createOwnerRole(companyId: string) {
       companyId,
       name: "Owner",
       description: "Full access to every area of the account. Cannot be edited or deleted.",
-      permissions: ALL_PERMISSIONS,
+      permissions: fullAccessPermissionsForRoleName("Owner"),
       isSystem: true,
     })
     .returning();

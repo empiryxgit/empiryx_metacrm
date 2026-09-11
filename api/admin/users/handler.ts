@@ -19,6 +19,16 @@ import {
   listUsers,
   updateUser,
 } from "../../../src/infrastructure/db/repositories/tenancy";
+// RUTA AI Assistant is mandatory for every user - provisioned automatically
+// (zero-verification, per design) the moment a phone number is on file, and
+// torn down the moment a user is disabled. See rutaAiAssistant.ts's own
+// header comment for the WhatsApp-side half of this.
+import {
+  deleteUserWhatsappLink,
+  getUserWhatsappLinkByPhone,
+  getUserWhatsappLinkByUserId,
+  upsertUserWhatsappLink,
+} from "../../../src/infrastructure/db/repositories/whatsapp";
 import { resolveAgencyClientAccess, assertAgencyAccountType } from "../../../src/application/agencyClientAccess";
 import { getUserAssignedClientIds, setAssignedClients } from "../../../src/infrastructure/db/repositories/agencyClientAssignments";
 import { listClaimedClientOrganizations } from "../../../src/infrastructure/db/repositories/organizations";
@@ -124,18 +134,22 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
     if (!auth) return;
 
-    const { fullName, email, roleId, assignedClientIds } = (req.body ?? {}) as {
+    const { fullName, email, roleId, phoneNumber, assignedClientIds } = (req.body ?? {}) as {
       fullName?: string;
       email?: string;
       roleId?: string;
+      // Required as of the RUTA AI Assistant becoming mandatory for every
+      // user - this is the WhatsApp number the assistant auto-provisions
+      // against once the account is created, no separate linking step.
+      phoneNumber?: string;
       // Assigned Clients, set at creation time - see the PATCH branch
       // below (handleOne) for the full tenant-safety validation this
       // shares; only meaningful (and only validated/applied) for an agency
       // company - silently ignored for any other accountType.
       assignedClientIds?: string[];
     };
-    if (!fullName || !email || !roleId) {
-      res.status(400).json({ error: "fullName, email and roleId are all required." });
+    if (!fullName || !email || !roleId || !phoneNumber) {
+      res.status(400).json({ error: "fullName, email, roleId and phoneNumber are all required." });
       return;
     }
 
@@ -146,6 +160,14 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     }
     if (await emailExists(email)) {
       res.status(409).json({ error: "A user with this email already exists." });
+      return;
+    }
+    // Same tenant-safety spirit as the emailExists check above - a phone
+    // number already bound to a teammate's RUTA AI Assistant must not be
+    // silently reassigned to a second account (WhatsApp replies would then
+    // reach the wrong person with the wrong permissions).
+    if (await getUserWhatsappLinkByPhone(auth.companyId, phoneNumber)) {
+      res.status(409).json({ error: "This WhatsApp number is already linked to another user in your workspace." });
       return;
     }
 
@@ -169,8 +191,14 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
       email,
       passwordHash,
       fullName,
+      phoneNumber,
       mustChangePassword: true,
     });
+    // RUTA AI Assistant activates immediately - no LINK code, no setup
+    // step. The uniqueness pre-check above already ran, so this should
+    // always succeed; if a race lost to it, the user account still exists
+    // and an admin can re-save the number from Edit to retry.
+    await upsertUserWhatsappLink(auth.companyId, user.id, phoneNumber);
 
     // AGENCY_USER_CREATED - only meaningful for an agency company (see
     // agencyAuditLog.ts's header comment: agencyUserId is always the ACTOR,
@@ -243,17 +271,23 @@ async function handleView(req: VercelRequest, res: VercelResponse, userId: strin
   // "does this even apply" signal rather than inferring it from an
   // always-empty array.
   const assignedClientIds = company?.accountType === "agency" ? await getUserAssignedClientIds(userId) : undefined;
+  const rutaAssistantLink = await getUserWhatsappLinkByUserId(auth.companyId, userId);
 
   res.status(200).json({
     user: {
       id: user.id,
       fullName: user.fullName,
       email: user.email,
+      phoneNumber: user.phoneNumber,
       status: user.status,
       lastLoginAt: user.lastLoginAt,
       createdAt: user.createdAt,
       mustChangePassword: user.mustChangePassword,
     },
+    // Mandatory-for-every-user status, surfaced for the admin's own
+    // visibility - true only once a userWhatsappLinks row actually exists
+    // (i.e. a phoneNumber is on file AND the account isn't disabled).
+    rutaAssistantActive: !!rutaAssistantLink,
     role: role ? { id: role.id, name: role.name } : null,
     company: company
       ? {
@@ -293,16 +327,28 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
   }
 
   if (req.method === "PATCH") {
-    const { roleId, status, fullName, assignedClientIds } = (req.body ?? {}) as {
+    const { roleId, status, fullName, phoneNumber, assignedClientIds } = (req.body ?? {}) as {
       roleId?: string;
       status?: string;
       fullName?: string;
+      // Undefined means "leave unchanged". Changing this re-provisions the
+      // RUTA AI Assistant against the new number (see the sync block below
+      // updateUser).
+      phoneNumber?: string;
       // "Assigned Clients" (see agencyClientAssignments.ts) - only honored
       // for an agency company's own users, checked just below. Undefined
       // means "leave assignments unchanged"; an array (even empty) means
       // "replace with exactly this set" - see setAssignedClients.
       assignedClientIds?: string[];
     };
+
+    if (phoneNumber && phoneNumber !== existingTarget.phoneNumber) {
+      const existingLink = await getUserWhatsappLinkByPhone(auth.companyId, phoneNumber);
+      if (existingLink && existingLink.userId !== userId) {
+        res.status(409).json({ error: "This WhatsApp number is already linked to another user in your workspace." });
+        return;
+      }
+    }
 
     if (roleId) {
       const role = await getRoleById(auth.companyId, roleId);
@@ -400,7 +446,49 @@ async function handleOne(req: VercelRequest, res: VercelResponse, userId: string
       roleId,
       status,
       fullName,
+      phoneNumber,
     });
+
+    // Keep the RUTA AI Assistant in sync: disabling a user tears down its
+    // WhatsApp access immediately (a disabled account shouldn't be
+    // answerable via any channel); an active user with a phone number on
+    // file (whether just added, changed, or already present from before)
+    // gets provisioned/re-provisioned against it - covers both the normal
+    // edit case and reactivating a previously-disabled user.
+    //
+    // Neon's HTTP driver (see src/infrastructure/db/client.ts) doesn't give
+    // this a real multi-statement transaction to lean on, so instead: if
+    // this step throws AFTER updateUser above already committed, best-effort
+    // revert the user row to what it was before this request (fix for audit
+    // Finding 5 - previously an unhandled throw here left a user disabled in
+    // the database while still answerable via WhatsApp, with nothing
+    // surfacing the mismatch). Either the whole PATCH succeeds - user row
+    // and WhatsApp link both in the new state - or it fails loudly and the
+    // user row is put back the way it was, never silently split.
+    const effectiveStatus = status ?? existingTarget.status;
+    const effectivePhone = phoneNumber ?? existingTarget.phoneNumber;
+    try {
+      if (effectiveStatus === "disabled") {
+        await deleteUserWhatsappLink(auth.companyId, userId);
+      } else if (effectivePhone) {
+        await upsertUserWhatsappLink(auth.companyId, userId, effectivePhone);
+      }
+    } catch (err) {
+      console.error(`[admin/users] RUTA AI Assistant sync failed for user ${userId} after user row was already updated - reverting user row:`, err);
+      try {
+        await updateUser(auth.companyId, userId, {
+          roleId: existingTarget.roleId,
+          status: existingTarget.status,
+          fullName: existingTarget.fullName,
+          phoneNumber: existingTarget.phoneNumber ?? undefined,
+        });
+      } catch (revertErr) {
+        console.error(`[admin/users] REVERT ALSO FAILED for user ${userId} - user row and WhatsApp assistant access may now be inconsistent. Needs manual review.`, revertErr);
+      }
+      res.status(500).json({ error: "Could not update this user's RUTA AI Assistant access. No changes were saved - please try again." });
+      return;
+    }
+
     res.status(200).json({ updated: true });
     return;
   }

@@ -165,8 +165,8 @@ import { runMetaSync } from "../../../src/application/metaSync/runMetaSync";
 import { getMetaSyncProgress } from "../../../src/infrastructure/cache/redis";
 import { captureLeadgenEvents, enqueueCapturedLeadgenEvents } from "../../../src/application/metaSync/metaLeadEventService";
 import { captureWhatsappEvents, enqueueCapturedWhatsappEvents } from "../../../src/application/metaSync/metaWhatsappEventService";
-import { handleQueryBotMessages } from "../../../src/application/metaSync/whatsappQueryBot";
-import { createWhatsappLinkCode, deleteUserWhatsappLink, getUserWhatsappLinkByUserId } from "../../../src/infrastructure/db/repositories/whatsapp";
+import { handleRutaAssistantMessages } from "../../../src/application/metaSync/rutaAiAssistant";
+import { getUserWhatsappLinkByUserId } from "../../../src/infrastructure/db/repositories/whatsapp";
 import {
   getMetaFormById,
   listFieldMappingsForForm,
@@ -771,11 +771,11 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
     // failure is logged and recovered later by reconcile.ts's own
     // unenqueued-WhatsApp-event sweep.
     await enqueueCapturedWhatsappEvents(waResult.toEnqueue);
-    // Internal WhatsApp Query Bot - same post-ack timing as the lead
-    // pipeline above; these messages never touched whatsapp_message_events
-    // (see captureWhatsappEvents' own branch) so there is nothing to enqueue
+    // RUTA AI Assistant - same post-ack timing as the lead pipeline above;
+    // these messages never touched whatsapp_message_events (see
+    // captureWhatsappEvents' own branch) so there is nothing to enqueue
     // through QStash for them, just the reply to send.
-    await handleQueryBotMessages(waResult.toHandleAsBot);
+    await handleRutaAssistantMessages(waResult.toHandleAsAssistant);
     return;
   }
 
@@ -980,35 +980,22 @@ async function handleMetaFormMapping(req: VercelRequest, res: VercelResponse, me
  * whichever client an agency user happens to be "inside" right now. GET
  * returns current link status; POST generates a fresh one-time code.
  */
-async function handleWhatsappBotLink(req: VercelRequest, res: VercelResponse) {
-  const auth = await requireAuth(req, res);
-  if (!auth) return;
-
-  if (req.method === "GET") {
-    const link = await getUserWhatsappLinkByUserId(auth.companyId, auth.userId);
-    res.status(200).json({
-      linked: !!link,
-      phoneNumber: link ? `••••${link.phoneNumber.slice(-4)}` : null,
-    });
-    return;
-  }
-  if (req.method === "POST") {
-    const { code, expiresAt } = await createWhatsappLinkCode(auth.companyId, auth.userId);
-    res.status(200).json({ code, expiresAt, instructions: `Text "LINK ${code}" to the CRM's WhatsApp number from your own WhatsApp within 10 minutes.` });
-    return;
-  }
-  res.status(405).json({ error: "Method not allowed" });
-}
-
-async function handleWhatsappBotUnlink(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "POST") {
+/** Read-only - RUTA AI Assistant is mandatory and admin-provisioned (see
+ * api/admin/users/handler.ts's phoneNumber handling), so there is no
+ * self-service link/unlink action here anymore, just status for the
+ * logged-in user to see which number it's active on. */
+async function handleRutaAssistantStatus(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
   const auth = await requireAuth(req, res);
   if (!auth) return;
-  const removed = await deleteUserWhatsappLink(auth.companyId, auth.userId);
-  res.status(200).json({ unlinked: removed });
+  const link = await getUserWhatsappLinkByUserId(auth.companyId, auth.userId);
+  res.status(200).json({
+    active: !!link,
+    phoneNumber: link ? `••••${link.phoneNumber.slice(-4)}` : null,
+  });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -1021,8 +1008,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (resource === "sync") return handleSync(req, res);
   if (resource === "sync-status") return handleSyncStatus(req, res);
   if (resource === "webhook-retry") return handleWebhookRetry(req, res);
-  if (resource === "whatsapp-bot-link") return handleWhatsappBotLink(req, res);
-  if (resource === "whatsapp-bot-unlink") return handleWhatsappBotUnlink(req, res);
+  if (resource === "ruta-ai-status") return handleRutaAssistantStatus(req, res);
   // "leadgen" is the Phase 11 canonical name; "page-events" is Phase 7's
   // original name, kept as a permanent alias to the same handler so any
   // subscription Meta already has registered against it keeps working.

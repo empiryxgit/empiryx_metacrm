@@ -48,17 +48,16 @@
 
 import { publishWhatsappMessageReceived } from "../../infrastructure/queue/qstash";
 import { getTenantsBySelectedWhatsappPhoneNumberId, getUserWhatsappLinkByPhone, markWhatsappMessageEventEnqueued, recordWhatsappMessageEvent } from "../../infrastructure/db/repositories/whatsapp";
-import type { QueryBotInboundMessage } from "./whatsappQueryBot";
+import type { RutaAssistantInboundMessage } from "./rutaAiAssistant";
 
-/** A message routes to the Internal WhatsApp Query Bot instead of
- * lead-capture when the sender is already a verified linked RUTA teammate
- * for this tenant, OR the message is itself a LINK/UNLINK command (by
- * definition sent from a number not yet linked, or re-linking). See
- * claude/whatsapp-internal-query-bot-flow.md §2. Checked BEFORE any
- * whatsapp_message_events row is written - a bot-routed message never
- * touches the lead pipeline at all, not even as a durability record. */
-async function isQueryBotMessage(tenantId: string, fromPhoneNumber: string, text: string | null): Promise<boolean> {
-  if (/^link\s+[a-z0-9]{4,8}\s*$/i.test((text ?? "").trim())) return true;
+/** A message routes to the RUTA AI Assistant instead of lead-capture when
+ * the sender is already a verified linked RUTA teammate for this tenant -
+ * mandatory and admin-provisioned from the user's profile phone number
+ * (see api/admin/users/handler.ts), no LINK command involved anymore.
+ * Checked BEFORE any whatsapp_message_events row is written - an
+ * assistant-routed message never touches the lead pipeline at all, not
+ * even as a durability record. */
+async function isRutaAssistantMessage(tenantId: string, fromPhoneNumber: string, _text: string | null): Promise<boolean> {
   const link = await getUserWhatsappLinkByPhone(tenantId, fromPhoneNumber);
   return link !== null;
 }
@@ -112,9 +111,9 @@ export interface CaptureWhatsappEventsResult {
   captured: number;
   skipped: number; // status receipts, non-"messages" change fields, unowned phone numbers, malformed entries, or already-recorded events
   toEnqueue: CapturedWhatsappEvent[];
-  // Internal WhatsApp Query Bot - messages routed here NEVER get a
+  // RUTA AI Assistant - messages routed here NEVER get a
   // whatsapp_message_events row and never reach the lead pipeline at all.
-  toHandleAsBot: QueryBotInboundMessage[];
+  toHandleAsAssistant: RutaAssistantInboundMessage[];
 }
 
 /**
@@ -128,13 +127,13 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
   try {
     payload = JSON.parse(rawBody) as WhatsappWebhookPayload;
   } catch {
-    return { captured: 0, skipped: 0, toEnqueue: [], toHandleAsBot: [] };
+    return { captured: 0, skipped: 0, toEnqueue: [], toHandleAsAssistant: [] };
   }
 
   let captured = 0;
   let skipped = 0;
   const toEnqueue: CapturedWhatsappEvent[] = [];
-  const toHandleAsBot: QueryBotInboundMessage[] = [];
+  const toHandleAsAssistant: RutaAssistantInboundMessage[] = [];
 
   for (const entry of payload.entry ?? []) {
     const wabaId = entry.id ?? null;
@@ -178,16 +177,17 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
         }
 
         for (const tenant of owningTenants) {
-          // Internal WhatsApp Query Bot - check BEFORE any durability write.
-          // A verified linked teammate (or a LINK/UNLINK command) never
+          // RUTA AI Assistant - check BEFORE any durability write. A
+          // verified linked teammate (or a LINK/UNLINK command) never
           // becomes a whatsapp_message_events row and never enters the lead
           // pipeline; it's queued for post-ack handling by
-          // whatsappQueryBot.ts's handleQueryBotMessages instead (same
+          // rutaAiAssistant.ts's handleRutaAssistantMessages instead (same
           // "durable half here, slower half after ack" split the lead path
-          // uses - the bot's own idempotency is a much lighter concern than
-          // lead creation, so no separate durable table is needed for it).
-          if (await isQueryBotMessage(tenant.tenantId, message.from, message.text?.body ?? null)) {
-            toHandleAsBot.push({ tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id, messageText: message.text?.body ?? null });
+          // uses - the assistant's own idempotency is a much lighter
+          // concern than lead creation, so no separate durable table is
+          // needed for it).
+          if (await isRutaAssistantMessage(tenant.tenantId, message.from, message.text?.body ?? null)) {
+            toHandleAsAssistant.push({ tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id, messageText: message.text?.body ?? null });
             continue;
           }
 
@@ -226,7 +226,7 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
     }
   }
 
-  return { captured, skipped, toEnqueue, toHandleAsBot };
+  return { captured, skipped, toEnqueue, toHandleAsAssistant };
 }
 
 /**

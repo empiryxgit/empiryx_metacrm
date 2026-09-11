@@ -26,13 +26,28 @@
 import { ALL_PERMISSIONS, PERMISSIONS, type PermissionCode } from "./permissions";
 
 // Every tier below is built from this, NOT from ALL_PERMISSIONS directly -
-// AGENCY_CLIENTS_VIEW_ALL is an agency-only cross-client visibility flag
-// (see its own comment in permissions.ts), and it must never end up in a
-// CLIENT_* role's stored permissions (meaningless there) or in
-// AGENCY_ADMIN's (see AGENCY_ROLE_PERMISSIONS's own comment on the explicit
-// access rules this catalog implements). It is added back in ONE place
-// only: AGENCY_OWNER, below.
-const BASE_ALL_PERMISSIONS: PermissionCode[] = ALL_PERMISSIONS.filter((p) => p !== PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL);
+// two permission codes are deliberately excluded from every auto-seeded
+// role and must be added back explicitly wherever they actually apply:
+//   - AGENCY_CLIENTS_VIEW_ALL is an agency-only cross-client visibility flag
+//     (see its own comment in permissions.ts), and it must never end up in a
+//     CLIENT_* role's stored permissions (meaningless there) or in
+//     AGENCY_ADMIN's (see AGENCY_ROLE_PERMISSIONS's own comment on the
+//     explicit access rules this catalog implements). It is added back in
+//     ONE place only: AGENCY_OWNER, below.
+//   - RUTA_AI_ASSISTANT_BROAD_QUERY is documented (permissions.ts) as
+//     "deliberately off by default for every role, including Owner...
+//     opt-in, never inherited" - it must NEVER be added back onto any
+//     auto-seeded system role, full-access tiers included. (Fix for audit
+//     Finding 2a: this permission was previously falling through into
+//     BASE_ALL_PERMISSIONS unfiltered, so every Owner/AGENCY_OWNER/
+//     AGENCY_ADMIN/CLIENT_OWNER/CLIENT_ADMIN role silently got it despite
+//     the documented "opt-in only" intent above. See
+//     drizzle/0036_fix_ruta_broad_query_permission_seeding.sql for the
+//     one-time cleanup of already-seeded system roles this code fix alone
+//     cannot reach.)
+const BASE_ALL_PERMISSIONS: PermissionCode[] = ALL_PERMISSIONS.filter(
+  (p) => p !== PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL && p !== PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY,
+);
 
 const OWNER_TIER: PermissionCode[] = BASE_ALL_PERMISSIONS;
 // Everything Owner has except company-wide profile/settings - the one
@@ -179,7 +194,14 @@ export function isFullAccessSystemRoleName(name: string): boolean {
  * legacy single "Owner" role (plain individual companies) and CLIENT_OWNER
  * both auto-heal to every OTHER current/future permission, but must never
  * carry an agency-only cross-client flag that is meaningless for them.
+ *
+ * Deliberately never returns raw ALL_PERMISSIONS for any role name -
+ * RUTA_AI_ASSISTANT_BROAD_QUERY must stay excluded even for AGENCY_OWNER
+ * (opt-in only, see BASE_ALL_PERMISSIONS's own comment above / audit
+ * Finding 2a), so AGENCY_OWNER's extra grant is composed explicitly
+ * (BASE_ALL_PERMISSIONS + AGENCY_CLIENTS_VIEW_ALL) instead of reaching for
+ * the unfiltered constant.
  */
 export function fullAccessPermissionsForRoleName(name: string): PermissionCode[] {
-  return name === "AGENCY_OWNER" ? ALL_PERMISSIONS : BASE_ALL_PERMISSIONS;
+  return name === "AGENCY_OWNER" ? [...BASE_ALL_PERMISSIONS, PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL] : BASE_ALL_PERMISSIONS;
 }

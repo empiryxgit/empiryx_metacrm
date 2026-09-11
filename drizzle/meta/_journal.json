@@ -253,6 +253,13 @@
       "when": 1789045202873,
       "tag": "0035_add_whatsapp_query_bot",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789200000000,
+      "tag": "0036_fix_ruta_broad_query_permission_seeding",
+      "breakpoints": true
     }
   ]
 }
