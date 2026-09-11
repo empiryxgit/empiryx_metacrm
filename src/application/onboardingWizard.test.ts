@@ -79,7 +79,7 @@ describe.skipIf(!process.env.DATABASE_URL)("onboardingWizard - full happy-path l
     expect(ctx).toMatchObject({ step: "REVIEW" });
 
     // Step 6 - Review -> Finish.
-    ctx = await completeWizard(companyId);
+    ctx = await completeWizard(companyId, userId);
     expect(ctx).toMatchObject({ status: "COMPLETED", step: null });
     expect(ctx.completedAt).not.toBeNull();
   });
@@ -99,7 +99,7 @@ describe.skipIf(!process.env.DATABASE_URL)("onboardingWizard - full happy-path l
     expect(ctx.isMetaConnectionApplicable).toBe(false);
     ctx = await skipCurrentStep(companyId, "META_CONNECTION");
     expect(ctx.step).toBe("REVIEW");
-    ctx = await completeWizard(companyId);
+    ctx = await completeWizard(companyId, userId);
     expect(ctx.status).toBe("COMPLETED");
   });
 
@@ -163,10 +163,10 @@ describe.skipIf(!process.env.DATABASE_URL)("onboardingWizard - authorization / c
     await skipCurrentStep(companyId, "PIPELINE");
     await skipCurrentStep(companyId, "LEAD_SOURCE");
     await skipCurrentStep(companyId, "META_CONNECTION");
-    await completeWizard(companyId);
+    await completeWizard(companyId, userId);
 
     await expect(saveBusinessProfile(companyId, userId, { businessName: "Too Late" })).rejects.toBeInstanceOf(OnboardingWizardError);
-    await expect(completeWizard(companyId)).rejects.toBeInstanceOf(OnboardingWizardError);
+    await expect(completeWizard(companyId, userId)).rejects.toBeInstanceOf(OnboardingWizardError);
 
     // Confirm the rejected attempt genuinely changed nothing.
     const ctx = await getOnboardingContext(companyId);

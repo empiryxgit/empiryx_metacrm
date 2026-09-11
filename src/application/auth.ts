@@ -34,6 +34,8 @@ import { trialEndDate } from "../domain/trial";
 import { isFullAccessSystemRoleName, fullAccessPermissionsForRoleName } from "../domain/fixedRoles";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
 import { recordAgencyAuditEvent } from "./agencyAuditLog";
+import { upsertUserWhatsappLink } from "../infrastructure/db/repositories/whatsapp";
+import { sendOnboardingWelcomeMessage } from "./metaSync/rutaAiAssistant";
 
 /** The built-in "full access" system roles (the legacy single "Owner" role,
  * plus AGENCY_OWNER/CLIENT_OWNER from the fixed role catalogs - see
@@ -153,6 +155,7 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   if (!input.phoneNumber?.trim()) {
     throw new AuthError("Mobile number is required.");
   }
+  const phoneNumber = input.phoneNumber.trim();
 
   const slug = await uniqueSlug(input.companyName);
   const passwordHash = await hashPassword(input.password);
@@ -202,8 +205,20 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
     email: input.email,
     passwordHash,
     fullName: input.fullName,
-    phoneNumber: input.phoneNumber?.trim() || undefined,
+    phoneNumber,
   });
+
+  // RUTA AI Assistant activates immediately for the registering owner, same
+  // as every other user-creation path (see api/admin/users/handler.ts) -
+  // mandatory, zero-verification, no separate setup step. Mobile is already
+  // required and validated above for every accountType, so this should
+  // always succeed; best-effort regardless, same posture as every other
+  // post-creation step here.
+  try {
+    await upsertUserWhatsappLink(company.id, user.id, phoneNumber);
+  } catch (err) {
+    console.error("[auth/register] Failed to provision RUTA AI Assistant WhatsApp link:", err);
+  }
 
   // Agency accounts (and, transitively, every agency-onboarded client -
   // see agencyOnboarding.ts's completeAgencyOnboarding) still skip the
@@ -219,12 +234,15 @@ export async function registerCompanyAndOwner(input: RegisterInput) {
   // (src/domain/onboarding.ts / src/application/onboardingWizard.ts) the
   // next time they load a protected page. See this project's own audit for
   // why an empty dashboard is the wrong first experience for a brand-new
-  // individual user.
+  // individual user. Their RUTA AI welcome message is sent later, from
+  // onboardingWizard.ts's completeWizard(), once THEY actually finish
+  // onboarding - not here, where it hasn't happened yet for them.
   if (accountType === "agency") {
     // Best-effort, same posture as every other post-creation step here - a
     // failure must never block account creation itself.
     try {
       await completeOnboarding(company.id);
+      await sendOnboardingWelcomeMessage(company.id, user.id);
     } catch (err) {
       console.error("[auth/register] Failed to mark onboarding complete:", err);
     }

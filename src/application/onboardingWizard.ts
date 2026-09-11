@@ -40,6 +40,7 @@ import {
   type OnboardingStep,
 } from "../domain/onboarding";
 import { getInitialStageKey, resolveEffectiveIndustryTemplate } from "../domain/industryTemplates";
+import { sendOnboardingWelcomeMessage } from "./metaSync/rutaAiAssistant";
 
 export class OnboardingWizardError extends Error {
   constructor(message: string, public readonly status: number = 400) {
@@ -275,11 +276,17 @@ export async function skipCurrentStep(companyId: string, step: unknown): Promise
 // and REVIEW is the last step) - so this can never fire before every
 // earlier step has been submitted or explicitly skipped.
 
-export async function completeWizard(companyId: string): Promise<OnboardingContext> {
+export async function completeWizard(companyId: string, userId: string): Promise<OnboardingContext> {
   const state = await requireOnboardingState(companyId);
   assertSubmittable(state, "REVIEW");
 
   await completeOnboarding(companyId);
+  // RUTA AI Assistant was already activated at registration (see
+  // registerCompanyAndOwner in auth.ts) - this is the informational welcome
+  // message, sent now because THIS is the moment onboarding actually
+  // finishes for an Individual account (registration itself only starts
+  // it). Best-effort and never throws - see its own doc comment.
+  await sendOnboardingWelcomeMessage(companyId, userId);
   return (await getOnboardingContext(companyId))!;
 }
 

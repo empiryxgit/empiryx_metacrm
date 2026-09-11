@@ -32,6 +32,7 @@ import {
   getSelectedMetaWhatsappAccount,
   getUserRoleAndPermissions,
   getUserWhatsappLinkByPhone,
+  getUserWhatsappLinkByUserId,
   setPendingQueryContext,
 } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
@@ -233,6 +234,54 @@ async function reply(ctx: SendContext, to: string, body: string): Promise<void> 
     await sendWhatsappTextMessage(ctx.phoneNumberId, ctx.accessToken, to, body);
   } catch (err) {
     console.error(`[ruta-ai-assistant] Failed to send WhatsApp reply to ${to}:`, err);
+  }
+}
+
+/**
+ * Sent once, right after a company FINISHES onboarding - the very first
+ * message a brand-new user gets from RUTA. RUTA AI Assistant itself is
+ * already active by this point (mandatory, zero-verification - it went live
+ * the moment a WhatsApp link was provisioned for this user, alongside
+ * account creation; see this function's own callers: registerCompanyAndOwner
+ * in auth.ts, completeAgencyOnboarding in agencyOnboarding.ts, and
+ * completeWizard in onboardingWizard.ts), so this message is purely
+ * informational, not an activation step of its own.
+ *
+ * Deliberately never throws and never blocks its caller - onboarding
+ * completion (account creation, the wizard finishing) must succeed
+ * regardless of whether this message actually goes out. A missing link
+ * (getUserWhatsappLinkByUserId returns null - e.g. WhatsApp provisioning
+ * itself failed, or this is being called for a user who genuinely has no
+ * phone number on file) is a silent no-op, not an error - there's nothing
+ * to send to.
+ */
+export async function sendOnboardingWelcomeMessage(tenantId: string, userId: string): Promise<void> {
+  try {
+    const link = await getUserWhatsappLinkByUserId(tenantId, userId);
+    if (!link) return;
+    const ctx = await getSendContext(tenantId);
+    if (!ctx) {
+      console.error(`[ruta-ai-assistant] No sendable WhatsApp account for tenant ${tenantId}; cannot send onboarding welcome message.`);
+      return;
+    }
+    await reply(
+      ctx,
+      link.phoneNumber,
+      "👋 Welcome to RUTA! Your RUTA AI Assistant is now active on this number.\n\n" +
+        "Just ask me things in plain language, right here on WhatsApp - no commands needed. Try:\n" +
+        '• "how many leads did we get today"\n' +
+        '• "follow-ups today"\n' +
+        '• "update on <name>"\n' +
+        '• "my leads today"\n' +
+        '• "pending follow-ups"\n\n' +
+        "A couple of things worth finishing when you get a chance (Settings on the web dashboard):\n" +
+        "• Connect your Meta/Instagram ads account so new leads start flowing in automatically\n" +
+        "• Review your pipeline stages under Business Configuration\n" +
+        "• Invite your team so everyone can ask RUTA too\n\n" +
+        "Send HELP any time to see this again.",
+    );
+  } catch (err) {
+    console.error(`[ruta-ai-assistant] Failed to send onboarding welcome message to user ${userId} (tenant ${tenantId}):`, err);
   }
 }
 

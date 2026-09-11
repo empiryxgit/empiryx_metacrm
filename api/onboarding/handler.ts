@@ -31,6 +31,7 @@ import {
   savePipelineChoice,
   skipCurrentStep,
 } from "../../src/application/onboardingWizard";
+import { sendOnboardingWelcomeMessage } from "../../src/application/metaSync/rutaAiAssistant";
 
 function getAction(req: VercelRequest): string {
   const segments = req.query.action;
@@ -61,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case "skip":
       return handleWizardStep(req, res, (companyId, _userId, body) => skipCurrentStep(companyId, body?.step));
     case "wizard-complete":
-      return handleWizardStep(req, res, (companyId) => completeWizard(companyId));
+      return handleWizardStep(req, res, (companyId, userId) => completeWizard(companyId, userId));
     case "first-lead":
       return handleFirstLead(req, res);
     default:
@@ -122,6 +123,12 @@ async function handleComplete(req: VercelRequest, res: VercelResponse) {
   }
 
   await completeOnboarding(auth.companyId);
+  // Legacy/direct-API completion path - covers a caller that finishes
+  // onboarding via this endpoint directly instead of the guided wizard's
+  // own /api/onboarding/wizard/complete (see completeWizard in
+  // onboardingWizard.ts for that path's identical call). Best-effort, never
+  // throws - see sendOnboardingWelcomeMessage's own doc comment.
+  await sendOnboardingWelcomeMessage(auth.companyId, auth.userId);
   res.status(200).json({ completed: true });
 }
 

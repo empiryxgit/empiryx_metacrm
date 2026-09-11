@@ -48,6 +48,8 @@ import {
 import { linkOrReactivateClientOrganization } from "../infrastructure/db/repositories/organizations";
 import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
+import { upsertUserWhatsappLink } from "../infrastructure/db/repositories/whatsapp";
+import { sendOnboardingWelcomeMessage } from "./metaSync/rutaAiAssistant";
 import { getIndustryTemplate } from "../domain/industryTemplates";
 import { recordAgencyAuditEvent } from "./agencyAuditLog";
 
@@ -275,6 +277,18 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
     phoneNumber,
   });
 
+  // RUTA AI Assistant activates immediately for this client's owner, same as
+  // every other user-creation path (see api/admin/users/handler.ts /
+  // registerCompanyAndOwner in auth.ts) - mandatory, zero-verification.
+  // Mobile is already required and validated above, so this should always
+  // succeed; best-effort regardless, same posture as every other
+  // post-creation step in this function.
+  try {
+    await upsertUserWhatsappLink(company.id, owner.id, phoneNumber);
+  } catch (err) {
+    console.error("[agency-onboarding/complete] Failed to provision RUTA AI Assistant WhatsApp link:", err);
+  }
+
   await linkOrReactivateClientOrganization({
     agencyCompanyId: claimed.agencyCompanyId,
     clientCompanyId: company.id,
@@ -343,6 +357,7 @@ export async function completeAgencyOnboarding(input: CompleteAgencyOnboardingIn
   }
   try {
     await completeOnboarding(company.id);
+    await sendOnboardingWelcomeMessage(company.id, owner.id);
   } catch (err) {
     console.error("[agency-onboarding/complete] Failed to mark onboarding complete:", err);
   }
