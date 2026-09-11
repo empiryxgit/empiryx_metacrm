@@ -57,4 +57,10 @@ vi.mock("./src/infrastructure/cache/redis", () => ({
   // exercise actual rate-limit-exceeded behavior should vi.mock this module
   // locally with a stricter stub instead of relying on this default.
   checkRateLimit: vi.fn(async () => true),
+  // RUTA AI Assistant message idempotency (rutaAiAssistant.ts's
+  // handleOneMessage) - backed by the SAME fake claim store as
+  // tryClaimLeadId above, under its own key namespace, so a duplicate/retry
+  // test actually exercises real claim-then-reject semantics rather than
+  // always reporting "not claimed yet".
+  tryClaimRutaMessageId: vi.fn(async (tenantId: string, waMessageId: string) => fakeTryClaim(`rutamsg:${tenantId}:${waMessageId}`, 24 * 60 * 60)),
 }));

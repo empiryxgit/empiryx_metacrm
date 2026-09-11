@@ -62,6 +62,42 @@ export async function releaseLeadIdClaim(metaLeadId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------
+// RUTA AI Assistant message idempotency (see
+// src/application/metaSync/rutaAiAssistant.ts's handleOneMessage). UNLIKE
+// tryClaimLeadId above, this is NOT a fast-path in front of a durable
+// Postgres uniqueness constraint - a RUTA-routed message never becomes a
+// whatsapp_message_events row (see metaWhatsappEventService.ts's own
+// comment on toHandleAsAssistant), so there is no backstop behind this
+// claim. Redis IS the actual idempotency mechanism here, which is why the
+// TTL is generous (a full day, comfortably past Meta's own webhook
+// redelivery window) rather than "just long enough to outlive one
+// processing attempt." If Redis is unreachable we still fail OPEN, same
+// posture as every other helper in this file - a duplicate WhatsApp reply
+// to the asking salesperson is a minor annoyance, never a data-integrity
+// problem (nothing durable is written by a RUTA reply), so it's not worth
+// blocking the assistant tenant-wide over a Redis outage.
+// ---------------------------------------------------------------------
+
+const RUTA_MESSAGE_KEY_PREFIX = "rutamsg:";
+const RUTA_MESSAGE_CLAIM_TTL_SECONDS = 24 * 60 * 60;
+
+/** Returns true the FIRST time this exact (tenantId, waMessageId) pair is
+ * seen; false on every redelivery/retry of the same webhook message.
+ * Scoped by tenantId (not just the raw wamid) for the same reason every
+ * other RUTA lookup is - the caller already knows which tenant this
+ * message belongs to, so there's no reason to trust a bare id alone. */
+export async function tryClaimRutaMessageId(tenantId: string, waMessageId: string): Promise<boolean> {
+  try {
+    const redis = getRedis();
+    const result = await redis.set(`${RUTA_MESSAGE_KEY_PREFIX}${tenantId}:${waMessageId}`, "1", { nx: true, ex: RUTA_MESSAGE_CLAIM_TTL_SECONDS });
+    return result === "OK";
+  } catch (err) {
+    console.warn(`[ruta-idempotency] Redis unavailable, failing open for ${tenantId}:${waMessageId}:`, err);
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------
 // OAuth state single-use claim (see src/infrastructure/auth/oauthState.ts).
 // The state JWT's own signature + short expiry already make it unforgeable
 // and time-bounded; this narrows the replay window further to "exactly

@@ -8,28 +8,55 @@
 //
 // This file is the ORCHESTRATOR - it owns the pipeline every inbound
 // message goes through, end to end, and delegates each stage to its own
-// module rather than inlining everything:
+// module rather than inlining everything. On every request this pipeline
+// resolves WhatsApp identity -> user_id -> tenant_id -> role -> permissions
+// -> data scope, ENTIRELY in this backend/services layer - the AI provider
+// (step 4 below) only ever sees raw message text and a fixed tool schema,
+// never a tenantId/userId/permission, and never decides what a user is
+// authorized to see (see AiProvider's own doc comment in
+// infrastructure/ai/provider.ts for that exact boundary). Authorization is
+// never delegated to, or trusted from, the LLM:
 //   1. WhatsApp -> RUTA user mapping + tenant identification - resolved
 //      upstream, before this file is even reached (see
 //      metaWhatsappEventService.ts's isRutaAssistantMessage /
 //      getUserWhatsappLinkByPhone) - by the time handleOneMessage runs, the
-//      sender is already a verified linked user of a known tenant.
+//      sender is already a verified linked user of a known tenant. The SAME
+//      raw phone number can be linked to two DIFFERENT users in two
+//      DIFFERENT tenants (userWhatsappLinks' unique index is
+//      (tenantId, phoneNumber), not phoneNumber alone) - which user/tenant
+//      a message resolves to depends on the tenantId the webhook layer
+//      already attached (from the tenant's OWN selected phone_number_id),
+//      never guessed from the phone number in isolation.
+//   1a. Webhook duplicate/retry handling - tryClaimRutaMessageId
+//      (src/infrastructure/cache/redis.ts) claims (tenantId, waMessageId)
+//      before anything else runs; a redelivered/retried webhook call for a
+//      message already claimed is a silent no-op (logged, no reply, no
+//      double DB work) - see that function's own comment for why Redis is
+//      the real idempotency mechanism here, not just a fast-path.
 //   2. Rate limiting - src/infrastructure/cache/redis.ts's checkRateLimit,
 //      applied per-user AND per-tenant before anything else runs.
-//   3. Conversation/session management - the numbered-list disambiguation
-//      state on userWhatsappLinks.pendingQueryContext (3-minute TTL),
-//      scoped per (tenantId, userId) so two users' in-flight
-//      conversations can never collide (see rutaTools.ts's
-//      PendingQueryContext doc comment).
+//   3. Conversation/session management - session state (numbered-list
+//      disambiguation, and the date-range "anchor" for conversational
+//      follow-ups) lives ONLY on userWhatsappLinks.pendingQueryContext (a
+//      TTL-bound Postgres column), scoped per (tenantId, userId) so two
+//      users' in-flight conversations can never collide - see rutaTools.ts's
+//      PendingQueryContext doc comment. There is no in-memory/global
+//      conversation state anywhere in this pipeline.
 //   4. Classification - fast-tier regex pattern matching, then (only on a
 //      miss) the AI provider abstraction (src/infrastructure/ai/
 //      provider.ts) as a fallback. Both draw from the SAME tool schema
-//      (src/application/metaSync/rutaTools.ts's RUTA_TOOLS).
+//      (src/application/metaSync/rutaTools.ts's RUTA_TOOLS). The provider
+//      only ever returns a tool NAME + free-text arguments - it never runs
+//      a query and never sees a permission or a data scope.
 //   5. Authorization - each tool in rutaTools.ts enforces its own scoping
-//      rule (see hasBroadGrant's own comment there); this file never
-//      second-guesses or bypasses it.
+//      rule (see hasBroadGrant's own comment there) against the VERIFIED
+//      tenantId/userId this file resolved in step 1, never anything the AI
+//      provider returned; this file never second-guesses or bypasses a
+//      tool's own check.
 //   6. Tool execution - rutaTools.ts's RutaTool.run(), real Drizzle query
-//      results only.
+//      results only, every query scoped by tenantId (and, for personal
+//      tools, userId) at the SQL WHERE clause - never filtered client-side
+//      after a wider fetch.
 //   7. Reply - sendWhatsappTextMessage (already retried internally, see
 //      graphClient.ts's fetchWithRetryJson), wrapped here so a send
 //      failure is logged, never thrown back at the caller.
@@ -44,11 +71,17 @@
 // is fully parameterized by the RutaAssistantInboundMessage/RutaToolContext
 // passed through the call chain; the only durable state is in Postgres
 // (userWhatsappLinks.pendingQueryContext, keyed by tenantId+userId) and
-// Redis (rate-limit counters, keyed the same way) - so two concurrent
-// invocations handling two different users' messages (even in the same
-// warm Node process) can never read or write each other's state. See
-// src/infrastructure/ai/provider.ts's own comment on why its one cached
-// value (the provider's immutable config) is safe to share regardless.
+// Redis (the message-idempotency claim and rate-limit counters, keyed the
+// same way) - so two concurrent invocations handling two different users'
+// messages (even in the same warm Node process, even the SAME phone number
+// linked under two different tenants) can never read or write each other's
+// state, and this pipeline scales horizontally across any number of
+// concurrent serverless invocations with no coordination required beyond
+// that shared Postgres/Redis state. See src/infrastructure/ai/provider.ts's
+// own comment on why its one cached value (the provider's immutable
+// config) is safe to share regardless. See rutaAiAssistant.flow.test.ts for
+// automated tests proving user/tenant/role/session isolation, concurrent
+// conversations, and webhook duplicate/retry handling.
 
 import { getUserWhatsappLinkByPhone, clearPendingQueryContext, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, setPendingQueryContext } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
@@ -56,7 +89,7 @@ import { getDb } from "../../infrastructure/db/client";
 import { companies } from "../../infrastructure/db/schema";
 import { eq } from "drizzle-orm";
 import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
-import { checkRateLimit } from "../../infrastructure/cache/redis";
+import { checkRateLimit, tryClaimRutaMessageId } from "../../infrastructure/cache/redis";
 import { rutaLog } from "../../infrastructure/observability/rutaLogger";
 import { getAiProvider } from "../../infrastructure/ai/provider";
 import { matchBareDateFollowUp } from "./rutaDateRange";
@@ -128,6 +161,17 @@ async function isRateLimited(tenantId: string, userId: string): Promise<boolean>
 
 async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void> {
   const text = (msg.messageText ?? "").trim();
+
+  // Webhook duplicate/retry handling - claimed FIRST, before any DB lookup
+  // or rate-limit consumption, so a redelivered webhook call for a message
+  // already handled costs nothing beyond one Redis round trip and never
+  // produces a second reply. See tryClaimRutaMessageId's own comment for
+  // why this (not a durable Postgres row) is the real idempotency
+  // mechanism for RUTA messages specifically.
+  if (!(await tryClaimRutaMessageId(msg.tenantId, msg.waMessageId))) {
+    rutaLog.warn("duplicate_message_skipped", { tenantId: msg.tenantId, waMessageId: msg.waMessageId });
+    return;
+  }
 
   // WhatsApp -> RUTA user mapping. No LINK/UNLINK commands - RUTA AI
   // Assistant is mandatory and provisioned automatically from the user's
