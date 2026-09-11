@@ -59,12 +59,14 @@ import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
 import { checkRateLimit } from "../../infrastructure/cache/redis";
 import { rutaLog } from "../../infrastructure/observability/rutaLogger";
 import { getAiProvider } from "../../infrastructure/ai/provider";
+import { matchBareDateFollowUp } from "./rutaDateRange";
 import {
   rutaToolSchemas,
   getRutaTool,
   matchPattern,
   resolveLeadPick,
   resolveTeammatePick,
+  type DateRange,
   type PendingOption,
   type PendingQueryContext,
   type RutaToolContext,
@@ -147,26 +149,60 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     return;
   }
 
-  const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone };
+  // Session/conversation management - a PRIOR message in this same user's
+  // thread may have left one of two things pending on
+  // userWhatsappLinks.pendingQueryContext (scoped per (tenantId, userId) by
+  // the column's own lookup key - see rutaTools.ts's PendingQueryContext
+  // doc comment for why this can never leak between concurrent users):
+  //   - a numbered-list disambiguation, resolved below before any fresh
+  //     classification (unchanged from before conversational follow-ups);
+  //   - an ANCHOR date range from the last leadCount/followUpCount-style
+  //     question, made available to this turn's tools as
+  //     ctx.defaultDateRange (for a drill-down question that names no date
+  //     of its own) and consulted by the bare-date-follow-up check below
+  //     ("What about yesterday?").
+  const pending =
+    link.pendingQueryContext && link.pendingQueryContextExpiresAt && link.pendingQueryContextExpiresAt.getTime() > Date.now()
+      ? (link.pendingQueryContext as PendingQueryContext)
+      : null;
 
-  // Session/conversation management - a numbered-list pick from a PRIOR
-  // message in this same user's thread, resolved before any fresh intent
-  // classification. Scoped per (tenantId, userId) by the column's own
-  // lookup key - see rutaTools.ts's PendingQueryContext doc comment for why
-  // this can never leak between concurrent users.
-  if (link.pendingQueryContext && link.pendingQueryContextExpiresAt && link.pendingQueryContextExpiresAt.getTime() > Date.now()) {
-    const picked = resolvePendingSelection(text, link.pendingQueryContext as PendingQueryContext);
+  if (pending?.kind === "disambiguation") {
+    const picked = resolvePendingSelection(text, pending);
     if (picked) {
       await clearPendingQueryContext(msg.tenantId, link.userId);
+      const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone };
       const replyText = await runResolvedPick(toolCtx, picked.kind, picked.id);
       await sendReply(sendCtx, msg, link, "resolvedPick", replyText);
       return;
     }
   }
 
+  const anchor = pending?.kind === "anchor" ? pending : null;
+  const toolCtx: RutaToolContext = {
+    tenantId: msg.tenantId,
+    userId: link.userId,
+    timezone: sendCtx.timezone,
+    defaultDateRange: anchor ? decodeAnchorRange(anchor.range) : undefined,
+  };
+
   // Classification - fast pattern matcher first, AI provider only on a
   // miss. Both draw from the same RUTA_TOOLS schema (rutaTools.ts).
-  const call = matchPattern(text) ?? (await classifyWithAiProvider(text, msg));
+  let call = matchPattern(text) ?? (await classifyWithAiProvider(text, msg));
+
+  // Bare date-only follow-up ("What about yesterday?", "and last week?") -
+  // only consulted when normal classification found NOTHING and there's a
+  // live anchor to re-run; see rutaDateRange.ts's matchBareDateFollowUp for
+  // exactly how strict this match is (it must be the ENTIRE message, not a
+  // fragment of some other, already-classifiable question). Re-invokes the
+  // anchor's own tool with the raw text as its query, which that tool's own
+  // resolveRange() will re-parse into the new range - deliberately not
+  // synthesized here, so there is exactly one place each tool's date-phrase
+  // parsing lives.
+  if (!call && anchor) {
+    const bareDate = matchBareDateFollowUp(text, sendCtx.timezone);
+    if (bareDate) call = { name: anchor.tool, arguments: { query: text } };
+  }
+
   if (!call) {
     await sendReply(
       sendCtx,
@@ -200,17 +236,38 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     return;
   }
 
+  // Session state for the NEXT turn - see RutaTool.sessionRole's own
+  // comment (rutaTools.ts) for the full anchor/drilldown contract.
   if (result.kind === "disambiguate") {
-    await setPendingQueryContext(msg.tenantId, link.userId, { options: result.options } satisfies PendingQueryContext);
+    await setPendingQueryContext(msg.tenantId, link.userId, { kind: "disambiguation", options: result.options } satisfies PendingQueryContext);
+  } else if (tool.sessionRole === "anchor" && result.dateRange) {
+    await setPendingQueryContext(msg.tenantId, link.userId, {
+      kind: "anchor",
+      tool: tool.name,
+      range: { startIso: result.dateRange.start.toISOString(), endIso: result.dateRange.end.toISOString(), label: result.dateRange.label },
+    } satisfies PendingQueryContext);
+  } else if (tool.sessionRole !== "drilldown" && pending) {
+    // An ordinary, topic-changing reply - clear any leftover anchor/
+    // disambiguation state rather than letting a stale one linger for up to
+    // its full TTL. Drill-down replies deliberately skip this so the
+    // anchor they just consumed survives for a LATER bare-date follow-up
+    // (the spec's own example: leads today -> campaign breakdown -> "what
+    // about yesterday" must still re-run the ORIGINAL lead-count anchor).
+    await clearPendingQueryContext(msg.tenantId, link.userId);
   }
+
   await sendReply(sendCtx, msg, link, tool.name, result.text);
+}
+
+function decodeAnchorRange(range: { startIso: string; endIso: string; label: string }): DateRange {
+  return { start: new Date(range.startIso), end: new Date(range.endIso), label: range.label };
 }
 
 async function runResolvedPick(ctx: RutaToolContext, kind: "lead" | "teammate", id: string): Promise<string> {
   return kind === "lead" ? resolveLeadPick(ctx, id) : resolveTeammatePick(ctx, id);
 }
 
-function resolvePendingSelection(text: string, ctx: PendingQueryContext): PendingOption | null {
+function resolvePendingSelection(text: string, ctx: { options: PendingOption[] }): PendingOption | null {
   const n = Number(text.trim());
   if (!Number.isInteger(n) || n < 1 || n > ctx.options.length) return null;
   return ctx.options[n - 1] ?? null;

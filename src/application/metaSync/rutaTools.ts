@@ -20,12 +20,16 @@
 // reorganization of that logic into named, independently testable units,
 // not a behavior change.
 
-import { and, desc, eq, gte, ilike, isNotNull, lt, lte } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { getDb } from "../../infrastructure/db/client";
-import { leadFollowUps, leads, users } from "../../infrastructure/db/schema";
+import { campaigns, companies, leadFollowUps, leads, users } from "../../infrastructure/db/schema";
 import { getUserRoleAndPermissions } from "../../infrastructure/db/repositories/whatsapp";
 import { PERMISSIONS } from "../../domain/permissions";
+import { LEAD_SOURCES, resolveEffectiveIndustryTemplate, type StageDef } from "../../domain/industryTemplates";
 import type { AiToolSchema } from "../../infrastructure/ai/provider";
+import { containsDateRangePhrase, type DateRange, parseDateRangePhrase, todayRange } from "./rutaDateRange";
+
+export type { DateRange } from "./rutaDateRange";
 
 export interface RutaToolContext {
   tenantId: string;
@@ -34,6 +38,16 @@ export interface RutaToolContext {
    * todayRangeInTimezone in rutaAiAssistant.ts), never server UTC or the
    * sender's device time. */
   timezone: string;
+  /** The date range resolved by the most recent ANCHOR query in this same
+   * conversation thread (see the "sessionRole" doc comment on RutaTool
+   * below), when one is still live. A drill-down tool (campaignLeadCounts /
+   * sourceLeadCounts / userLeadCounts) falls back to this when its OWN
+   * message text names no date range of its own, so "Which campaign gave
+   * the most?" right after "How many leads today?" inherits "today" without
+   * the user repeating it. Never set by anything other than the
+   * orchestrator (rutaAiAssistant.ts), and never trusted blindly - a tool
+   * still prefers a date range parsed from its own text first. */
+  defaultDateRange?: DateRange;
 }
 
 export interface PendingOption {
@@ -42,28 +56,60 @@ export interface PendingOption {
   label: string;
 }
 
-/** Multi-turn disambiguation state, persisted on userWhatsappLinks.pendingQueryContext
- * (see src/application/metaSync/rutaAiAssistant.ts's session handling) when
- * a search matches more than one lead/teammate - scoped per (tenantId,
- * userId) by that column's own primary lookup key, so two different users'
- * in-flight disambiguations can never collide or overwrite each other, even
- * mid-conversation, even for the same tenant. */
-export interface PendingQueryContext {
-  options: PendingOption[];
-}
+/** Multi-turn session state, persisted on userWhatsappLinks.pendingQueryContext
+ * (see src/application/metaSync/rutaAiAssistant.ts's session handling),
+ * scoped per (tenantId, userId) by that column's own primary lookup key, so
+ * two different users' in-flight conversations can never collide or
+ * overwrite each other, even mid-conversation, even for the same tenant.
+ * Two unrelated uses share this one TTL-bound slot (a fresh turn always
+ * simply overwrites whatever was pending, never accumulates - see
+ * setPendingQueryContext's own comment):
+ *   - "disambiguation": a search matched more than one lead/teammate and is
+ *     waiting on a numbered reply (unchanged from before conversational
+ *     follow-ups existed).
+ *   - "anchor": the date range resolved by the most recent ANCHOR-role tool
+ *     (see RutaTool.sessionRole below), so a later drill-down or bare
+ *     date-only follow-up in the same thread can reuse/re-run it. */
+export type PendingQueryContext =
+  | { kind: "disambiguation"; options: PendingOption[] }
+  | { kind: "anchor"; tool: string; range: { startIso: string; endIso: string; label: string } };
 
 export type RutaToolResult =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; dateRange?: DateRange }
   | { kind: "disambiguate"; text: string; options: PendingOption[] };
 
 export interface RutaTool {
   name: string;
   description: string;
   parameters: AiToolSchema["parameters"];
-  /** Executes the tool. `args.query` is only ever populated for updateOnX
-   * (the one tool that takes a free-text argument); every other tool
-   * ignores `args` entirely - its answer depends only on ctx. */
+  /** Executes the tool. `args.query` carries the raw inbound message text
+   * for every tool (not just updateOnX) so date-range-aware tools can parse
+   * a phrase out of it themselves; most tools still ignore it entirely -
+   * their answer depends only on ctx. */
   run(ctx: RutaToolContext, args: { query?: string }): Promise<RutaToolResult>;
+  /**
+   * Conversational-follow-up role (see PendingQueryContext's own comment
+   * above and rutaAiAssistant.ts's handleOneMessage for exactly how each
+   * role is used):
+   *   - "anchor": a primary/base query (a plain count, e.g. leadCount /
+   *     followUpCount). On a successful (non-disambiguate) reply, the
+   *     orchestrator stores its resolved date range as the new anchor,
+   *     overwriting any previous one - this is what "What about yesterday?"
+   *     re-runs.
+   *   - "drilldown": a secondary/breakdown query (campaignLeadCounts /
+   *     sourceLeadCounts / userLeadCounts) that CONSULTS ctx.defaultDateRange
+   *     but never overwrites or clears the anchor - so asking a drill-down
+   *     question doesn't lose the ability to later say "what about
+   *     yesterday" and have it re-run the ORIGINAL anchor query, exactly as
+   *     in the spec's example (leads today -> campaign breakdown -> "what
+   *     about yesterday" re-runs the leads-today-style query, not the
+   *     campaign breakdown).
+   *   - undefined: an ordinary tool unrelated to date-range follow-ups
+   *     (help, myLeadsToday, updateOnX, pendingFollowUps, leadStatus,
+   *     pipelineSummary, ...). A successful reply from one of these clears
+   *     any pending anchor/disambiguation - the conversation has moved on.
+   */
+  sessionRole?: "anchor" | "drilldown";
 }
 
 /**
@@ -92,29 +138,30 @@ export async function hasBroadGrant(tenantId: string, userId: string): Promise<b
   return info?.permissions.includes(PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY) ?? false;
 }
 
-/** "Today" resolved in the COMPANY's own timezone - duplicated here (rather
- * than imported) only to keep this file's public surface independent of
- * rutaAiAssistant.ts; both copies must stay identical, which is why this is
- * the ONLY place either file implements it - rutaAiAssistant.ts imports this
- * one instead of keeping its own. */
+/** "Today" resolved in the COMPANY's own timezone. Thin wrapper over
+ * rutaDateRange.ts's todayRange (the one real implementation, shared with
+ * every other named range - "yesterday", "this week", ...) that drops the
+ * `label` field, kept only so existing call sites (resolveLeadPick /
+ * resolveTeammatePick / the older today-only tools below) don't need to
+ * change. New code should prefer resolveRange/parseDateRangePhrase
+ * directly. */
 export function todayRangeInTimezone(timezone: string): { start: Date; end: Date } {
-  const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
-  const wallMs = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
-  const offsetMs = wallMs - now.getTime();
-  const midnightAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), 0, 0, 0, 0);
-  const start = new Date(midnightAsUtc - offsetMs);
-  return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+  const { start, end } = todayRange(timezone);
+  return { start, end };
+}
+
+/**
+ * Resolves the date range a date-range-aware tool should use, in priority
+ * order: (1) a phrase parsed out of the tool's OWN query text - the most
+ * specific, always wins if present; (2) the conversation's live anchor
+ * range (ctx.defaultDateRange), set by the orchestrator when the previous
+ * turn's anchor query is still fresh - lets a drill-down question inherit
+ * "today" without repeating it; (3) today, the same default every one of
+ * these tools had before date ranges existed at all.
+ */
+export function resolveRange(ctx: RutaToolContext, queryText: string | undefined): DateRange {
+  const fromText = queryText ? parseDateRangePhrase(queryText, ctx.timezone) : null;
+  return fromText ?? ctx.defaultDateRange ?? todayRange(ctx.timezone);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +175,8 @@ const helpTool: RutaTool = {
   async run() {
     return {
       kind: "text",
-      text: 'I can answer things like:\n• "how many leads did we get today"\n• "follow-ups today"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"',
+      text:
+        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "leads by source"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.',
     };
   },
 };
@@ -167,22 +215,33 @@ const myLeadsTodayTool: RutaTool = {
   },
 };
 
-const leadsTodayTool: RutaTool = {
-  name: "leadsToday",
-  description: "Total number of leads the company received today, company-wide - not just the asking user's own.",
-  parameters: { type: "object", properties: {} },
+const leadCountTool: RutaTool = {
+  name: "leadCount",
+  description:
+    "Total number of leads the company received, company-wide, over a date range - today by default. Covers plain 'how many leads' as well as explicit ranges like 'yesterday', 'this week', 'last month', or 'between 1 aug and 10 aug'.",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any (e.g. 'today', 'yesterday', 'this week', 'between 1 aug and 10 aug'). Omit for a plain lead-count question with no range mentioned." } },
+  },
   // Company-wide COUNT ONLY (no names/phone numbers) - deliberately ungated
   // (no broad-query permission check): an aggregate number carries no
   // per-lead PII, unlike the detail lists below, which DO require the
   // grant. See PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY's own comment.
-  async run(ctx) {
-    const { start, end } = todayRangeInTimezone(ctx.timezone);
+  //
+  // ANCHOR role: this is the base "how many leads" query the spec's
+  // conversational example builds on ("How many leads today?" -> "Which
+  // campaign gave the most?" -> "What about yesterday?") - see
+  // RutaTool.sessionRole's own comment for exactly what that means.
+  sessionRole: "anchor",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
     const db = await getDb();
-    const rows = await db
-      .select({ id: leads.id })
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
       .from(leads)
-      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end)));
-    return { kind: "text", text: rows.length === 1 ? "You received 1 lead today." : `You received ${rows.length} leads today.` };
+      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)));
+    const n = row?.n ?? 0;
+    return { kind: "text", text: `You received ${n} lead${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
   },
 };
 
@@ -260,6 +319,210 @@ const updateOnXTool: RutaTool = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Date-range-aware count/breakdown tools (natural-language queries).
+// leadCount and followUpCount are the two ANCHOR tools; campaignLeadCounts/
+// sourceLeadCounts/userLeadCounts are DRILL-DOWN tools that consult but
+// never own the anchor - see RutaTool.sessionRole's doc comment above for
+// the full contract these rely on for conversational follow-ups.
+// ---------------------------------------------------------------------------
+
+const followUpCountTool: RutaTool = {
+  name: "followUpCount",
+  description: "How many follow-ups the asking user logged over a date range - today by default. Generalizes followUpsToday to any range ('yesterday', 'this week', 'last month', ...).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  sessionRole: "anchor",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const db = await getDb();
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(leadFollowUps)
+      .where(and(eq(leadFollowUps.companyId, ctx.tenantId), eq(leadFollowUps.createdBy, ctx.userId), gte(leadFollowUps.createdAt, range.start), lt(leadFollowUps.createdAt, range.end)));
+    const n = row?.n ?? 0;
+    return { kind: "text", text: `You logged ${n} follow-up${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
+  },
+};
+
+const campaignLeadCountsTool: RutaTool = {
+  name: "campaignLeadCounts",
+  description:
+    "Breakdown of leads by campaign over a date range - which campaign brought in the most/least leads. If the message names no date range, inherits the range from the conversation's current lead-count question (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // Company-wide aggregate counts by campaign NAME only (no per-lead PII) -
+  // deliberately ungated, same rationale as leadCount above. Drill-down
+  // role: consults ctx.defaultDateRange, never sets/clears the anchor.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const db = await getDb();
+    const rows = await db
+      .select({ crmName: campaigns.name, rawName: leads.campaignName, n: sql<number>`count(*)::int` })
+      .from(leads)
+      .leftJoin(campaigns, eq(leads.crmCampaignId, campaigns.id))
+      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
+      .groupBy(campaigns.name, leads.campaignName);
+    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
+    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign.`, dateRange: range };
+    const named = rows.map((r) => ({ label: r.crmName ?? r.rawName ?? "Unassigned/Other", n: Number(r.n) })).sort((a, b) => b.n - a.n);
+    const top = named[0]!;
+    const list = named.slice(0, 5).map((r) => `• ${r.label} — ${r.n}`).join("\n");
+    return { kind: "text", text: `${top.label} led with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+  },
+};
+
+const sourceLeadCountsTool: RutaTool = {
+  name: "sourceLeadCounts",
+  description:
+    "Breakdown of leads by source (Meta Lead Ads, Website, Referral, Walk-in, ...) over a date range. If the message names no date range, inherits the range from the conversation's current lead-count question (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // Same "aggregate counts only, no PII" ungated rationale as leadCount/
+  // campaignLeadCounts above.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const db = await getDb();
+    const rows = await db
+      .select({ source: leads.source, n: sql<number>`count(*)::int` })
+      .from(leads)
+      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
+      .groupBy(leads.source);
+    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
+    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by source.`, dateRange: range };
+    const labeled = rows
+      .map((r) => ({ label: LEAD_SOURCES.find((s) => s.key === r.source)?.label ?? r.source, n: Number(r.n) }))
+      .sort((a, b) => b.n - a.n);
+    const top = labeled[0]!;
+    const list = labeled.slice(0, 8).map((r) => `• ${r.label} — ${r.n}`).join("\n");
+    return { kind: "text", text: `${top.label} led with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+  },
+};
+
+const userLeadCountsTool: RutaTool = {
+  name: "userLeadCounts",
+  description: "Breakdown of leads by owning salesperson/teammate over a date range - which teammate has the most leads. If the message names no date range, inherits the conversation's current lead-count range (defaulting to today).",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The date-range phrase from the user's message, if any." } },
+  },
+  // A per-owner breakdown reveals OTHER teammates' individual counts, so
+  // (unlike the aggregate-only campaign/source breakdowns above) this
+  // requires the same broad-query grant as pendingFollowUps/updateOnX's
+  // teammate search - see PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY's own
+  // comment. Without it, this quietly falls back to just the asking user's
+  // own count rather than refusing outright, same "personal fallback"
+  // posture pendingFollowUpsTool already uses.
+  sessionRole: "drilldown",
+  async run(ctx, args) {
+    const range = resolveRange(ctx, args.query);
+    const db = await getDb();
+    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+
+    if (!broad) {
+      const [row] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(leads)
+        .where(and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)));
+      const n = row?.n ?? 0;
+      return { kind: "text", text: `You have ${n} lead${n === 1 ? "" : "s"} ${range.label}.`, dateRange: range };
+    }
+
+    const rows = await db
+      .select({ ownerId: leads.ownerId, ownerName: users.fullName, n: sql<number>`count(*)::int` })
+      .from(leads)
+      .leftJoin(users, eq(leads.ownerId, users.id))
+      .where(and(eq(leads.companyId, ctx.tenantId), gte(leads.metaCreatedAt, range.start), lt(leads.metaCreatedAt, range.end)))
+      .groupBy(leads.ownerId, users.fullName);
+    const total = rows.reduce((sum, r) => sum + Number(r.n), 0);
+    if (total === 0) return { kind: "text", text: `No leads ${range.label} to break down by teammate.`, dateRange: range };
+    const named = rows.map((r) => ({ label: r.ownerId ? (r.ownerName ?? "Unknown teammate") : "Unassigned", n: Number(r.n) })).sort((a, b) => b.n - a.n);
+    const top = named[0]!;
+    const list = named.slice(0, 8).map((r) => `• ${r.label} — ${r.n}`).join("\n");
+    return { kind: "text", text: `${top.label} has the most with ${top.n} lead${top.n === 1 ? "" : "s"} ${range.label} (${total} total).\n\n${list}`, dateRange: range };
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Pipeline stage tools - "lead status"/"pipeline summary". Both resolve the
+// tenant's OWN stage catalog (a company's stages are industry-template-
+// defined, not a fixed enum - see domain/industryTemplates.ts) rather than
+// assuming a fixed set of stage keys.
+// ---------------------------------------------------------------------------
+
+async function companyStages(tenantId: string): Promise<StageDef[]> {
+  const db = await getDb();
+  const [row] = await db.select({ industryTemplate: companies.industryTemplate, customTemplateConfig: companies.customTemplateConfig }).from(companies).where(eq(companies.id, tenantId)).limit(1);
+  const template = resolveEffectiveIndustryTemplate(row?.industryTemplate, row?.customTemplateConfig);
+  return template.stages;
+}
+
+async function pipelineBreakdownRows(ctx: RutaToolContext, broad: boolean): Promise<Array<{ pipelineStage: string; n: number }>> {
+  const db = await getDb();
+  const scope = broad ? eq(leads.companyId, ctx.tenantId) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
+  const rows = await db
+    .select({ pipelineStage: leads.pipelineStage, n: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(scope)
+    .groupBy(leads.pipelineStage);
+  return rows.map((r) => ({ pipelineStage: r.pipelineStage, n: Number(r.n) }));
+}
+
+const pipelineSummaryTool: RutaTool = {
+  name: "pipelineSummary",
+  description: "Full breakdown of leads currently in each pipeline stage (New, Contacted, Qualified, ...) - a live snapshot, not scoped to a date range.",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+    const [stages, rows] = await Promise.all([companyStages(ctx.tenantId), pipelineBreakdownRows(ctx, broad)]);
+    const byKey = new Map(rows.map((r) => [r.pipelineStage, r.n]));
+    const total = rows.reduce((sum, r) => sum + r.n, 0);
+    if (total === 0) return { kind: "text", text: broad ? "No leads in the pipeline yet." : "You have no leads in the pipeline yet." };
+    // Known stages first, in the company's own template order, then any
+    // stray stage value present on a row but absent from the current
+    // template (e.g. left over from a since-changed custom template).
+    const known = new Set(stages.map((s) => s.key));
+    const lines = [
+      ...stages.map((s) => `• ${s.label} — ${byKey.get(s.key) ?? 0}`),
+      ...rows.filter((r) => !known.has(r.pipelineStage)).map((r) => `• ${r.pipelineStage} — ${r.n}`),
+    ];
+    return { kind: "text", text: `${total} lead${total === 1 ? "" : "s"} in the pipeline${broad ? "" : " (yours)"}:\n${lines.join("\n")}` };
+  },
+};
+
+const leadStatusTool: RutaTool = {
+  name: "leadStatus",
+  description: "How many leads are currently in a specific named pipeline stage (e.g. 'how many leads are qualified', 'leads in won stage'). Falls back to the full pipeline breakdown if no specific stage is named.",
+  parameters: {
+    type: "object",
+    properties: { query: { type: "string", description: "The stage name asked about, if any (e.g. 'qualified', 'won', 'site visit')." } },
+  },
+  async run(ctx, args) {
+    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+    const stages = await companyStages(ctx.tenantId);
+    const text = (args.query ?? "").toLowerCase();
+    const matchedStage = text ? stages.find((s) => text.includes(s.label.toLowerCase()) || text.includes(s.key.toLowerCase())) : undefined;
+
+    if (!matchedStage) return pipelineSummaryTool.run(ctx, args);
+
+    const db = await getDb();
+    const scope = broad
+      ? and(eq(leads.companyId, ctx.tenantId), eq(leads.pipelineStage, matchedStage.key))
+      : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), eq(leads.pipelineStage, matchedStage.key));
+    const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(scope);
+    const n = row?.n ?? 0;
+    return { kind: "text", text: `${n} lead${n === 1 ? "" : "s"}${broad ? "" : " of yours"} in ${matchedStage.label}.` };
+  },
+};
+
 /**
  * Single source of truth for what RUTA can do - both the fast pattern
  * matcher (matchPattern below) and every AI provider's function-calling
@@ -267,7 +530,20 @@ const updateOnXTool: RutaTool = {
  * are built from this same list, so the two classification tiers can never
  * drift out of sync with each other.
  */
-export const RUTA_TOOLS: RutaTool[] = [helpTool, followUpsTodayTool, myLeadsTodayTool, leadsTodayTool, pendingFollowUpsTool, updateOnXTool];
+export const RUTA_TOOLS: RutaTool[] = [
+  helpTool,
+  followUpsTodayTool,
+  followUpCountTool,
+  myLeadsTodayTool,
+  leadCountTool,
+  campaignLeadCountsTool,
+  sourceLeadCountsTool,
+  userLeadCountsTool,
+  pendingFollowUpsTool,
+  leadStatusTool,
+  pipelineSummaryTool,
+  updateOnXTool,
+];
 
 export function rutaToolSchemas(): AiToolSchema[] {
   return RUTA_TOOLS.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
@@ -351,15 +627,43 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   const updateMatch = UPDATE_ON_RE.exec(t);
   if (updateMatch && updateMatch[1]) return { name: "updateOnX", arguments: { query: updateMatch[1].trim() } };
 
-  // "my leads today" (personal) is checked BEFORE the generic company-wide
-  // "leads today" rule below, since it's the more specific match.
+  // "my leads today" (personal LIST) is checked before every other
+  // leads/count rule below, since it's the most specific match.
   if (/\bmy leads?\b/i.test(t) && /\btoday\b/i.test(t)) return { name: "myLeadsToday", arguments: {} };
-  if (/\bleads?\b/i.test(t) && /\btoday\b/i.test(t) && !/\bmy\b/i.test(t)) return { name: "leadsToday", arguments: {} };
+
+  // Breakdown/drill-down queries - checked BEFORE the generic leadCount
+  // rule below, since a bare "leads" + a date phrase would otherwise also
+  // satisfy leadCount's own trigger. Deliberately do NOT require the word
+  // "lead" here - a natural follow-up like "Which campaign gave the most?"
+  // (see the spec's own conversational example) never says "lead" at all,
+  // relying entirely on the conversation's anchor/drill-down context.
+  if (/\bcampaign/i.test(t)) return { name: "campaignLeadCounts", arguments: { query: t } };
+  if (/\bsource/i.test(t)) return { name: "sourceLeadCounts", arguments: { query: t } };
+  if (/\b(team|teammate|salesperson|by (user|owner|agent))\b/i.test(t)) return { name: "userLeadCounts", arguments: { query: t } };
+  if (/\bpipeline\b/i.test(t) && /(summary|breakdown|overview)/i.test(t)) return { name: "pipelineSummary", arguments: {} };
+  if (/^pipeline$/i.test(t)) return { name: "pipelineSummary", arguments: {} };
+  if (/\bstatus\b/i.test(t) && /\blead/i.test(t)) return { name: "leadStatus", arguments: { query: t } };
+  if (/\bhow many\b/i.test(t) && /\blead/i.test(t) && /\b(new|contacted|qualified|won|lost|site visit)\b/i.test(t)) {
+    return { name: "leadStatus", arguments: { query: t } };
+  }
+
+  // Lead counts - a plain "how many leads" with no range at all, or with an
+  // explicit range ("today", "yesterday", "this week", "between ... and
+  // ..."). "leads today" alone still lands here (leadCount defaults its own
+  // range to today when its query text names none).
+  if (/\blead/i.test(t) && !/\bmy\b/i.test(t) && (containsDateRangePhrase(t) || /(how many|count|number of)/i.test(t) || /^leads?$/i.test(t))) {
+    return { name: "leadCount", arguments: { query: t } };
+  }
+
   if (/\bpending\b/i.test(t) && /follow[\s-]?ups?/i.test(t)) return { name: "pendingFollowUps", arguments: {} };
   if (/follow[\s-]?ups?/i.test(t) && /\btoday\b/i.test(t) && /(how many|count|number of)/i.test(t)) return { name: "followUpsToday", arguments: {} };
   // Loose fallbacks for short, common phrasings the specific rules above miss.
   if (/^follow[\s-]?ups?\s*today$/i.test(t)) return { name: "followUpsToday", arguments: {} };
   if (/^pending$/i.test(t)) return { name: "pendingFollowUps", arguments: {} };
+  // Generalized follow-up counts - any other follow-up question naming a
+  // date range (checked AFTER the today-specific rules above, which stay
+  // byte-for-byte unchanged for backward compatibility).
+  if (/follow[\s-]?ups?/i.test(t) && containsDateRangePhrase(t)) return { name: "followUpCount", arguments: { query: t } };
 
   return null;
 }

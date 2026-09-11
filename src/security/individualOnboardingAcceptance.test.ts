@@ -87,7 +87,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ACCEPTANCE: Individual guided onboar
     // "Setup Complete -> Dashboard": completing the wizard is what flips
     // onboardingCompletedAt, the exact field App.requireAuth() gates
     // dashboard.html on.
-    ctx = await completeWizard(companyId);
+    ctx = await completeWizard(companyId, userId);
     expect(ctx.status).toBe("COMPLETED");
     const company = await getCompanyById(companyId);
     expect(company?.onboardingCompletedAt).not.toBeNull();
@@ -108,7 +108,7 @@ describe.skipIf(!process.env.DATABASE_URL)("ACCEPTANCE: Individual guided onboar
     await skipCurrentStep(companyId, "PIPELINE");
     await skipCurrentStep(companyId, "LEAD_SOURCE");
     await skipCurrentStep(companyId, "META_CONNECTION");
-    await completeWizard(companyId);
+    await completeWizard(companyId, result.user.id);
 
     // Simulate "logs back in later" - a completely fresh read of state,
     // same as what /api/onboarding/wizard/status (and /api/auth/me) would
