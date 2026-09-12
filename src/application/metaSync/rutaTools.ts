@@ -101,14 +101,15 @@ export interface PendingOption {
   label: string;
 }
 
-/** Multi-turn session state, persisted on userWhatsappLinks.pendingQueryContext
- * (see src/application/metaSync/rutaAiAssistant.ts's session handling),
- * scoped per (tenantId, userId) by that column's own primary lookup key, so
- * two different users' in-flight conversations can never collide or
- * overwrite each other, even mid-conversation, even for the same tenant.
- * Two unrelated uses share this one TTL-bound slot (a fresh turn always
- * simply overwrites whatever was pending, never accumulates - see
- * setPendingQueryContext's own comment):
+/** Multi-turn session state, persisted on ruta_conversations.pendingContext
+ * (Phase F - see src/infrastructure/db/repositories/rutaConversation.ts
+ * and src/application/metaSync/rutaAiAssistant.ts's session handling),
+ * scoped per (tenantId, userId, conversationId) together, so two different
+ * users' or tenants' in-flight conversations can never collide or
+ * overwrite each other, even mid-conversation. Two unrelated uses share
+ * this one TTL-bound slot (a fresh turn always simply overwrites whatever
+ * was pending, never accumulates - see rutaConversation.ts's
+ * setPendingContext's own comment):
  *   - "disambiguation": a search matched more than one lead/teammate and is
  *     waiting on a numbered reply (unchanged from before conversational
  *     follow-ups existed).

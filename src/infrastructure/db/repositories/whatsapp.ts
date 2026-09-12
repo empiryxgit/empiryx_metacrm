@@ -658,7 +658,16 @@ export async function getUserWhatsappLinkByUserId(tenantId: string, userId: stri
   return row ?? null;
 }
 
-/** Sets/overwrites the numbered-list disambiguation state for this SAME
+/** @deprecated Phase F relocated this mechanism onto
+ * ruta_conversations.pendingContext, keyed by (tenantId, userId,
+ * conversationId) instead of (tenantId, userId) alone - see
+ * src/infrastructure/db/repositories/rutaConversation.ts's
+ * setPendingContext/clearPendingContext, now what rutaAiAssistant.ts
+ * actually calls. userWhatsappLinks.pendingQueryContext and this pair of
+ * functions are kept only so the now-unused column doesn't need a
+ * destructive migration; nothing in the app writes to them anymore.
+ *
+ * Sets/overwrites the numbered-list disambiguation state for this SAME
  * user's own thread only (scoped by the tenantId+userId primary lookup key
  * already on the row) - a fresh question always simply overwrites whatever
  * was pending, never accumulates. */
@@ -671,6 +680,7 @@ export async function setPendingQueryContext(tenantId: string, userId: string, c
     .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
 }
 
+/** @deprecated see setPendingQueryContext's own comment just above. */
 export async function clearPendingQueryContext(tenantId: string, userId: string): Promise<void> {
   const db = await getDb();
   await db

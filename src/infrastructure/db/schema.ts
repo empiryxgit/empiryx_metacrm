@@ -1533,6 +1533,125 @@ export const userWhatsappLinks = crm.table(
 );
 
 // ---------------------------------------------------------------------------
+// RUTA Conversation Context (Phase F) - the WhatsApp AI Assistant's own
+// conversation state, DELIBERATELY separate from every CRM table above
+// (leads/campaigns/pipeline/...) - nothing here is business data, it's
+// purely "what has this user been asking RUTA," kept only long enough to
+// resolve a follow-up. See src/infrastructure/db/repositories/
+// rutaConversation.ts for the full read/write contract, and
+// rutaAiAssistant.ts's own header for where this fits in the pipeline.
+//
+// Two tables, two different jobs:
+//   - rutaConversations: exactly one MUTABLE "current state" row per live
+//     conversation - the numbered-disambiguation/date-range-anchor pointer
+//     a follow-up resolves against (functionally the same single-slot
+//     state userWhatsappLinks.pendingQueryContext held before this phase -
+//     relocated here, not duplicated there; that column is left in place,
+//     unused, rather than dropped, to avoid a destructive migration).
+//   - rutaConversationTurns: an APPEND-ONLY, BOUNDED log of what was
+//     actually asked/answered in that conversation (see
+//     MAX_TURNS_PER_CONVERSATION in rutaConversation.ts) - this is the
+//     literal "compact conversation context" the spec asks for: enough
+//     recent turns to audit/extend from, never the unbounded raw WhatsApp
+//     history, and NEVER itself sent to an LLM (see rutaAiAssistant.ts/
+//     provider.ts - classify() and compose() still only ever see the
+//     CURRENT message text and the current tool's own structured result).
+//
+// Isolation: every row in both tables carries its own tenantId AND userId
+// (never conversationId alone), and every repository function filters on
+// all three together - so even a bug elsewhere that passed the wrong
+// conversationId can never read or write a different user's or tenant's
+// context; it would simply match zero rows. conversation_id itself (the
+// rutaConversations row's id) is a fresh, unguessable UUID per
+// conversation, never derived from or exposed to anything the AI provider
+// or the WhatsApp payload controls.
+// ---------------------------------------------------------------------------
+
+/** One row per live conversation "thread" for a (tenantId, userId) pair -
+ * a NEW row is started once the previous one has been idle past
+ * CONVERSATION_IDLE_TIMEOUT_MINUTES (rutaConversation.ts), so
+ * conversation_id naturally rolls over rather than living forever; there
+ * is at most one row per (tenantId, userId) that counts as "active" at any
+ * moment (the most recent one still inside its idleExpiresAt), found via
+ * tenantUserActivityIdx below, but old rows are kept (not deleted) as the
+ * conversation's own history boundary. */
+export const rutaConversations = crm.table(
+  "ruta_conversations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // Denormalized from userWhatsappLinks at creation time - for audit/
+    // debugging only, never re-derived from or trusted for identity; the
+    // tenantId/userId columns above (resolved upstream by the verified
+    // phone->user lookup, same as everywhere else in this pipeline) are the
+    // only identity this table relies on.
+    phoneNumber: text("phone_number").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    lastActivityAt: timestamp("last_activity_at", { withTimezone: true }).notNull().defaultNow(),
+    // lastActivityAt + CONVERSATION_IDLE_TIMEOUT_MINUTES at last touch - a
+    // plain column (not recomputed at read time) so "is this conversation
+    // still active" is a single indexed comparison, not per-row arithmetic.
+    idleExpiresAt: timestamp("idle_expires_at", { withTimezone: true }).notNull(),
+    // The SAME single-slot "disambiguation or anchor" pointer
+    // rutaTools.ts's PendingQueryContext type has always described -
+    // relocated here (conversation-scoped) from userWhatsappLinks.
+    // pendingQueryContext. A fresh turn always simply overwrites this,
+    // never accumulates - see rutaConversation.ts's setPendingContext.
+    pendingContext: jsonb("pending_context"),
+    pendingContextExpiresAt: timestamp("pending_context_expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => ({
+    tenantUserActivityIdx: index("ix_ruta_conversations_tenant_user_activity").on(t.tenantId, t.userId, t.lastActivityAt),
+  }),
+);
+
+/** Compact, BOUNDED history of resolved turns within one conversation -
+ * see MAX_TURNS_PER_CONVERSATION (rutaConversation.ts): every insert
+ * prunes the same conversationId back down to the most recent N rows, so
+ * this table's per-conversation size is capped regardless of how long a
+ * conversation runs. Written for every tool result (including plain,
+ * non-date-range tools - sessionRole/range columns are simply null for
+ * those), purely as a compact audit trail of what was asked and resolved;
+ * never read back into an LLM prompt (see this section's own header). */
+export const rutaConversationTurns = crm.table(
+  "ruta_conversation_turns",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    conversationId: uuid("conversation_id").notNull().references(() => rutaConversations.id, { onDelete: "cascade" }),
+    // Denormalized tenantId/userId (also on rutaConversations, one join
+    // away) - kept here directly so every query into this table, not just
+    // ones that already have the parent row loaded, can filter by all
+    // three of (tenantId, userId, conversationId) itself; see this
+    // section's own header on why that's the isolation guarantee, not
+    // just a convenience.
+    tenantId: uuid("tenant_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // The RutaTool.name (rutaTools.ts) that answered this turn.
+    toolName: text("tool_name").notNull(),
+    // RutaTool.sessionRole at the time ("anchor" | "drilldown" | null for
+    // an ordinary tool) - kept for audit only; LIVE anchor resolution
+    // itself still reads rutaConversations.pendingContext, never this
+    // table (see this section's own header).
+    sessionRole: text("session_role"),
+    rangeStartAt: timestamp("range_start_at", { withTimezone: true }),
+    rangeEndAt: timestamp("range_end_at", { withTimezone: true }),
+    rangeLabel: text("range_label"),
+    // Truncated to a few hundred characters (rutaConversation.ts) -
+    // enough to audit what was asked, deliberately not the full unbounded
+    // message or the full reply text.
+    userMessageExcerpt: text("user_message_excerpt").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    conversationCreatedAtIdx: index("ix_ruta_conversation_turns_conversation_created_at").on(t.conversationId, t.createdAt),
+    tenantUserCreatedAtIdx: index("ix_ruta_conversation_turns_tenant_user_created_at").on(t.tenantId, t.userId, t.createdAt),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // RUTA Insight/Alert Engine (Phase E) - a backend detection engine,
 // separate from any LLM, that scans each tenant's own data on a schedule
 // for operationally meaningful events and pushes a proactive WhatsApp

@@ -43,12 +43,28 @@
 //      the real idempotency mechanism here, not just a fast-path.
 //   2. Rate limiting - src/infrastructure/cache/redis.ts's checkRateLimit,
 //      applied per-user AND per-tenant before anything else runs.
-//   3. Conversation/session management - session state (numbered-list
-//      disambiguation, and the date-range "anchor" for conversational
-//      follow-ups) lives ONLY on userWhatsappLinks.pendingQueryContext (a
-//      TTL-bound Postgres column), scoped per (tenantId, userId) so two
-//      users' in-flight conversations can never collide - see rutaTools.ts's
-//      PendingQueryContext doc comment. There is no in-memory/global
+//   3. Conversation/session management (Phase F: RUTA Conversation
+//      Context) - every inbound message resolves/creates its
+//      conversation_id first (getOrCreateActiveConversation,
+//      infrastructure/db/repositories/rutaConversation.ts: the most
+//      recent still-active ruta_conversations row for this (tenantId,
+//      userId), or a fresh one once the last one has gone idle - see that
+//      file's CONVERSATION_IDLE_TIMEOUT_MINUTES). Session state (numbered-
+//      list disambiguation, and the date-range "anchor" for conversational
+//      follow-ups) then lives on THAT conversation's own TTL-bound
+//      pendingContext column, scoped by (tenantId, userId, conversationId)
+//      together - never conversationId alone - so two users' or two
+//      tenants' in-flight conversations can never collide or be crossed,
+//      even by a bug that passed the wrong id (see rutaConversation.ts's
+//      own header, and rutaTools.ts's PendingQueryContext doc comment for
+//      the shape of the value itself, unchanged from before this phase).
+//      Every resolved turn is ALSO appended to that conversation's own
+//      compact, bounded history (ruta_conversation_turns,
+//      MAX_TURNS_PER_CONVERSATION) - a real, separate-from-CRM-data
+//      conversation record, but one this pipeline never reads back into
+//      an AI prompt (see step 4/7 below and provider.ts's own boundary
+//      comment) - resolution itself still runs off the O(1) pendingContext
+//      pointer, not a history scan. There is no in-memory/global
 //      conversation state anywhere in this pipeline.
 //   4. Classification - fast-tier regex pattern matching, then (only on a
 //      miss) the AI provider abstraction (src/infrastructure/ai/
@@ -103,7 +119,8 @@
 // per-user or per-request state in a module-level variable. Every request
 // is fully parameterized by the RutaAssistantInboundMessage/RutaToolContext
 // passed through the call chain; the only durable state is in Postgres
-// (userWhatsappLinks.pendingQueryContext, keyed by tenantId+userId) and
+// (ruta_conversations/ruta_conversation_turns, keyed by tenantId+userId+
+// conversationId - Phase F, see rutaConversation.ts) and
 // Redis (the message-idempotency claim and rate-limit counters, keyed the
 // same way) - so two concurrent invocations handling two different users'
 // messages (even in the same warm Node process, even the SAME phone number
@@ -116,8 +133,9 @@
 // automated tests proving user/tenant/role/session isolation, concurrent
 // conversations, and webhook duplicate/retry handling.
 
-import { getUserWhatsappLinkByPhone, clearPendingQueryContext, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, setPendingQueryContext, touchLastInboundMessage } from "../../infrastructure/db/repositories/whatsapp";
+import { getUserWhatsappLinkByPhone, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, touchLastInboundMessage } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
+import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
 import { getDb } from "../../infrastructure/db/client";
 import { companies } from "../../infrastructure/db/schema";
 import { eq } from "drizzle-orm";
@@ -253,11 +271,13 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     return;
   }
 
-  // Session/conversation management - a PRIOR message in this same user's
-  // thread may have left one of two things pending on
-  // userWhatsappLinks.pendingQueryContext (scoped per (tenantId, userId) by
-  // the column's own lookup key - see rutaTools.ts's PendingQueryContext
-  // doc comment for why this can never leak between concurrent users):
+  // Session/conversation management (Phase F) - resolve/create this
+  // message's conversation_id FIRST (see rutaConversation.ts's own header
+  // for why a fresh id is started once the previous one has gone idle),
+  // then read whatever a PRIOR message in THIS conversation left pending
+  // on its pendingContext column - scoped by (tenantId, userId,
+  // conversationId) together, so this can never read another user's or
+  // tenant's state even by accident:
   //   - a numbered-list disambiguation, resolved below before any fresh
   //     classification (unchanged from before conversational follow-ups);
   //   - an ANCHOR date range from the last leadCount/followUpCount-style
@@ -265,17 +285,24 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   //     ctx.defaultDateRange (for a drill-down question that names no date
   //     of its own) and consulted by the bare-date-follow-up check below
   //     ("What about yesterday?").
-  const pending =
-    link.pendingQueryContext && link.pendingQueryContextExpiresAt && link.pendingQueryContextExpiresAt.getTime() > Date.now()
-      ? (link.pendingQueryContext as PendingQueryContext)
-      : null;
+  // This resolution step ALWAYS runs to completion - producing a concrete
+  // tool name and concrete arguments - before anything below it touches
+  // the database for real data: authorization (hasBroadGrant, inside each
+  // CRM tool's own run()/crmTools.ts) is only ever evaluated against that
+  // FINAL, resolved query, using the verified tenantId/userId this
+  // function already established in step 1 above - never against the raw,
+  // pre-resolution message text, and never trusting anything the AI
+  // provider or the conversation context itself claims about permissions.
+  const conversation = await getOrCreateActiveConversation(msg.tenantId, link.userId, msg.fromPhoneNumber);
+  const pending = (await getPendingContext(msg.tenantId, link.userId, conversation.id)) as PendingQueryContext | null;
 
   if (pending?.kind === "disambiguation") {
     const picked = resolvePendingSelection(text, pending);
     if (picked) {
-      await clearPendingQueryContext(msg.tenantId, link.userId);
+      await clearPendingContext(msg.tenantId, link.userId, conversation.id);
       const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone, lastInsightId: resolveLastInsightId(link) };
       const replyText = await runResolvedPick(toolCtx, picked.kind, picked.id);
+      await recordConversationTurn(msg.tenantId, link.userId, conversation.id, { toolName: "resolvedPick", userMessageText: text });
       await sendReply(sendCtx, msg, link, "resolvedPick", replyText);
       return;
     }
@@ -342,11 +369,13 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   }
 
   // Session state for the NEXT turn - see RutaTool.sessionRole's own
-  // comment (rutaTools.ts) for the full anchor/drilldown contract.
+  // comment (rutaTools.ts) for the full anchor/drilldown contract. Written
+  // to THIS conversation's pendingContext (Phase F), scoped by (tenantId,
+  // userId, conversation.id) together.
   if (result.kind === "disambiguate") {
-    await setPendingQueryContext(msg.tenantId, link.userId, { kind: "disambiguation", options: result.options } satisfies PendingQueryContext);
+    await setPendingContext(msg.tenantId, link.userId, conversation.id, { kind: "disambiguation", options: result.options } satisfies PendingQueryContext);
   } else if (tool.sessionRole === "anchor" && result.dateRange) {
-    await setPendingQueryContext(msg.tenantId, link.userId, {
+    await setPendingContext(msg.tenantId, link.userId, conversation.id, {
       kind: "anchor",
       tool: tool.name,
       range: { startIso: result.dateRange.start.toISOString(), endIso: result.dateRange.end.toISOString(), label: result.dateRange.label },
@@ -358,8 +387,21 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     // anchor they just consumed survives for a LATER bare-date follow-up
     // (the spec's own example: leads today -> campaign breakdown -> "what
     // about yesterday" must still re-run the ORIGINAL lead-count anchor).
-    await clearPendingQueryContext(msg.tenantId, link.userId);
+    await clearPendingContext(msg.tenantId, link.userId, conversation.id);
   }
+
+  // Compact conversation history (Phase F) - append this resolved turn to
+  // ruta_conversation_turns, pruned to MAX_TURNS_PER_CONVERSATION
+  // (rutaConversation.ts). Purely an audit record of what was asked/
+  // resolved; never read back into the composeReply/AI-provider call
+  // below or anywhere else (see this file's header, §3/§7, and
+  // provider.ts's own boundary comment).
+  await recordConversationTurn(msg.tenantId, link.userId, conversation.id, {
+    toolName: tool.name,
+    sessionRole: tool.sessionRole,
+    range: result.kind === "text" && result.dateRange ? result.dateRange : undefined,
+    userMessageText: text,
+  });
 
   // "Structured Result -> LLM -> WhatsApp" - the final pipeline stage, run
   // ONLY for tools backed by a named CRM tool (crmTools.ts) - see
