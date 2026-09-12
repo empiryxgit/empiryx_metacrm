@@ -100,7 +100,7 @@ describe("composeReply", () => {
   // -------------------------------------------------------------------
 
   it("passes the tool name through to the provider's compose() as its third argument, for observability only", async () => {
-    const compose = vi.fn(async () => "You got 87 leads today!");
+    const compose = vi.fn(async (_structured: Record<string, unknown>, _text: string, _toolName?: string) => "You got 87 leads today!");
     vi.mocked(getAiProvider).mockReturnValue({ name: "fake", classify: vi.fn(), compose });
 
     await composeReply("get_lead_count", structured, "how many leads today", fallbackText);
