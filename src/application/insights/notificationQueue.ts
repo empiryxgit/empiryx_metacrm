@@ -21,6 +21,7 @@ import { listRutaAlertCandidates } from "../../infrastructure/db/repositories/wh
 import { publishInsightNotification } from "../../infrastructure/queue/qstash";
 import { PERMISSIONS } from "../../domain/permissions";
 import { getPreferences, isUnderFrequencyCap, isWithinQuietHours, nextEligibleInstant } from "./notificationPreferences";
+import { recordQueuePublishFailure } from "../../infrastructure/observability/telemetry";
 import type { StoredInsight } from "./insightStore";
 
 export interface EnqueueSummary {
@@ -77,7 +78,25 @@ export async function enqueueNotificationsForInsight(tenantId: string, insight: 
     }
 
     const notBefore = scheduledFor.getTime() > now.getTime() ? Math.floor(scheduledFor.getTime() / 1000) : undefined;
-    const messageId = await publishInsightNotification({ queueId: inserted.id, tenantId }, { notBefore });
+    // Observability (Phase H) - "Track: ... Queue failures". The queue row
+    // itself is already durably inserted above ('pending'/scheduled) before
+    // this publish is attempted, so a publish failure here doesn't lose the
+    // notification (a later manual/backfill re-run of this same insight
+    // would still see it as already-queued via the idempotency key) - it
+    // only means QStash never got told to actually deliver it. Recorded and
+    // RE-THROWN (never swallowed) so this insight's row is left correctly
+    // reflecting "queued but not confirmed publishable" and the caller
+    // (insightScanService.ts's own per-tenant try/catch) still counts this
+    // as an error for that tenant's sweep, unchanged from before this
+    // instrumentation - only the failure is now also a named, counted metric
+    // instead of a generic caught-and-logged exception.
+    let messageId: string;
+    try {
+      messageId = await publishInsightNotification({ queueId: inserted.id, tenantId }, { notBefore });
+    } catch (err) {
+      recordQueuePublishFailure({ queue: "ruta_notification", tenantId, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
     await recordQstashMessageId(inserted.id, messageId);
     summary.queuedPending += 1;
   }

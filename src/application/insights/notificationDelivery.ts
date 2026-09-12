@@ -37,6 +37,7 @@ import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
 import { RetryableProcessingError } from "../processLead";
 import { getPreferences, isUnderFrequencyCap } from "./notificationPreferences";
 import { getInsightById } from "./insightStore";
+import { recordWhatsappDeliveryFailure } from "../../infrastructure/observability/telemetry";
 
 /** Recipient must have messaged RUTA within this many hours for a PROACTIVE
  * send to still be inside Meta's 24h customer-service window - see this
@@ -129,6 +130,11 @@ export async function deliverQueuedNotification(queueId: string, tenantId: strin
     // Revert to 'pending' so a QStash retry can re-claim this same row
     // rather than being permanently shut out by the claim guard above.
     const messageText = err instanceof Error ? err.message : String(err);
+    // Observability (Phase H) - "Track: ... WhatsApp delivery failures".
+    // `insight.message` (the actual alert text) is NEVER passed here - only
+    // the technical send error - same discipline as rutaAiAssistant.ts's
+    // own reply() failure path.
+    recordWhatsappDeliveryFailure({ stage: "proactive_notification", tenantId, error: messageText });
     await db.update(rutaNotificationQueue).set({ status: "pending", failureReason: messageText, updatedAt: new Date() }).where(eq(rutaNotificationQueue.id, row.id));
     throw new RetryableProcessingError(`Failed to deliver RUTA insight notification ${queueId}: ${messageText}`);
   }

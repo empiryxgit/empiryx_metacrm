@@ -133,6 +133,23 @@
 //     internal-identifier reject, the existing grounding check) that holds
 //     even if the prompt itself is ignored.
 //
+// Observability (Phase H) - handleOneMessage generates ONE requestId per
+// inbound message and runs its ENTIRE body inside
+// infrastructure/observability/telemetry.ts's runWithRutaContext, filling
+// in userId (once the WhatsApp link resolves) and conversationId (once
+// Phase F's conversation resolves) as they become known. Every AI request
+// (provider.ts's classify()/compose(), the only two places one is ever
+// made) and every tool.run() call below then automatically carries
+// request_id/tenant_id/user_id/conversation_id/tool/latency/status/error in
+// its structured log line and derived metrics, with ZERO of those values
+// threaded through this file's own function signatures - see telemetry.ts's
+// own header for the full design (why metrics/tracing are structured log
+// events rather than a new APM dependency) and its explicit "never log
+// message/lead text" contract. This file's own reply() never passes the
+// outbound message body to recordWhatsappDeliveryFailure below - only a
+// technical error message, same discipline as everywhere else in this
+// pipeline.
+//
 // Concurrency: nothing in this file (or any module it depends on) holds
 // per-user or per-request state in a module-level variable. Every request
 // is fully parameterized by the RutaAssistantInboundMessage/RutaToolContext
@@ -151,6 +168,7 @@
 // automated tests proving user/tenant/role/session isolation, concurrent
 // conversations, and webhook duplicate/retry handling.
 
+import { performance } from "node:perf_hooks";
 import { getUserWhatsappLinkByPhone, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, touchLastInboundMessage } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
 import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
@@ -160,6 +178,7 @@ import { eq } from "drizzle-orm";
 import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
 import { checkRateLimit, tryClaimRutaMessageId } from "../../infrastructure/cache/redis";
 import { rutaLog } from "../../infrastructure/observability/rutaLogger";
+import { newRequestId, runWithRutaContext, setRutaContextField, logToolCall, recordWhatsappDeliveryFailure } from "../../infrastructure/observability/telemetry";
 import { getAiProvider } from "../../infrastructure/ai/provider";
 import { composeReply } from "./rutaReplyComposer";
 import { matchBareDateFollowUp } from "./rutaDateRange";
@@ -256,7 +275,17 @@ async function isRateLimited(tenantId: string, userId: string): Promise<boolean>
 // Per-message pipeline.
 // ---------------------------------------------------------------------------
 
+/** Thin wrapper: generates this message's requestId and runs the real
+ * pipeline (handleOneMessagePipeline) inside that request's telemetry
+ * context - see this file's header ("Observability - Phase H") and
+ * telemetry.ts's own header for why a wrapper here, rather than threading a
+ * requestId through every function signature below, is the right shape. */
 async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void> {
+  const requestId = newRequestId();
+  await runWithRutaContext({ requestId, tenantId: msg.tenantId }, () => handleOneMessagePipeline(msg));
+}
+
+async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promise<void> {
   const text = (msg.messageText ?? "").trim();
 
   // Webhook duplicate/retry handling - claimed FIRST, before any DB lookup
@@ -278,6 +307,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   // isRutaAssistantMessage router check).
   const link = await getUserWhatsappLinkByPhone(msg.tenantId, msg.fromPhoneNumber);
   if (!link) return; // Defensive no-op - the router should never send an unlinked number here.
+  setRutaContextField("userId", link.userId);
 
   // RUTA Insight/Alert Engine (Phase E) - stamps this message as proof the
   // recipient is currently inside Meta's 24h customer-service window, so a
@@ -326,6 +356,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   // pre-resolution message text, and never trusting anything the AI
   // provider or the conversation context itself claims about permissions.
   const conversation = await getOrCreateActiveConversation(msg.tenantId, link.userId, msg.fromPhoneNumber);
+  setRutaContextField("conversationId", conversation.id);
   const pending = (await getPendingContext(msg.tenantId, link.userId, conversation.id)) as PendingQueryContext | null;
 
   if (pending?.kind === "disambiguation") {
@@ -351,7 +382,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
 
   // Classification - fast pattern matcher first, AI provider only on a
   // miss. Both draw from the same RUTA_TOOLS schema (rutaTools.ts).
-  let call = matchPattern(text) ?? (await classifyWithAiProvider(text, msg));
+  let call = matchPattern(text) ?? (await classifyWithAiProvider(text));
 
   // Bare date-only follow-up ("What about yesterday?", "and last week?") -
   // only consulted when normal classification found NOTHING and there's a
@@ -383,13 +414,17 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   }
 
   let result: RutaToolResult;
+  const toolStartedAt = performance.now();
   try {
     result = await tool.run(toolCtx, { query: typeof call.arguments.query === "string" ? call.arguments.query : undefined });
+    logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "ok" });
   } catch (err) {
     // Error handling: a tool failure (a DB error, a bad query) must never
     // leave the user with silence - log the real error, reply with a safe
     // generic message.
-    rutaLog.error("tool_failed", { tenantId: msg.tenantId, userId: link.userId, tool: tool.name, error: err instanceof Error ? err.message : String(err) });
+    const error = err instanceof Error ? err.message : String(err);
+    rutaLog.error("tool_failed", { tenantId: msg.tenantId, userId: link.userId, tool: tool.name, error });
+    logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "error", error });
     await sendReply(sendCtx, msg, link, tool.name, "Something went wrong looking that up - please try again in a moment.");
     return;
   }
@@ -466,13 +501,15 @@ function resolvePendingSelection(text: string, ctx: { options: PendingOption[] }
 // (infrastructure/ai/retry.ts); never retried again here.
 // ---------------------------------------------------------------------------
 
-async function classifyWithAiProvider(text: string, msg: RutaAssistantInboundMessage): Promise<{ name: string; arguments: Record<string, unknown> } | null> {
+async function classifyWithAiProvider(text: string): Promise<{ name: string; arguments: Record<string, unknown> } | null> {
   const provider = getAiProvider();
   if (!provider) return null; // Not provisioned - graceful no-op, pattern matching alone is a fully working v1.
-  const startedAt = Date.now();
-  const call = await provider.classify(text, rutaToolSchemas());
-  rutaLog.info("ai_classify", { tenantId: msg.tenantId, waMessageId: msg.waMessageId, provider: provider.name, matched: Boolean(call), tool: call?.name, durationMs: Date.now() - startedAt });
-  return call;
+  // Latency/status/tool logging for this call is now handled once, inside
+  // provider.ts's own classify() implementation (see telemetry.ts's
+  // logAiRequest) - it has direct access to the raw provider response
+  // (token usage) this function never sees, so duplicating an ad-hoc log
+  // line here would be both redundant and less complete.
+  return provider.classify(text, rutaToolSchemas());
 }
 
 // ---------------------------------------------------------------------------
@@ -496,11 +533,21 @@ async function getSendContext(tenantId: string): Promise<SendContext | null> {
   return { phoneNumberId: account.phoneNumberId, accessToken: connection.accessToken, timezone: companyRow[0]?.timezone ?? "Asia/Kolkata" };
 }
 
-async function reply(ctx: SendContext, to: string, body: string): Promise<void> {
+async function reply(ctx: SendContext, to: string, body: string, tenantId?: string): Promise<void> {
   try {
     await sendWhatsappTextMessage(ctx.phoneNumberId, ctx.accessToken, to, body);
   } catch (err) {
+    // `to`/`body` (a phone number, the reply text) are NEVER passed into the
+    // structured failure log below - only a technical error message, same
+    // "never log sensitive WhatsApp content" discipline telemetry.ts's own
+    // header documents. `tenantId` is passed explicitly (rather than relying
+    // solely on the ambient RutaRequestContext) so the one caller outside
+    // the main per-message pipeline (sendOnboardingWelcomeMessage below,
+    // which never runs inside runWithRutaContext) still gets a tagged
+    // failure metric instead of a null tenant_id.
+    const error = err instanceof Error ? err.message : String(err);
     console.error(`[ruta-ai-assistant] Failed to send WhatsApp reply to ${to}:`, err);
+    recordWhatsappDeliveryFailure({ stage: "reply", error, tenantId });
   }
 }
 
@@ -509,7 +556,7 @@ async function reply(ctx: SendContext, to: string, body: string): Promise<void> 
  * fallback "didn't catch that"). */
 async function sendReply(ctx: SendContext, msg: RutaAssistantInboundMessage, link: RutaAssistantLink, intent: string, text: string): Promise<void> {
   rutaLog.info("reply_sent", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId, intent });
-  await reply(ctx, msg.fromPhoneNumber, text);
+  await reply(ctx, msg.fromPhoneNumber, text, msg.tenantId);
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +605,7 @@ export async function sendOnboardingWelcomeMessage(tenantId: string, userId: str
         "• Review your pipeline stages under Business Configuration\n" +
         "• Invite your team so everyone can ask RUTA too\n\n" +
         "Send HELP any time to see this again.",
+      tenantId,
     );
     rutaLog.info("welcome_sent", { tenantId, userId });
   } catch (err) {

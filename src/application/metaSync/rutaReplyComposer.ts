@@ -79,7 +79,12 @@ export async function composeReply(toolName: string, structured: unknown, origin
   // merely shouldn't echo, it's something it structurally cannot echo.
   const json = sanitizeForCompose(structured as Record<string, unknown>) as Record<string, unknown>;
   try {
-    const composed = await provider.compose(json, originalMessageText);
+    // `toolName` here is observability-only (Phase H) - see
+    // AiProvider.compose's own doc comment (provider.ts) - it never reaches
+    // the model and never affects the reply; it only lets that file's
+    // ai_request log line/metric be filtered by tool the same way
+    // classify()'s already is.
+    const composed = await provider.compose(json, originalMessageText, toolName);
     if (!composed || !composed.trim()) return fallbackText;
     const trimmed = composed.trim();
     if (containsInternalIdentifier(trimmed)) {

@@ -26,9 +26,49 @@
 // needs to know which one is active, since every implementation speaks the
 // same AiProvider interface.
 
+import { performance } from "node:perf_hooks";
 import { withRetry } from "./retry";
 import { rutaLog } from "../observability/rutaLogger";
+import { logAiRequest, type AiTokenUsage } from "../observability/telemetry";
 import { getEnv } from "../env";
+
+// ---------------------------------------------------------------------------
+// AI observability (see telemetry.ts's own header for the full design).
+// Both classify() and compose() below are the ONLY two places an AI
+// provider is ever called - so every "ai_request" log line/metric this app
+// emits is built once, right here, with direct access to the raw provider
+// response (token usage) that neither caller (rutaAiAssistant.ts,
+// rutaReplyComposer.ts) ever sees.
+// ---------------------------------------------------------------------------
+
+/** Azure OpenAI's own usage field shape (`{prompt_tokens, completion_tokens,
+ * total_tokens}`) - translated to AiTokenUsage's camelCase-ish
+ * {prompt,completion,total} right where it's read, so nothing further down
+ * this file (or telemetry.ts, which is provider-agnostic) needs to know
+ * Azure's specific field names. */
+function toTokenUsage(usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined): AiTokenUsage | undefined {
+  if (!usage) return undefined;
+  return { prompt: usage.prompt_tokens, completion: usage.completion_tokens, total: usage.total_tokens };
+}
+
+/** Token usage/cost tracking (spec: "Track: ... Token usage/cost") - cost
+ * is computed ONLY when both price env vars below are set; otherwise token
+ * counts are still logged/metriced (always available from the provider's
+ * own response), just with `costUsd` omitted rather than guessed. This is
+ * the same "flagged, not blocking" posture as every other open, optional
+ * prerequisite in this project (see the project doc's Phase C addendum on
+ * the Azure OpenAI resource itself) - pricing varies by region/deployment/
+ * negotiated rate, so there is no safe default to assume; it lights up the
+ * moment these two env vars are set, no code change needed then either. */
+function computeCostUsd(usage: AiTokenUsage | undefined): number | undefined {
+  if (!usage) return undefined;
+  const promptPricePer1k = Number(getEnv("AZURE_OPENAI_PROMPT_PRICE_PER_1K"));
+  const completionPricePer1k = Number(getEnv("AZURE_OPENAI_COMPLETION_PRICE_PER_1K"));
+  if (!Number.isFinite(promptPricePer1k) || !Number.isFinite(completionPricePer1k)) return undefined;
+  const promptCost = ((usage.prompt ?? 0) / 1000) * promptPricePer1k;
+  const completionCost = ((usage.completion ?? 0) / 1000) * completionPricePer1k;
+  return promptCost + completionCost;
+}
 
 // ---------------------------------------------------------------------------
 // AI Assistant guardrails (Phase G). RUTA AI Assistant is a scoped CRM-data
@@ -83,6 +123,10 @@ export interface AiToolCall {
  *     can't/decides not to. The caller (rutaReplyComposer.ts) always has a
  *     deterministic, AI-free fallback ready, so a provider that omits this
  *     method, or that errors/times out/returns null, never blocks a reply.
+ *     `toolName` (observability only, Phase H) is never shown to the model
+ *     and never affects the reply - it exists purely so an implementation
+ *     can tag its own ai_request telemetry (see telemetry.ts) by tool, the
+ *     same as classify() already can from its own return value.
  *
  * NEITHER method is ever given database access, a query function, or any
  * credential beyond what's already in this file's own HTTP call - an
@@ -93,7 +137,7 @@ export interface AiToolCall {
 export interface AiProvider {
   readonly name: string;
   classify(text: string, tools: AiToolSchema[]): Promise<AiToolCall | null>;
-  compose?(structured: Record<string, unknown>, originalMessageText: string): Promise<string | null>;
+  compose?(structured: Record<string, unknown>, originalMessageText: string, toolName?: string): Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +151,13 @@ export interface AiProvider {
 // benefit.
 // ---------------------------------------------------------------------------
 
-class AzureOpenAiProvider implements AiProvider {
+// Exported (not just used internally by getAiProvider() below) so
+// provider.test.ts can construct one directly with test-only credentials -
+// getAiProvider() itself caches its result for the lifetime of a warm
+// invocation (see that function's own comment), which would make tests
+// depend on call order/module-caching rather than each being independently
+// self-contained.
+export class AzureOpenAiProvider implements AiProvider {
   readonly name = "azure-openai";
 
   constructor(
@@ -118,6 +168,7 @@ class AzureOpenAiProvider implements AiProvider {
 
   async classify(text: string, tools: AiToolSchema[]): Promise<AiToolCall | null> {
     const url = `${this.endpoint.replace(/\/$/, "")}/openai/deployments/${encodeURIComponent(this.deployment)}/chat/completions?api-version=2024-06-01`;
+    const startedAt = performance.now();
 
     try {
       const response = await withRetry(
@@ -164,19 +215,34 @@ class AzureOpenAiProvider implements AiProvider {
 
       if (!response.ok) {
         rutaLog.error("ai_provider_http_error", { provider: this.name, status: response.status });
+        logAiRequest({ tool: "unmatched", stage: "classify", provider: this.name, latencyMs: performance.now() - startedAt, status: "error", error: `http_${response.status}` });
         return null;
       }
       const data = (await response.json()) as {
         choices?: Array<{ message?: { tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
+      const tokens = toTokenUsage(data.usage);
+      const costUsd = computeCostUsd(tokens);
       const call = data.choices?.[0]?.message?.tool_calls?.[0]?.function;
-      if (!call?.name) return null;
+      if (!call?.name) {
+        logAiRequest({ tool: "unmatched", stage: "classify", provider: this.name, latencyMs: performance.now() - startedAt, status: "ok", tokens, costUsd });
+        return null;
+      }
       const schema = tools.find((t) => t.name === call.name);
-      if (!schema) return null; // Model named something outside the fixed set - never trusted.
+      if (!schema) {
+        // Model named something outside the fixed set - never trusted, but
+        // still a real (if wasted) AI call worth accounting for.
+        logAiRequest({ tool: "unmatched", stage: "classify", provider: this.name, latencyMs: performance.now() - startedAt, status: "ok", tokens, costUsd });
+        return null;
+      }
       const args = call.arguments ? (JSON.parse(call.arguments) as Record<string, unknown>) : {};
+      logAiRequest({ tool: schema.name, stage: "classify", provider: this.name, latencyMs: performance.now() - startedAt, status: "ok", tokens, costUsd });
       return { name: schema.name, arguments: args };
     } catch (err) {
-      rutaLog.warn("ai_provider_failed", { provider: this.name, error: err instanceof Error ? err.message : String(err) });
+      const error = err instanceof Error ? err.message : String(err);
+      rutaLog.warn("ai_provider_failed", { provider: this.name, error });
+      logAiRequest({ tool: "unmatched", stage: "classify", provider: this.name, latencyMs: performance.now() - startedAt, status: "error", error });
       return null; // Fails closed to "didn't catch that" - never blocks the reply, never throws to the caller.
     }
   }
@@ -188,9 +254,18 @@ class AzureOpenAiProvider implements AiProvider {
    * nothing to call - `structured` is already the complete, final answer);
    * the model's only job is phrasing. Same timeout/retry shape as
    * classify() above, reused verbatim.
+   *
+   * `toolName` (observability only - added for Phase H telemetry) is never
+   * shown to the model and never affects the reply; it exists purely so the
+   * ai_request log line/metric this call emits (see logAiRequest below) can
+   * be filtered/aggregated by tool, the same as classify()'s own call
+   * already is. Optional so an AiProvider implementation that doesn't care
+   * to pass it still satisfies the interface.
    */
-  async compose(structured: Record<string, unknown>, originalMessageText: string): Promise<string | null> {
+  async compose(structured: Record<string, unknown>, originalMessageText: string, toolName?: string): Promise<string | null> {
     const url = `${this.endpoint.replace(/\/$/, "")}/openai/deployments/${encodeURIComponent(this.deployment)}/chat/completions?api-version=2024-06-01`;
+    const startedAt = performance.now();
+    const tool = toolName ?? "unknown";
 
     try {
       const response = await withRetry(
@@ -238,12 +313,21 @@ class AzureOpenAiProvider implements AiProvider {
 
       if (!response.ok) {
         rutaLog.error("ai_provider_http_error", { provider: this.name, stage: "compose", status: response.status });
+        logAiRequest({ tool, stage: "compose", provider: this.name, latencyMs: performance.now() - startedAt, status: "error", error: `http_${response.status}` });
         return null;
       }
-      const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const tokens = toTokenUsage(data.usage);
+      const costUsd = computeCostUsd(tokens);
+      logAiRequest({ tool, stage: "compose", provider: this.name, latencyMs: performance.now() - startedAt, status: "ok", tokens, costUsd });
       return data.choices?.[0]?.message?.content ?? null;
     } catch (err) {
-      rutaLog.warn("ai_provider_failed", { provider: this.name, stage: "compose", error: err instanceof Error ? err.message : String(err) });
+      const error = err instanceof Error ? err.message : String(err);
+      rutaLog.warn("ai_provider_failed", { provider: this.name, stage: "compose", error });
+      logAiRequest({ tool, stage: "compose", provider: this.name, latencyMs: performance.now() - startedAt, status: "error", error });
       return null; // Fails closed to the caller's deterministic fallback - never blocks the reply.
     }
   }

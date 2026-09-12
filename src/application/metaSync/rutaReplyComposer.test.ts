@@ -92,6 +92,23 @@ describe("composeReply", () => {
     expect((sentJson as any).users[0].count).toBe(2);
   });
 
+  // -------------------------------------------------------------------
+  // AI observability (Phase H) - see provider.ts's own doc comment on
+  // compose()'s optional `toolName` parameter: never shown to the model,
+  // only used so that file's own ai_request telemetry can be filtered by
+  // tool the same way classify()'s already is.
+  // -------------------------------------------------------------------
+
+  it("passes the tool name through to the provider's compose() as its third argument, for observability only", async () => {
+    const compose = vi.fn(async () => "You got 87 leads today!");
+    vi.mocked(getAiProvider).mockReturnValue({ name: "fake", classify: vi.fn(), compose });
+
+    await composeReply("get_lead_count", structured, "how many leads today", fallbackText);
+
+    expect(compose).toHaveBeenCalledTimes(1);
+    expect(compose.mock.calls[0]?.[2]).toBe("get_lead_count");
+  });
+
   it("rejects a composed reply that leaks an internal identifier, even though its own digits are technically grounded", async () => {
     const withIds = {
       tool: "get_user_leads",
