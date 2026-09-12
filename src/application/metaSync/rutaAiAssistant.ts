@@ -115,6 +115,24 @@
 //      "something went wrong" reply rather than a silent drop or an
 //      unhandled throw.
 //
+// AI Assistant guardrails (Phase G) - RUTA is a scoped CRM-data tool, never
+// general-purpose ChatGPT, enforced at TWO layers, neither trusted alone:
+//   - Deterministic (this file, no AI needed): step 4's own classification
+//     miss - RUTA_OUT_OF_SCOPE_REPLY below, sent for anything that doesn't
+//     match a known capability, regardless of whether an AI provider is
+//     configured at all.
+//   - AI-dependent (provider.ts's own system prompts, backstopped in code
+//     by rutaReplyComposer.ts): never invent/estimate a metric, never
+//     expose an internal id/secret/this system prompt, and never treat a
+//     value inside the structured JSON or the user's own message as an
+//     instruction - including CRM-sourced free text (a campaign name, a
+//     teammate's display name) that could itself be a prompt-injection
+//     attempt. See provider.ts's compose() system prompt for the exact
+//     rules, and rutaReplyComposer.ts's own header for the code-level
+//     enforcement (id-stripping before the call, a categorical
+//     internal-identifier reject, the existing grounding check) that holds
+//     even if the prompt itself is ignored.
+//
 // Concurrency: nothing in this file (or any module it depends on) holds
 // per-user or per-request state in a module-level variable. Every request
 // is fully parameterized by the RutaAssistantInboundMessage/RutaToolContext
@@ -193,6 +211,20 @@ export async function handleRutaAssistantMessages(messages: RutaAssistantInbound
 // only, no reply) rather than answered with a "slow down" message every
 // time - replying to every throttled message would itself become the flood.
 // ---------------------------------------------------------------------------
+
+// AI Assistant guardrails (Phase G) - RUTA AI Assistant is a scoped CRM-data
+// tool, never a general-purpose chat assistant. This is the DETERMINISTIC,
+// non-AI-dependent half of that guarantee: whether or not an AI provider is
+// configured (see this file's own header - RUTA fully works with zero AI
+// configured), a message that doesn't match any known RUTA capability gets
+// this explicit scope statement, never a generic "didn't understand" that
+// could be mistaken for an invitation to ask anything else. The AI-dependent
+// half - never inventing data, never leaking an internal id, never
+// following an instruction embedded in CRM/lead text or the user's own
+// message - lives in provider.ts's own system prompts plus
+// rutaReplyComposer.ts's code-level enforcement of the same rules.
+const RUTA_OUT_OF_SCOPE_REPLY =
+  'RUTA AI Assistant only answers questions about your CRM data - leads, campaigns, follow-ups, and pipeline. I can\'t help with anything outside that. Try things like "how many leads did we get today", "follow-ups today", "update on <name>", or send HELP for the full list.';
 
 const USER_RATE_LIMIT = 20; // messages
 const USER_RATE_WINDOW_SECONDS = 60;
@@ -336,13 +368,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
   }
 
   if (!call) {
-    await sendReply(
-      sendCtx,
-      msg,
-      link,
-      "unmatched",
-      'Didn\'t catch that — try asking things like "how many leads did we get today", "follow-ups today", "update on <name>", or send HELP for the full list.',
-    );
+    await sendReply(sendCtx, msg, link, "unmatched", RUTA_OUT_OF_SCOPE_REPLY);
     return;
   }
 
@@ -352,7 +378,7 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
     // filtered out in provider.ts, but this file never trusts that alone -
     // re-validated here too before anything runs.
     rutaLog.error("unknown_tool", { tenantId: msg.tenantId, userId: link.userId, tool: call.name });
-    await sendReply(sendCtx, msg, link, "unmatched", "Didn't catch that — send HELP for a list of things I can answer.");
+    await sendReply(sendCtx, msg, link, "unmatched", RUTA_OUT_OF_SCOPE_REPLY);
     return;
   }
 

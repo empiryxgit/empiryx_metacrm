@@ -121,6 +121,26 @@ describe.skipIf(!process.env.DATABASE_URL)("RUTA AI Assistant - isolation, concu
   });
 
   // ---------------------------------------------------------------------
+  // 0. Scope guardrails (Phase G) - RUTA AI Assistant is not general
+  // ChatGPT. No AI provider is configured in this test file (no
+  // AZURE_OPENAI_* env vars set), so this exercises the fully
+  // deterministic, AI-independent half of the guardrail: matchPattern
+  // finds nothing, classifyWithAiProvider's getAiProvider() returns null,
+  // and the result is the explicit scope reply - never a generic "didn't
+  // understand" that could read as an invitation to ask anything else.
+  // ---------------------------------------------------------------------
+  it("Scope guardrail: a message unrelated to CRM data gets a short scope response, not a generic fallback", async () => {
+    const tenantId = await makeRutaTenant("scope-guardrail");
+    const roleId = await makeRutaRole(tenantId, false);
+    const phone = unique("ph-scope");
+    await makeRutaUser(tenantId, roleId, "Scope User", phone);
+
+    const reply = await sendAndGetReply(tenantId, phone, "what's the weather like today");
+    expect(reply).toContain("RUTA AI Assistant only answers questions about your CRM data");
+    expect(reply).not.toContain("weather"); // never echoes/engages with the off-topic content itself
+  });
+
+  // ---------------------------------------------------------------------
   // 1. User isolation
   // ---------------------------------------------------------------------
   it("User isolation: a personal query never returns another user's data, even inside the same tenant", async () => {
@@ -242,9 +262,12 @@ describe.skipIf(!process.env.DATABASE_URL)("RUTA AI Assistant - isolation, concu
     expect(disambiguateReply).toContain("Multiple matches");
 
     // B has no pending state of their own - a bare "1" must NOT resolve
-    // against A's in-flight disambiguation.
+    // against A's in-flight disambiguation. (Phase G: the out-of-scope
+    // reply text changed - see rutaAiAssistant.ts's RUTA_OUT_OF_SCOPE_REPLY -
+    // but the assertion that matters here is unchanged: B gets the generic
+    // scope reply, never anything resolved from A's pending state.)
     const bReplyToBareNumber = await sendAndGetReply(tenantId, phoneB, "1");
-    expect(bReplyToBareNumber).toContain("Didn't catch that");
+    expect(bReplyToBareNumber).toContain("only answers questions about your CRM data");
 
     // A's own "1" still resolves correctly, proving the state was never
     // touched (let alone consumed) by B's unrelated message.
