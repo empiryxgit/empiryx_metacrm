@@ -59,6 +59,22 @@ import type { RutaAssistantInboundMessage } from "./rutaAiAssistant";
  * even as a durability record. */
 async function isRutaAssistantMessage(tenantId: string, fromPhoneNumber: string, _text: string | null): Promise<boolean> {
   const link = await getUserWhatsappLinkByPhone(tenantId, fromPhoneNumber);
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // logs the exact routing decision for every inbound message: whether the
+  // raw `fromPhoneNumber` Meta sent matched a userWhatsappLinks row for
+  // this tenant. A "matched: false" here for a number that genuinely IS an
+  // onboarded RUTA user's number almost always means a phone-number FORMAT
+  // mismatch (leading '+', leading 0, missing/extra country code) between
+  // what's stored on the user's profile (api/admin/users/handler.ts) and
+  // what WhatsApp actually sends - this is an EXACT string match, no
+  // normalization. When "matched: false", the message silently falls
+  // through to Lead Capture instead of the Assistant (see caller below).
+  console.log("[whatsapp-event] isRutaAssistantMessage check", {
+    tenantId,
+    fromPhoneNumber,
+    matched: link !== null,
+    matchedUserId: link?.userId ?? null,
+  });
   return link !== null;
 }
 
@@ -126,9 +142,22 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
   let payload: WhatsappWebhookPayload;
   try {
     payload = JSON.parse(rawBody) as WhatsappWebhookPayload;
-  } catch {
+  } catch (err) {
+    // DEBUG (temporary) - a malformed body from Meta should never happen in
+    // practice; logged so a genuinely broken payload is visible instead of
+    // silently returning zero counts.
+    console.error("[whatsapp-event] Failed to JSON.parse rawBody - returning zero counts", err);
     return { captured: 0, skipped: 0, toEnqueue: [], toHandleAsAssistant: [] };
   }
+
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // proves the webhook actually reached this function at all (i.e. passed
+  // signature verification in api/webhooks/meta/handler.ts) and shows the
+  // raw entry/change shape Meta sent.
+  console.log("[whatsapp-event] captureWhatsappEvents entry", {
+    entryCount: payload.entry?.length ?? 0,
+    wabaIds: (payload.entry ?? []).map((e) => e.id ?? null),
+  });
 
   let captured = 0;
   let skipped = 0;
@@ -142,6 +171,10 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
       // Only "messages" changes carry inbound messages - "message_template_status"
       // and other subscribed fields on the same WABA are not lead events.
       if (change.field !== "messages") {
+        // DEBUG (temporary) - e.g. "message_template_status" changes land
+        // here; logged so a change field you weren't expecting is visible
+        // rather than an unexplained skip.
+        console.log("[whatsapp-event] Skipping non-'messages' change field", { field: change.field });
         skipped += 1;
         continue;
       }
@@ -149,6 +182,15 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
       const value = change.value;
       const phoneNumberId = value?.metadata?.phone_number_id ?? null;
       const messages = value?.messages ?? [];
+      // DEBUG (temporary, requested for onboarding-welcome-message
+      // diagnosis) - the phone_number_id this arrived ON (which of the
+      // tenant's WhatsApp numbers) and how many messages/statuses are in
+      // this change.
+      console.log("[whatsapp-event] Change value parsed", {
+        phoneNumberId,
+        messagesCount: messages.length,
+        hasStatuses: Boolean((value as { statuses?: unknown[] })?.statuses?.length),
+      });
       if (!phoneNumberId || messages.length === 0) {
         // Most commonly a pure status-receipt notification (value.statuses
         // present, value.messages absent) - not a lead event, skip quietly.
@@ -160,9 +202,21 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
       // phone-number relationship (Phase 2/5 discovery), exactly like the
       // leadgen pipeline resolves tenant from its stored Page relationship.
       const owningTenants = await getTenantsBySelectedWhatsappPhoneNumberId(phoneNumberId);
+      // DEBUG (temporary, requested for onboarding-welcome-message
+      // diagnosis) - THE key check for "message never triggers anything at
+      // all" reports: zero owningTenants means this phoneNumberId is not
+      // currently marked isSelected=true for ANY tenant (see
+      // getTenantsBySelectedWhatsappPhoneNumberId's own comment) - the
+      // message is dropped right here, before Assistant OR Lead Capture.
+      console.log("[whatsapp-event] Tenant resolution for phoneNumberId", {
+        phoneNumberId,
+        owningTenantCount: owningTenants.length,
+        owningTenantIds: owningTenants.map((t) => t.tenantId),
+      });
       if (owningTenants.length === 0) {
         // No tenant currently has this number selected - e.g. discovered but
         // never selected, or since unselected/disconnected.
+        console.warn("[whatsapp-event] No tenant has this phone_number_id selected - message dropped entirely", { phoneNumberId });
         skipped += messages.length;
         continue;
       }
@@ -172,6 +226,8 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
 
       for (const message of messages) {
         if (!message.id || !message.from) {
+          // DEBUG (temporary)
+          console.warn("[whatsapp-event] Message missing id or from - skipped", { hasId: Boolean(message.id), hasFrom: Boolean(message.from) });
           skipped++;
           continue;
         }
@@ -187,9 +243,21 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
           // concern than lead creation, so no separate durable table is
           // needed for it).
           if (await isRutaAssistantMessage(tenant.tenantId, message.from, message.text?.body ?? null)) {
+            // DEBUG (temporary, requested for onboarding-welcome-message
+            // diagnosis) - confirms this message was queued for
+            // handleRutaAssistantMessages, NOT lead-capture.
+            console.log("[whatsapp-event] Routed to RUTA Assistant", { tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id });
             toHandleAsAssistant.push({ tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id, messageText: message.text?.body ?? null });
             continue;
           }
+
+          // DEBUG (temporary, requested for onboarding-welcome-message
+          // diagnosis) - if you expected this message to reach the
+          // Assistant but see this instead, isRutaAssistantMessage's log
+          // just above will show `matched: false` - almost always a
+          // phone-number format mismatch between userWhatsappLinks and
+          // what Meta sent as message.from.
+          console.log("[whatsapp-event] Routed to Lead Capture (no matching RUTA user link)", { tenantId: tenant.tenantId, fromPhoneNumber: message.from, waMessageId: message.id });
 
           // Check duplicate + Store raw event, in one insert -
           // recordWhatsappMessageEvent's onConflictDoNothing on
@@ -210,6 +278,7 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
 
           if (row) {
             captured++;
+            console.log("[whatsapp-event] Lead-capture event recorded (new)", { tenantId: tenant.tenantId, waMessageId: message.id, eventId: row.id });
             toEnqueue.push({ eventId: row.id, waMessageId: message.id, tenantId: tenant.tenantId });
           } else {
             // Already recorded (a redelivered webhook call) - unlike the
@@ -219,12 +288,22 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
             // mirroring getUnenqueuedMetaLeadEvents) already recovers a
             // never-confirmed-enqueued row on its own schedule, so a
             // redelivery simply counts as skipped.
+            console.log("[whatsapp-event] Lead-capture event already recorded (redelivery) - skipped", { tenantId: tenant.tenantId, waMessageId: message.id });
             skipped++;
           }
         }
       }
     }
   }
+
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // the final tally for this webhook call, before the handler acks Meta.
+  console.log("[whatsapp-event] captureWhatsappEvents result", {
+    captured,
+    skipped,
+    toEnqueueCount: toEnqueue.length,
+    toHandleAsAssistantCount: toHandleAsAssistant.length,
+  });
 
   return { captured, skipped, toEnqueue, toHandleAsAssistant };
 }

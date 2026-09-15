@@ -211,6 +211,18 @@ type RutaAssistantLink = NonNullable<Awaited<ReturnType<typeof getUserWhatsappLi
 /** Never throws - one bad message must never block the rest of the batch
  * (same "log and move on" contract as enqueueCapturedWhatsappEvents). */
 export async function handleRutaAssistantMessages(messages: RutaAssistantInboundMessage[]): Promise<void> {
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // confirms this function was actually called by the webhook handler, and
+  // with how many messages. If a message was routed to the Assistant by
+  // metaWhatsappEventService.ts but you never see this log, the problem is
+  // between the webhook handler and here (check for a thrown/500 in
+  // captureWhatsappEvents first).
+  if (messages.length > 0) {
+    rutaLog.info("assistant_batch_received", {
+      count: messages.length,
+      messages: messages.map((m) => ({ tenantId: m.tenantId, fromPhoneNumber: m.fromPhoneNumber, waMessageId: m.waMessageId })),
+    });
+  }
   for (const msg of messages) {
     try {
       await handleOneMessage(msg);
@@ -280,6 +292,12 @@ function isWithinInboundWindow(lastInboundMessageAt: Date | null): boolean {
  * (handleOneMessagePipeline) logs and retries on the user's next message,
  * since welcomeMessageSentAt is only set below, after a real success. */
 async function sendWelcomeNow(ctx: SendContext, tenantId: string, userId: string, phoneNumber: string): Promise<void> {
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // logs the exact send attempt (which phoneNumberId RUTA is sending FROM,
+  // which number it's sending TO) before calling Graph. graphClient.ts's
+  // sendWhatsappTextMessage itself now also logs the raw Graph API
+  // success/failure (status code, error code/subcode) for this same call.
+  rutaLog.info("welcome_send_attempt", { tenantId, userId, fromPhoneNumberId: ctx.phoneNumberId, to: phoneNumber });
   await sendWhatsappTextMessage(ctx.phoneNumberId, ctx.accessToken, phoneNumber, ONBOARDING_WELCOME_TEXT);
   await markWelcomeMessageSent(tenantId, userId);
 }
@@ -329,6 +347,13 @@ async function handleOneMessage(msg: RutaAssistantInboundMessage): Promise<void>
 async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promise<void> {
   const text = (msg.messageText ?? "").trim();
 
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // proves this specific message reached the per-message pipeline at all.
+  // Message TEXT itself is deliberately not logged (this file's own
+  // "never log message/lead text" discipline - see header) - only that
+  // text was present.
+  rutaLog.info("pipeline_started", { tenantId: msg.tenantId, fromPhoneNumber: msg.fromPhoneNumber, waMessageId: msg.waMessageId, hasText: text.length > 0 });
+
   // Webhook duplicate/retry handling - claimed FIRST, before any DB lookup
   // or rate-limit consumption, so a redelivered webhook call for a message
   // already handled costs nothing beyond one Redis round trip and never
@@ -347,7 +372,16 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
   // this function at all (see metaWhatsappEventService.ts's
   // isRutaAssistantMessage router check).
   const link = await getUserWhatsappLinkByPhone(msg.tenantId, msg.fromPhoneNumber);
-  if (!link) return; // Defensive no-op - the router should never send an unlinked number here.
+  if (!link) {
+    // DEBUG (temporary) - should never happen: metaWhatsappEventService.ts's
+    // isRutaAssistantMessage already ran this EXACT SAME query and only
+    // queued this message here because it matched. A log here with
+    // "matched: false" means something changed the link (e.g. it was
+    // deleted) in the brief window between the two calls - logged loudly
+    // because it's otherwise a completely silent dropped message.
+    rutaLog.error("no_whatsapp_link_found_in_pipeline_defensive", { tenantId: msg.tenantId, fromPhoneNumber: msg.fromPhoneNumber, waMessageId: msg.waMessageId });
+    return; // Defensive no-op - the router should never send an unlinked number here.
+  }
   setRutaContextField("userId", link.userId);
 
   // RUTA Insight/Alert Engine (Phase E) - stamps this message as proof the
@@ -385,6 +419,8 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
   // successful send, so a delivery failure here simply tries again on the
   // user's next message rather than being lost.
   if (!link.welcomeMessageSentAt) {
+    // DEBUG (temporary, requested for onboarding-welcome-message diagnosis)
+    rutaLog.info("welcome_owed_attempting_now", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId });
     try {
       await sendWelcomeNow(sendCtx, msg.tenantId, link.userId, msg.fromPhoneNumber);
       rutaLog.info("welcome_sent", { tenantId: msg.tenantId, userId: link.userId, path: "deferred" });
@@ -392,6 +428,11 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
       recordWhatsappDeliveryFailure({ stage: "welcome", error: err instanceof Error ? err.message : String(err), tenantId: msg.tenantId });
       rutaLog.error("welcome_failed", { tenantId: msg.tenantId, userId: link.userId, error: err instanceof Error ? err.message : String(err) });
     }
+  } else {
+    // DEBUG (temporary) - shows this user's welcome was already marked sent,
+    // so no send is attempted on this message - expected steady-state after
+    // the first successful welcome, but useful to rule out during testing.
+    rutaLog.info("welcome_already_sent", { tenantId: msg.tenantId, userId: link.userId, sentAt: link.welcomeMessageSentAt.toISOString() });
   }
 
   // Session/conversation management (Phase F) - resolve/create this
@@ -661,10 +702,29 @@ async function sendReply(ctx: SendContext, msg: RutaAssistantInboundMessage, lin
  * there's nothing to send to.
  */
 export async function sendOnboardingWelcomeMessage(tenantId: string, userId: string): Promise<void> {
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // proves onboarding completion actually called this function at all (one
+  // of its 3 callers: registerCompanyAndOwner/auth.ts,
+  // completeAgencyOnboarding/agencyOnboarding.ts, completeWizard/
+  // onboardingWizard.ts).
+  rutaLog.info("welcome_onboarding_hook_called", { tenantId, userId });
   try {
     const link = await getUserWhatsappLinkByUserId(tenantId, userId);
-    if (!link) return;
-    if (link.welcomeMessageSentAt) return; // already delivered - nothing to do
+    if (!link) {
+      // DEBUG (temporary) - means WhatsApp provisioning for this user (the
+      // admin-provisioned userWhatsappLinks row - see api/admin/users/
+      // handler.ts) never happened or failed silently. Note: this does NOT
+      // by itself explain a missing welcome for a user who links up LATER -
+      // handleOneMessagePipeline's deferred check re-evaluates independently
+      // on every inbound message, it doesn't depend on this call having
+      // found a link.
+      rutaLog.error("welcome_no_whatsapp_link_at_onboarding", { tenantId, userId });
+      return;
+    }
+    if (link.welcomeMessageSentAt) {
+      rutaLog.info("welcome_already_sent_at_onboarding", { tenantId, userId });
+      return; // already delivered - nothing to do
+    }
 
     if (!isWithinInboundWindow(link.lastInboundMessageAt)) {
       // Normal case: defer to handleOneMessagePipeline's first-inbound-

@@ -1094,6 +1094,12 @@ async function fetchWithRetryJson(url: string, body: unknown, attempts = 3): Pro
  * bot) log and drop rather than retry-storming a chat reply. */
 export async function sendWhatsappTextMessage(phoneNumberId: string, accessToken: string, to: string, body: string): Promise<void> {
   const url = `${getBaseUrl()}/${phoneNumberId}/messages?access_token=${encodeURIComponent(accessToken)}`;
+  // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+  // THE definitive "was the Graph API actually called" log - every free-
+  // form WhatsApp send in the app (welcome message, RUTA replies,
+  // notifications) goes through this one function. access_token is
+  // deliberately never logged.
+  console.log("[graph-client] sendWhatsappTextMessage: attempting send", { phoneNumberId, to, bodyLength: body.length });
   const response = await fetchWithRetryJson(url, {
     messaging_product: "whatsapp",
     to,
@@ -1101,6 +1107,21 @@ export async function sendWhatsappTextMessage(phoneNumberId: string, accessToken
     text: { body, preview_url: false },
   });
   if (!response.ok) {
-    throw await buildMetaApiError(response, `Failed to send WhatsApp message via phone number ${phoneNumberId}`);
+    const error = await buildMetaApiError(response, `Failed to send WhatsApp message via phone number ${phoneNumberId}`);
+    // DEBUG (temporary) - the raw Graph API failure detail (HTTP status +
+    // Meta's own error code/subcode/message - e.g. code 131047 = "re-
+    // engagement message" i.e. outside the 24h window, or 100/33 = bad
+    // recipient/phone-number-id) - this is usually the single most useful
+    // line in the whole trace for "message not sending".
+    console.error("[graph-client] sendWhatsappTextMessage: Graph API rejected the send", {
+      phoneNumberId,
+      to,
+      httpStatus: response.status,
+      graphErrorCode: error.graphErrorCode ?? null,
+      graphErrorSubcode: error.graphErrorSubcode ?? null,
+      message: error.message,
+    });
+    throw error;
   }
+  console.log("[graph-client] sendWhatsappTextMessage: Graph API accepted the send", { phoneNumberId, to });
 }

@@ -731,6 +731,15 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
   }
 
   if (!verifyMetaSignature(rawBody, signatureHeader, appSecret)) {
+    // DEBUG (temporary, requested for onboarding-welcome-message diagnosis)
+    // - a Postman/manual test without a correctly computed
+    // X-Hub-Signature-256 header (HMAC-SHA256 of the exact raw body,
+    // keyed by META_APP_SECRET) dies right here, before ANY WhatsApp logic
+    // runs - if you're testing manually and see this, that's the whole
+    // explanation for "nothing happens".
+    console.warn("[whatsapp-webhook] Signature verification FAILED - request rejected before any processing", {
+      hasSignatureHeader: signatureHeader !== null,
+    });
     // Same "never persist an unverified payload" rule as the legacy
     // receiver below - reject BEFORE the durability write, the one case
     // where we do not want to be fast, because we cannot trust the body
@@ -754,6 +763,10 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
   }
 
   if (objectType === "whatsapp_business_account") {
+    // DEBUG (temporary, requested for onboarding-welcome-message diagnosis)
+    // - proves the webhook call passed signature verification and reached
+    // the WhatsApp branch at all (vs. the leadgen "page" branch below).
+    console.log("[whatsapp-webhook] Signature verified, routing to captureWhatsappEvents", { bodyLength: rawBody.length });
     let waResult;
     try {
       waResult = await captureWhatsappEvents(rawBody);
@@ -762,6 +775,18 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
       res.status(500).json({ error: "Failed to persist event" });
       return;
     }
+    // DEBUG (temporary) - the full outcome of this webhook call: how many
+    // new lead-capture events were durably recorded/enqueued, and how many
+    // messages were routed to the RUTA Assistant (with their tenant/phone/
+    // waMessageId) - the single quickest place to see, end to end, what
+    // this one Meta webhook call actually did.
+    console.log("[whatsapp-webhook] captureWhatsappEvents result", {
+      captured: waResult.captured,
+      skipped: waResult.skipped,
+      toEnqueueCount: waResult.toEnqueue.length,
+      toHandleAsAssistantCount: waResult.toHandleAsAssistant.length,
+      assistantRouted: waResult.toHandleAsAssistant.map((m) => ({ tenantId: m.tenantId, fromPhoneNumber: m.fromPhoneNumber, waMessageId: m.waMessageId })),
+    });
     // Return success quickly - same "ack the instant storage is durable"
     // contract as the leadgen path below.
     res.status(200).json({ received: true, captured: waResult.captured });
