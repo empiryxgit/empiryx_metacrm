@@ -292,7 +292,7 @@ export function recordDbLatency(latencyMs: number, status: "ok" | "error", drive
 // ---------------------------------------------------------------------------
 
 export interface WhatsappDeliveryFailureFields {
-  stage: "reply" | "proactive_notification";
+  stage: "reply" | "proactive_notification" | "welcome";
   tenantId?: string;
   /** A technical error message ONLY (Meta API error text is already
    * sanitized/structured by graphClient.ts's MetaApiError - never the
