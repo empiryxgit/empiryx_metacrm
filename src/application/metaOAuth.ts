@@ -22,11 +22,28 @@ import { syncFormsForSelectedPage } from "./metaSync/metaFormService";
 import { discoverWhatsappAssets } from "./metaSync/whatsappDiscoveryService";
 
 // Minimum scope set for what this integration actually does: list/read the
-// tenant's Pages and their lead-retrieval data, list ad accounts, and read
-// Instagram accounts linked to a Page. `email`/`public_profile` are the
-// default Facebook Login scopes needed to identify the authorizing user
-// (step 7). Not sourced from an env var - this is a fixed part of what the
-// app requests, not per-deployment configuration.
+// tenant's Pages and their lead-retrieval data, and list ad accounts.
+// `email`/`public_profile` are the default Facebook Login scopes needed to
+// identify the authorizing user (step 7). Not sourced from an env var -
+// this is a fixed part of what the app requests, not per-deployment
+// configuration.
+//
+// Deliberately NOT requesting any Instagram scope here. `instagram_basic`
+// (the old scope for reading a Page's linked Instagram Business Account
+// through THIS classic Facebook Login flow) is deprecated by Meta - and
+// its replacement, instagram_business_basic, only works through Meta's
+// separate "Instagram" product / Business Login for Instagram flow (its
+// own OAuth endpoint, instagram.com/oauth/authorize, and its own Login
+// Configuration) - not through this /dialog/oauth request at all, so
+// requesting it here just fails with "Invalid Scopes" instead of degrading
+// gracefully like a merely-undeclined permission would. Until Instagram
+// integration is rebuilt on that separate product (its own connect flow,
+// its own discovery logic), metaPageService.ts's syncPagesAndInstagram
+// simply finds zero Instagram accounts - safe and expected, since Instagram
+// discovery reads whatever instagram_business_account field Graph API
+// happens to return on each Page in the SAME getUserPages call Pages
+// syncing already makes (see that function's own header), never a separate
+// call that could fail on its own.
 const OAUTH_SCOPES = [
   "public_profile",
   "email",
@@ -48,17 +65,15 @@ const OAUTH_SCOPES = [
   "pages_manage_ads",
   "ads_read",
   "business_management",
-  "instagram_basic",
   // WhatsApp Lead Capture feature - OPTIONAL, deliberately NOT added to
-  // REQUIRED_OAUTH_SCOPES below (same treatment instagram_basic already
-  // gets, for the same reason: "existing Meta Instant Form functionality
-  // must remain backward compatible" - a tenant/App that hasn't been
-  // through Meta's separate App Review for this permission, or simply
-  // declines it in the consent dialog, must still get a fully working
-  // Meta connection). Read-only, requested purely so
-  // whatsappDiscoveryService.ts can list the tenant's own WhatsApp Business
-  // Account(s) and phone number(s) - RUTA never sends/manages WhatsApp
-  // messages or templates with it.
+  // REQUIRED_OAUTH_SCOPES below, for the same "existing Meta Instant Form
+  // functionality must remain backward compatible" reason as every other
+  // scope above: a tenant/App that hasn't been through Meta's separate App
+  // Review for this permission, or simply declines it in the consent
+  // dialog, must still get a fully working Meta connection. Read-only,
+  // requested purely so whatsappDiscoveryService.ts can list the tenant's
+  // own WhatsApp Business Account(s) and phone number(s) - RUTA never
+  // sends/manages WhatsApp messages or templates with it.
   "whatsapp_business_management",
 ].join(",");
 
@@ -72,11 +87,13 @@ const OAUTH_SCOPES = [
 // pages_manage_ads is required here too (not just requested) - see its
 // comment above; without it, reading an ad-created Page's lead forms fails
 // outright, which is RUTA's core function for essentially every tenant.
-// Deliberately excludes: "public_profile"/"email" (Facebook Login's own
-// baseline - Meta itself won't complete the exchange without these, so
-// there's nothing to validate) and "instagram_basic" (Instagram linking is
-// already optional throughout this integration - see the selection
-// wizard's "You can continue without selecting one").
+// Deliberately excludes "public_profile"/"email" - Facebook Login's own
+// baseline, which Meta itself won't complete the exchange without, so
+// there's nothing to validate. (Instagram linking is likewise optional
+// throughout this integration - see the selection wizard's "You can
+// continue without selecting one" - but as of the OAUTH_SCOPES change
+// above, no Instagram scope is requested at all anymore, so there is
+// nothing Instagram-related to exclude here either.)
 const REQUIRED_OAUTH_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
