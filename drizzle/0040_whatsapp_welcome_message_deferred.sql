@@ -1,0 +1,14 @@
+-- Fix: the onboarding "Welcome to RUTA" WhatsApp message was being sent as
+-- a free-form message the instant onboarding completes - but a brand-new
+-- user has never messaged RUTA's WhatsApp number at that point, so this is
+-- genuinely the FIRST business-initiated contact, outside Meta's 24-hour
+-- customer-service window, and free-form sends outside that window are
+-- rejected by the WhatsApp Cloud API (a pre-approved template is required
+-- for real first contact - see notificationDelivery.ts's identical,
+-- already-solved constraint for proactive insight alerts).
+--
+-- Fix: defer the welcome message until this user's first genuine inbound
+-- message (handled in rutaAiAssistant.ts's handleOneMessagePipeline, right
+-- after touchLastInboundMessage confirms the window is open), tracked by
+-- this new column so it's sent exactly once.
+ALTER TABLE "crm"."user_whatsapp_links" ADD COLUMN IF NOT EXISTS "welcome_message_sent_at" timestamp with time zone;

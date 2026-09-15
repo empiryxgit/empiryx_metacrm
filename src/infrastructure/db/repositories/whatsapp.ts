@@ -753,6 +753,21 @@ export async function touchLastInboundMessage(tenantId: string, userId: string):
     .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
 }
 
+/** Marks the one-time onboarding welcome message as delivered - called by
+ * rutaAiAssistant.ts only after a genuinely successful send (either the
+ * rare immediate path in sendOnboardingWelcomeMessage, if the recipient
+ * happened to already be inside the 24h window, or the normal deferred path
+ * in handleOneMessagePipeline, right after their first real inbound
+ * message). See userWhatsappLinks.welcomeMessageSentAt's own schema
+ * comment for why this is deferred at all. */
+export async function markWelcomeMessageSent(tenantId: string, userId: string): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(userWhatsappLinks)
+    .set({ welcomeMessageSentAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.userId, userId)));
+}
+
 /** Records the most recently DELIVERED insight for this user, so a later
  * bare "Why?" can retrieve it (rutaTools.ts's explainLastInsight) - called
  * by notificationDelivery.ts only after a genuinely successful WhatsApp

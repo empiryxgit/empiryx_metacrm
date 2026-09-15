@@ -1521,6 +1521,15 @@ export const userWhatsappLinks = crm.table(
     // longer expiry (see rutaAiAssistant.ts's INSIGHT_REFERENCE_TTL_HOURS).
     lastInsightId: uuid("last_insight_id").references((): AnyPgColumn => rutaInsights.id, { onDelete: "set null" }),
     lastInsightAt: timestamp("last_insight_at", { withTimezone: true }),
+    // Set once the one-time onboarding welcome message has actually been
+    // delivered to this user - null means it's still owed. Sending it is
+    // deferred (see rutaAiAssistant.ts's sendOnboardingWelcomeMessage /
+    // handleOneMessagePipeline) until lastInboundMessageAt above shows this
+    // user is genuinely inside Meta's 24-hour customer-service window -
+    // never attempted as a same free-form send at onboarding completion,
+    // since a brand-new user has never messaged in yet at that point and
+    // Meta requires a pre-approved template for a true first contact.
+    welcomeMessageSentAt: timestamp("welcome_message_sent_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),
   },

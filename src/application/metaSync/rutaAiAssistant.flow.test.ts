@@ -28,7 +28,7 @@ import * as graphClient from "../../infrastructure/meta/graphClient";
 import { getDb } from "../../infrastructure/db/client";
 import { companies, leads, metaConnections, metaWhatsappAccounts, roles, users } from "../../infrastructure/db/schema";
 import { encryptSecret } from "../../infrastructure/security/encryption";
-import { upsertUserWhatsappLink } from "../../infrastructure/db/repositories/whatsapp";
+import { upsertUserWhatsappLink, markWelcomeMessageSent, getUserWhatsappLinkByUserId } from "../../infrastructure/db/repositories/whatsapp";
 import { PERMISSIONS } from "../../domain/permissions";
 import { handleRutaAssistantMessages, type RutaAssistantInboundMessage } from "./rutaAiAssistant";
 import { dayOffsetRange, todayRange } from "./rutaDateRange";
@@ -74,11 +74,28 @@ async function makeRutaRole(tenantId: string, broadGrant: boolean): Promise<stri
   return role!.id;
 }
 
-async function makeRutaUser(tenantId: string, roleId: string, label: string, phoneNumber: string): Promise<string> {
+async function makeRutaUser(
+  tenantId: string,
+  roleId: string,
+  label: string,
+  phoneNumber: string,
+  opts: { skipWelcomePriming?: boolean } = {},
+): Promise<string> {
   const db = await getDb();
   const [user] = await db.insert(users).values({ companyId: tenantId, roleId, email: `${unique(label)}@example.com`, passwordHash: "x", fullName: label, phoneNumber }).returning();
   const result = await upsertUserWhatsappLink(tenantId, user!.id, phoneNumber);
   expect(result.ok).toBe(true); // sanity: the link actually took
+  // The onboarding welcome message (deferred to this user's first real
+  // inbound message - see rutaAiAssistant.ts's sendOnboardingWelcomeMessage/
+  // handleOneMessagePipeline) is a separate concern from what THIS file
+  // tests (isolation/concurrency/dedup). Pre-marking it sent here keeps
+  // every fixture's "first" message in these tests producing exactly the
+  // one reply they're actually asserting on, rather than an extra welcome
+  // send ahead of it. opts.skipWelcomePriming leaves it genuinely owed, for
+  // the deferred-welcome test below, which is the one test that needs it.
+  if (!opts.skipWelcomePriming) {
+    await markWelcomeMessageSent(tenantId, user!.id);
+  }
   return user!.id;
 }
 
@@ -108,7 +125,12 @@ async function sendAndGetReply(tenantId: string, fromPhoneNumber: string, text: 
   const before = vi.mocked(graphClient.sendWhatsappTextMessage).mock.calls.length;
   await handleRutaAssistantMessages([inboundMessage(tenantId, fromPhoneNumber, text, waMessageId)]);
   const calls = vi.mocked(graphClient.sendWhatsappTextMessage).mock.calls.slice(before);
-  return calls[0]?.[3];
+  // The LAST send from this one message's processing is always the actual
+  // reply to it - normally the only one, but a user whose onboarding
+  // welcome is still owed gets that sent first (handleOneMessagePipeline),
+  // making this the 2nd call. Using the last call keeps this helper correct
+  // either way, rather than assuming exactly one send per message.
+  return calls[calls.length - 1]?.[3];
 }
 
 function replyCallCount(): number {
@@ -405,5 +427,45 @@ describe.skipIf(!process.env.DATABASE_URL)("RUTA AI Assistant - isolation, concu
     await handleRutaAssistantMessages([inboundMessage(tenantB, phoneB, "how many leads today", sharedWamid)]);
 
     expect(replyCallCount()).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------
+  // 7. Deferred onboarding welcome message
+  //
+  // Regression coverage for the bug fixed here: the welcome message used
+  // to be sent as a free-form WhatsApp message the instant onboarding
+  // completed - but a brand-new user has never messaged in at that point,
+  // so that send is outside Meta's 24h customer-service window and the
+  // WhatsApp Cloud API rejects it (a template is required for genuine first
+  // contact). The fix defers it to this user's actual first inbound
+  // message, which is exactly what this test proves end to end.
+  // ---------------------------------------------------------------------
+  it("Deferred onboarding welcome: a user whose welcome is still owed gets it once, ahead of their first real reply; never again after", async () => {
+    const tenantId = await makeRutaTenant("welcome-deferred");
+    const roleId = await makeRutaRole(tenantId, false);
+    const phoneNumber = unique("ph-welcome");
+    const userId = await makeRutaUser(tenantId, roleId, "Welcome User", phoneNumber, { skipWelcomePriming: true });
+    await insertLead(tenantId, { ownerId: userId });
+
+    // Sanity: nothing has been sent to this fresh link yet.
+    const before = await getUserWhatsappLinkByUserId(tenantId, userId);
+    expect(before?.welcomeMessageSentAt).toBeNull();
+
+    await handleRutaAssistantMessages([inboundMessage(tenantId, phoneNumber, "my leads today")]);
+
+    // Exactly two sends for this first message: the welcome first, then the
+    // real answer - never a template, never sent out of order.
+    const calls = vi.mocked(graphClient.sendWhatsappTextMessage).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![3]).toContain("Welcome to RUTA");
+    expect(calls[1]![3]).toContain("1 lead today");
+
+    const after = await getUserWhatsappLinkByUserId(tenantId, userId);
+    expect(after?.welcomeMessageSentAt).not.toBeNull();
+
+    // A second message from the same user never repeats the welcome.
+    const secondReply = await sendAndGetReply(tenantId, phoneNumber, "my leads today");
+    expect(secondReply).toContain("1 lead today");
+    expect(replyCallCount()).toBe(3); // 2 from the first message + 1 for this one
   });
 });

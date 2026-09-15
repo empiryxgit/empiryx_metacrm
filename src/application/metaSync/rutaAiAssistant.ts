@@ -169,7 +169,7 @@
 // conversations, and webhook duplicate/retry handling.
 
 import { performance } from "node:perf_hooks";
-import { getUserWhatsappLinkByPhone, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, touchLastInboundMessage } from "../../infrastructure/db/repositories/whatsapp";
+import { getUserWhatsappLinkByPhone, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, touchLastInboundMessage, markWelcomeMessageSent } from "../../infrastructure/db/repositories/whatsapp";
 import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
 import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
 import { getDb } from "../../infrastructure/db/client";
@@ -257,6 +257,47 @@ const TENANT_RATE_WINDOW_SECONDS = 60;
 // for hours before someone gets to it.
 const INSIGHT_REFERENCE_TTL_HOURS = 48;
 
+// Same 23h-of-24h safety margin as notificationDelivery.ts's own
+// INBOUND_WINDOW_HOURS (a deliberate, self-contained duplicate - see that
+// file's header for why this constant isn't shared/exported instead) - used
+// only by sendOnboardingWelcomeMessage's rare "recipient already messaged
+// in before onboarding finished" branch below.
+const WELCOME_INBOUND_WINDOW_HOURS = 23;
+
+function isWithinInboundWindow(lastInboundMessageAt: Date | null): boolean {
+  return lastInboundMessageAt !== null && Date.now() - lastInboundMessageAt.getTime() <= WELCOME_INBOUND_WINDOW_HOURS * 60 * 60 * 1000;
+}
+
+/** Sends the onboarding welcome text and marks it delivered ONLY on a
+ * genuinely successful send - deliberately does NOT go through this file's
+ * own reply() helper, because reply() swallows send failures (catches and
+ * records them, never throws/signals failure to its caller - correct for a
+ * normal reply, where the worst case is just silence, but wrong here: it
+ * would mark welcomeMessageSentAt=true even when the send actually failed,
+ * permanently losing the welcome message). Throws on failure so both call
+ * sites' own try/catch can decide what to do - the immediate path
+ * (sendOnboardingWelcomeMessage) logs and gives up, the deferred path
+ * (handleOneMessagePipeline) logs and retries on the user's next message,
+ * since welcomeMessageSentAt is only set below, after a real success. */
+async function sendWelcomeNow(ctx: SendContext, tenantId: string, userId: string, phoneNumber: string): Promise<void> {
+  await sendWhatsappTextMessage(ctx.phoneNumberId, ctx.accessToken, phoneNumber, ONBOARDING_WELCOME_TEXT);
+  await markWelcomeMessageSent(tenantId, userId);
+}
+
+const ONBOARDING_WELCOME_TEXT =
+  "👋 Welcome to RUTA! Your RUTA AI Assistant is now active on this number.\n\n" +
+  "Just ask me things in plain language, right here on WhatsApp - no commands needed. Try:\n" +
+  '• "how many leads did we get today"\n' +
+  '• "follow-ups today"\n' +
+  '• "update on <name>"\n' +
+  '• "my leads today"\n' +
+  '• "pending follow-ups"\n\n' +
+  "A couple of things worth finishing when you get a chance (Settings on the web dashboard):\n" +
+  "• Connect your Meta/Instagram ads account so new leads start flowing in automatically\n" +
+  "• Review your pipeline stages under Business Configuration\n" +
+  "• Invite your team so everyone can ask RUTA too\n\n" +
+  "Send HELP any time to see this again.";
+
 function resolveLastInsightId(link: RutaAssistantLink): string | undefined {
   if (!link.lastInsightId || !link.lastInsightAt) return undefined;
   const ageMs = Date.now() - link.lastInsightAt.getTime();
@@ -331,6 +372,26 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
   if (!sendCtx) {
     rutaLog.error("no_send_context", { tenantId: msg.tenantId, userId: link.userId, waMessageId: msg.waMessageId });
     return;
+  }
+
+  // Deferred onboarding welcome (see sendOnboardingWelcomeMessage's own doc
+  // comment for why this can't be sent at onboarding-completion time
+  // instead): this inbound message is what just opened Meta's 24h
+  // customer-service window (touchLastInboundMessage above), so if the
+  // welcome is still owed, THIS is the first safe moment to send it - as
+  // its own message, before whatever this inbound message actually asked
+  // for gets answered below. Best-effort: never blocks or fails the rest of
+  // the pipeline, and welcomeMessageSentAt is only set on a genuinely
+  // successful send, so a delivery failure here simply tries again on the
+  // user's next message rather than being lost.
+  if (!link.welcomeMessageSentAt) {
+    try {
+      await sendWelcomeNow(sendCtx, msg.tenantId, link.userId, msg.fromPhoneNumber);
+      rutaLog.info("welcome_sent", { tenantId: msg.tenantId, userId: link.userId, path: "deferred" });
+    } catch (err) {
+      recordWhatsappDeliveryFailure({ stage: "welcome", error: err instanceof Error ? err.message : String(err), tenantId: msg.tenantId });
+      rutaLog.error("welcome_failed", { tenantId: msg.tenantId, userId: link.userId, error: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   // Session/conversation management (Phase F) - resolve/create this
@@ -564,50 +625,63 @@ async function sendReply(ctx: SendContext, msg: RutaAssistantInboundMessage, lin
 // ---------------------------------------------------------------------------
 
 /**
- * Sent once, right after a company FINISHES onboarding - the very first
- * message a brand-new user gets from RUTA. RUTA AI Assistant itself is
- * already active by this point (mandatory, zero-verification - it went live
- * the moment a WhatsApp link was provisioned for this user, alongside
- * account creation; see this function's own callers: registerCompanyAndOwner
- * in auth.ts, completeAgencyOnboarding in agencyOnboarding.ts, and
- * completeWizard in onboardingWizard.ts), so this message is purely
- * informational, not an activation step of its own.
+ * Called once, right after a company FINISHES onboarding. RUTA AI Assistant
+ * itself is already active by this point (mandatory, zero-verification - it
+ * went live the moment a WhatsApp link was provisioned for this user,
+ * alongside account creation; see this function's own callers:
+ * registerCompanyAndOwner in auth.ts, completeAgencyOnboarding in
+ * agencyOnboarding.ts, and completeWizard in onboardingWizard.ts), so the
+ * welcome text itself is purely informational, not an activation step.
+ *
+ * IMPORTANT - does NOT normally send anything here. A brand-new user has,
+ * by definition, never messaged RUTA's WhatsApp number yet at the moment
+ * onboarding finishes - so this is genuinely the FIRST business-initiated
+ * contact, outside Meta's 24-hour customer-service window, and the WhatsApp
+ * Cloud API rejects a free-form (non-template) send in that state (see
+ * graphClient.ts's sendWhatsappTextMessage and notificationDelivery.ts's
+ * identical, already-solved constraint for proactive insight alerts).
+ * Sending the welcome text is therefore DEFERRED to this user's actual
+ * first inbound message - see handleOneMessagePipeline below, which sends
+ * it immediately after touchLastInboundMessage confirms the window is
+ * genuinely open, then marks welcomeMessageSentAt so it's sent exactly
+ * once.
+ *
+ * The only exception: on the rare chance this user already messaged the
+ * bot before onboarding finished (e.g. tried it out mid-setup), the window
+ * may already be open - this function checks that and sends immediately in
+ * that one case, so the deferred path isn't the ONLY path, just the normal
+ * one.
  *
  * Deliberately never throws and never blocks its caller - onboarding
  * completion (account creation, the wizard finishing) must succeed
- * regardless of whether this message actually goes out. A missing link
- * (getUserWhatsappLinkByUserId returns null - e.g. WhatsApp provisioning
- * itself failed, or this is being called for a user who genuinely has no
- * phone number on file) is a silent no-op, not an error - there's nothing
- * to send to.
+ * regardless of whether this message actually goes out now or later. A
+ * missing link (getUserWhatsappLinkByUserId returns null - e.g. WhatsApp
+ * provisioning itself failed, or this is being called for a user who
+ * genuinely has no phone number on file) is a silent no-op, not an error -
+ * there's nothing to send to.
  */
 export async function sendOnboardingWelcomeMessage(tenantId: string, userId: string): Promise<void> {
   try {
     const link = await getUserWhatsappLinkByUserId(tenantId, userId);
     if (!link) return;
+    if (link.welcomeMessageSentAt) return; // already delivered - nothing to do
+
+    if (!isWithinInboundWindow(link.lastInboundMessageAt)) {
+      // Normal case: defer to handleOneMessagePipeline's first-inbound-
+      // message hook below. Not an error - logged for observability only.
+      rutaLog.info("welcome_deferred_until_first_message", { tenantId, userId });
+      return;
+    }
+
+    // Rare case: this user is already inside the window (they messaged in
+    // before onboarding finished) - safe to send right now.
     const ctx = await getSendContext(tenantId);
     if (!ctx) {
       rutaLog.error("welcome_no_send_context", { tenantId, userId });
       return;
     }
-    await reply(
-      ctx,
-      link.phoneNumber,
-      "👋 Welcome to RUTA! Your RUTA AI Assistant is now active on this number.\n\n" +
-        "Just ask me things in plain language, right here on WhatsApp - no commands needed. Try:\n" +
-        '• "how many leads did we get today"\n' +
-        '• "follow-ups today"\n' +
-        '• "update on <name>"\n' +
-        '• "my leads today"\n' +
-        '• "pending follow-ups"\n\n' +
-        "A couple of things worth finishing when you get a chance (Settings on the web dashboard):\n" +
-        "• Connect your Meta/Instagram ads account so new leads start flowing in automatically\n" +
-        "• Review your pipeline stages under Business Configuration\n" +
-        "• Invite your team so everyone can ask RUTA too\n\n" +
-        "Send HELP any time to see this again.",
-      tenantId,
-    );
-    rutaLog.info("welcome_sent", { tenantId, userId });
+    await sendWelcomeNow(ctx, tenantId, userId, link.phoneNumber);
+    rutaLog.info("welcome_sent", { tenantId, userId, path: "immediate" });
   } catch (err) {
     rutaLog.error("welcome_failed", { tenantId, userId, error: err instanceof Error ? err.message : String(err) });
   }

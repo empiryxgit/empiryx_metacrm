@@ -46,6 +46,23 @@ When a person's connected Facebook Page has a linked Instagram professional acco
 
 ---
 
+## whatsapp_business_management (Advanced Access)
+
+RUTA optionally reads the WhatsApp Business Account(s) and phone number(s) a person's Meta Business already owns, during the same "Connect Meta" flow used for Pages and ad accounts, so the person can see and confirm which WhatsApp number is associated with their account. This is strictly read-only discovery (`whatsappDiscoveryService.ts`): RUTA never sends, manages, or edits WhatsApp messages, templates, or phone-number settings with this permission — sending is handled separately, entirely through `whatsapp_business_messaging` below, using RUTA's own connected WhatsApp Business Account rather than a per-tenant token. This permission is optional in RUTA's OAuth request; declining it does not block a person from completing the rest of the Meta connection (Pages/ad accounts/Instagram still work normally).
+
+---
+
+## whatsapp_business_messaging (Advanced Access)
+
+RUTA uses one WhatsApp Business phone number (connected directly to the RUTA platform, not per-tenant) to power two features on the same shared webhook endpoint:
+
+1. **RUTA WhatsApp Assistant** — an internal AI assistant for each business's own team members. When a person whose profile phone number is registered in RUTA messages the connected WhatsApp number, RUTA answers natural-language questions about their own CRM data (lead counts, pipeline status, campaign performance) by replying on WhatsApp. This lets staff check their CRM from WhatsApp instead of logging into the web app.
+2. **WhatsApp Lead Capture** — when a message arrives from a phone number that is NOT a registered team member, RUTA treats it as an inbound lead and creates a CRM record from it, so a business can capture leads that reach them directly on WhatsApp (e.g. from a "Click to WhatsApp" ad) alongside their Meta Lead Ads leads.
+
+Both directions use the standard WhatsApp Cloud API: inbound messages arrive via the `messages` webhook field (HMAC-signature verified), and RUTA replies via `POST /{phone-number-id}/messages`. RUTA never sends unsolicited marketing messages and never messages a number that hasn't first messaged in (or, for the Assistant, a number that isn't a business's own registered staff member).
+
+---
+
 ### General notes for the App Review submission form
 
 - **Platform:** Web application (Vercel-hosted).
