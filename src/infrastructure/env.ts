@@ -17,7 +17,16 @@
 // feature-branch PR) are unaffected and fall back to the plain,
 // production-shaped variable names.
 function isUatDeployment(): boolean {
-  return process.env.VERCEL_ENV === "preview" && process.env.VERCEL_GIT_COMMIT_REF === "UAT";
+  // Case-insensitive on purpose: uat.yml triggers deploys from either the
+  // `UAT` or `uat` branch (see .github/workflows/uat.yml), so a push to
+  // whichever casing the team actually uses must still be recognized here -
+  // otherwise UAT_-prefixed overrides (e.g. UAT_META_WEBHOOK_VERIFY_TOKEN)
+  // would silently never apply and the deployment would fall back to
+  // Production's plain-named variables without any error.
+  return (
+    process.env.VERCEL_ENV === "preview" &&
+    process.env.VERCEL_GIT_COMMIT_REF?.toLowerCase() === "uat"
+  );
 }
 
 /**
