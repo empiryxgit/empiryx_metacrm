@@ -699,6 +699,25 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
     const challenge = getQueryString(req, "hub.challenge");
     const expected = getEnv("META_WEBHOOK_VERIFY_TOKEN");
 
+    // DEBUG (temporary, requested for onboarding-welcome-message diagnosis)
+    // - pinpoints exactly why the verify-token handshake passes or fails:
+    // whether this deployment was even detected as UAT (env.ts's
+    // isUatDeployment() - VERCEL_ENV==="preview" AND
+    // VERCEL_GIT_COMMIT_REF.toLowerCase()==="uat", both Vercel-injected
+    // automatically), whether a UAT_-prefixed override exists at all, and
+    // whether the incoming token actually matched - all WITHOUT ever
+    // logging the actual secret values themselves.
+    console.log("[meta-webhook] GET verify handshake", {
+      mode,
+      hasTokenInRequest: token !== null,
+      vercelEnv: process.env.VERCEL_ENV ?? null,
+      vercelGitCommitRef: process.env.VERCEL_GIT_COMMIT_REF ?? null,
+      hasUatOverrideSet: process.env.UAT_META_WEBHOOK_VERIFY_TOKEN !== undefined && process.env.UAT_META_WEBHOOK_VERIFY_TOKEN !== "",
+      hasPlainVarSet: process.env.META_WEBHOOK_VERIFY_TOKEN !== undefined && process.env.META_WEBHOOK_VERIFY_TOKEN !== "",
+      resolvedExpectedIsSet: Boolean(expected),
+      tokenMatchedExpected: Boolean(expected) && token === expected,
+    });
+
     if (mode === "subscribe" && expected && token === expected) {
       res.status(200).send(challenge ?? "");
       return;
