@@ -133,12 +133,11 @@ export async function processWhatsAppMessageEvent(
     let campaignId: string | null = null;
     let campaignName: string | null = null;
     let crmCampaignId: string | null = null;
-    let branchId: string | null = null;
 
     if (referral?.source_id) {
       // getMetaLeadRouteByMetaAdId already joins all the way out to the ad
-      // set, Meta campaign, and (if mapped) CRM campaign/branch in one
-      // query - no further lookups needed here.
+      // set, Meta campaign, and (if mapped) CRM campaign in one query - no
+      // further lookups needed here.
       const route = await getMetaLeadRouteByMetaAdId(tenantId, referral.source_id);
       if (route) {
         adId = route.adId;
@@ -148,7 +147,6 @@ export async function processWhatsAppMessageEvent(
         campaignId = route.campaignId ?? null;
         campaignName = route.campaignName ?? null;
         crmCampaignId = route.crmCampaignId ?? null;
-        branchId = route.crmCampaignBranchId ?? null;
       }
       // No matching route (this ad hasn't been synced by
       // metaCampaignService.ts yet, or the referral names an ad this tenant
@@ -168,7 +166,6 @@ export async function processWhatsAppMessageEvent(
       campaignId,
       campaignName,
       crmCampaignId,
-      branchId,
     });
 
     if (result.outcome === "duplicate") {

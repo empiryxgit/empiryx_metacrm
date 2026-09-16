@@ -118,7 +118,6 @@ describe.skipIf(!process.env.DATABASE_URL)("Security: tenant isolation (Tenant A
     const rawEventA = await saveRawEvent({ companyId: A.tenantId, campaignId: campaignA.id, objectType: "page", rawPayload: {}, signatureHeader: null, metaLeadId: `meta_lead_a_${randomUUID()}`, pageId: "PAGE_A1", formId: "form_a1" });
     const leadA = await insertLead({
       companyId: A.tenantId,
-      branchId: null,
       crmCampaignId: campaignA.id,
       metaLeadId: `meta_lead_a_${randomUUID()}`,
       platform: LeadPlatform.Facebook,

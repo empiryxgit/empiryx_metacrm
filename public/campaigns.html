@@ -103,11 +103,6 @@
               </select>
             </div>
           </div>
-          <label for="campaignBranch">Branch</label>
-          <select id="campaignBranch">
-            <option value="">All branches</option>
-          </select>
-          <div class="hint">Leads mapped to this campaign (from Meta or elsewhere) automatically inherit this branch. Leave "All branches" if this campaign isn't specific to one location.</div>
           <button class="btn" type="submit" style="margin-top:14px">Create campaign</button>
         </form>
       </div>
@@ -121,8 +116,8 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Platform</th><th>Branch</th><th>Status</th><th>Leads</th><th>Created</th></tr></thead>
-          <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+          <thead><tr><th>Name</th><th>Platform</th><th>Status</th><th>Leads</th><th>Created</th></tr></thead>
+          <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
       <div class="pagination-bar" id="crmPaginationBar" style="display:none">
@@ -204,17 +199,11 @@
     return campaign.stopTime ? `${start} – ${fmt(campaign.stopTime)}` : `${start} – Ongoing`;
   }
 
-  function branchQueryParam(){
-    const branchId = App.getSelectedBranchId();
-    return branchId ? `branchId=${encodeURIComponent(branchId)}` : "";
-  }
-
   // =======================================================================
   // Search + pagination - shared shape for both tables on this screen.
   // Both lists are fetched in full (tenants realistically have dozens, not
   // thousands, of campaigns) and filtered/paged entirely client-side - no
-  // new query params on the underlying list endpoints, consistent with
-  // this file's existing "fetch once, re-render on branch change" pattern.
+  // new query params on the underlying list endpoints.
   // =======================================================================
 
   const PAGE_SIZE = 10;
@@ -254,10 +243,9 @@
   // Phase 9: a Meta Campaign is its own first-class object, entirely
   // separate from the CRM `campaigns` list below - this table is sourced
   // from /api/campaigns/meta (the metaCampaigns table), never filtered out
-  // of /api/campaigns. "Branch" is really "which CRM campaign is this
-  // mapped to" now - a Meta campaign can be unmapped (still capturing
-  // leads, just without a CRM campaign/branch attached) or mapped to any
-  // one CRM campaign (and several Meta campaigns can share the same one).
+  // of /api/campaigns. A Meta campaign can be unmapped (still capturing
+  // leads, just without a CRM campaign attached) or mapped to any one CRM
+  // campaign (and several Meta campaigns can share the same one).
   // =======================================================================
 
   function renderMetaSection(status) {
@@ -325,10 +313,9 @@
     `;
 
     // renderMetaSection rebuilds this whole block's DOM from scratch every
-    // time it runs (including on a branch switch) - restore whatever
-    // search term was already typed rather than silently clearing it, even
-    // though `metaSearch` itself (a plain JS variable) survives the rebuild
-    // fine on its own.
+    // time it runs - restore whatever search term was already typed rather
+    // than silently clearing it, even though `metaSearch` itself (a plain
+    // JS variable) survives the rebuild fine on its own.
     document.getElementById("metaSearch").value = metaSearch;
     document.getElementById("metaSearch").addEventListener("input", (e) => {
       metaSearch = e.target.value;
@@ -344,9 +331,7 @@
   // =======================================================================
   // Meta Campaigns list - search + client-side pagination (see
   // updatePaginationBar above). allMetaCampaigns is fetched once per
-  // renderMetaSection() call (branch switches re-fetch since a Meta
-  // campaign's mapped CRM campaign - the "Mapped CRM campaign" column - can
-  // itself be branch-scoped); metaSearch/metaPage filter and page that
+  // renderMetaSection() call; metaSearch/metaPage filter and page that
   // in-memory list without another round trip.
   // =======================================================================
 
@@ -687,9 +672,7 @@
     </svg>`;
   }
 
-  // Fetched once (Meta connection/Page/Ad Account selection isn't
-  // branch-scoped, so this never needs to change when the branch switcher
-  // fires) and cached here in case some future caller needs the raw
+  // Fetched once and cached here in case some future caller needs the raw
   // status again without a second round trip.
   let metaStatus = null;
 
@@ -714,12 +697,11 @@
 
   async function loadCampaigns() {
     const rows = document.getElementById("rows");
-    const qs = branchQueryParam();
     try {
-      ({ campaigns: allCampaigns } = await App.apiJson(`/api/campaigns${qs ? `?${qs}` : ""}`));
+      ({ campaigns: allCampaigns } = await App.apiJson("/api/campaigns"));
     } catch (err) {
       document.getElementById("crmPaginationBar").style.display = "none";
-      rows.innerHTML = `<tr><td colspan="6">
+      rows.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">Unable to load campaigns</p>
           <p class="state-desc">We couldn't retrieve your campaigns. Please try again.</p>
@@ -737,8 +719,8 @@
 
   // Search + client-side pagination for the CRM Campaigns table - same
   // shape as renderMetaCampaignsTable above. allCampaigns is fetched once
-  // per loadCampaigns() call (branch switches re-fetch); crmSearch/crmPage
-  // filter and page that in-memory list without another round trip.
+  // per loadCampaigns() call; crmSearch/crmPage filter and page that
+  // in-memory list without another round trip.
   function renderCampaignsTable() {
     const rows = document.getElementById("rows");
     if (!rows) return;
@@ -746,7 +728,7 @@
     if (!allCampaigns.length) {
       document.getElementById("crmPaginationBar").style.display = "none";
       const canManage = App.hasPermission(me, "campaigns.manage");
-      rows.innerHTML = `<tr><td colspan="6">
+      rows.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">No campaigns yet</p>
           <p class="state-desc">${canManage ? "Create your first campaign, then map Meta campaigns to it above." : "Ask an admin to create one."}</p>
@@ -761,7 +743,7 @@
     const filtered = term ? allCampaigns.filter((c) => c.name.toLowerCase().includes(term)) : allCampaigns;
     if (!filtered.length) {
       document.getElementById("crmPaginationBar").style.display = "none";
-      rows.innerHTML = `<tr><td colspan="6" class="empty">No campaigns match "${App.escapeHtml(crmSearch.trim())}".</td></tr>`;
+      rows.innerHTML = `<tr><td colspan="5" class="empty">No campaigns match "${App.escapeHtml(crmSearch.trim())}".</td></tr>`;
       return;
     }
 
@@ -775,25 +757,11 @@
       <tr onclick="window.location.href='/campaign.html?id=${c.id}'" style="cursor:pointer">
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td>${App.escapeHtml(c.platform)}</td>
-        <td>${c.branchName ? App.escapeHtml(c.branchName) : '<span style="color:var(--text-muted)">All branches</span>'}</td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>
         <td>${fmt(c.createdAt)}</td>
       </tr>
     `).join("");
-  }
-
-  async function loadCampaignBranchOptions() {
-    const sel = document.getElementById("campaignBranch");
-    try {
-      const data = await App.apiJson("/api/branches/mine");
-      const branches = data.branches || [];
-      if (!branches.length) return;
-      sel.innerHTML = `<option value="">All branches</option>` +
-        branches.map(b => `<option value="${b.id}">${App.escapeHtml(b.name)}</option>`).join("");
-    } catch (err) {
-      // Leave the default "All branches" only option - non-fatal.
-    }
   }
 
   document.getElementById("createForm").addEventListener("submit", async (e) => {
@@ -802,11 +770,6 @@
     banner.innerHTML = "";
     try {
       const body = { name: document.getElementById("name").value.trim(), platform: document.getElementById("platform").value };
-      // New campaign is tagged to the Branch field chosen in the create form
-      // - "All branches" (empty value) creates it company-wide. This is an
-      // explicit per-campaign choice, independent of the global nav filter.
-      const branchId = document.getElementById("campaignBranch").value;
-      if (branchId) body.branchId = branchId;
       const { campaign } = await App.apiJson("/api/campaigns", { method: "POST", body });
       window.location.href = `/campaign.html?id=${campaign.id}`;
     } catch (err) {
@@ -830,7 +793,7 @@
 
   // #crmSearch/#crmPrevPage/#crmNextPage are static markup (unlike the Meta
   // Campaigns toolbar, which is rebuilt by renderMetaSection() on every
-  // branch switch) - wired once here, never re-attached.
+  // reload) - wired once here, never re-attached.
   document.getElementById("crmSearch").addEventListener("input", (e) => {
     crmSearch = e.target.value;
     crmPage = 1;
@@ -846,14 +809,7 @@
 
     if (App.hasPermission(me, "campaigns.manage")) {
       document.getElementById("headActions").style.display = "flex";
-      loadCampaignBranchOptions();
     }
-
-    // Registered before the first loadCampaigns() below, so a prior branch
-    // selection restored asynchronously by the switcher (see
-    // loadBranchSwitcher in app.js) can never fire before this listener
-    // exists.
-    App.onBranchChange(loadCampaigns);
 
     await loadMetaStatus();
     await loadCampaigns();

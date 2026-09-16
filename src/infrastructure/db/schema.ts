@@ -286,8 +286,8 @@ export const companies = crm.table("companies", {
 //
 // Both sides reference `companies.id`, this schema's own tenant/
 // organization table (an agency and its client are each a first-class
-// tenant in their own right, with their own users/branches/campaigns/
-// leads) - "organization" in the product/requirements vocabulary IS
+// tenant in their own right, with their own users/campaigns/leads) -
+// "organization" in the product/requirements vocabulary IS
 // "company" in this codebase's, same mapping already established for
 // companies.accountType. This table only records the relationship between
 // two organizations, never merges their data or their tenant isolation.
@@ -515,7 +515,7 @@ export const agencyClientAssignments = crm.table(
     userIdx: index("ix_agency_client_assignments_user_id").on(t.userId),
     clientIdx: index("ix_agency_client_assignments_client_company_id").on(t.clientCompanyId),
     // One row per (user, client) pair - re-assigning is an upsert, not a
-    // second row, same shape as ux_branch_users_branch_user.
+    // second row.
     userClientIdx: uniqueIndex("ux_agency_client_assignments_user_client").on(t.userId, t.clientCompanyId),
     createdAtIdx: index("ix_agency_client_assignments_created_at").on(t.createdAt),
   }),
@@ -646,70 +646,6 @@ export const sessions = crm.table("sessions", {
   userIdx: index("ix_sessions_user_id").on(t.userId),
 }));
 
-// ---------------------------------------------------------------------------
-// Branches (multi-branch support)
-// ---------------------------------------------------------------------------
-//
-// A branch is a location/office INSIDE one company - never a second tenant.
-// Every branch-scoped row still carries its own company_id (leads.companyId,
-// campaigns.companyId, ...) alongside the new nullable branch_id below, so
-// tenant isolation is never weakened: a query always filters on company_id
-// first, branch_id second. branch_id is nullable everywhere on purpose - a
-// company that never creates a branch (or a row created before this feature
-// existed) keeps working exactly as before, reading as "company-wide /
-// unassigned", not as broken data requiring a backfill migration.
-
-export const branches = crm.table("branches", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  // Short human-chosen identifier (e.g. "MUM01") - unique per company, not
-  // globally, since two different companies commonly reuse the same codes.
-  code: text("code").notNull(),
-  address: text("address"),
-  city: text("city"),
-  state: text("state"),
-  // The user who manages this branch. Nullable + ON DELETE SET NULL - a
-  // branch must never be deleted just because its manager account is later
-  // removed/disabled.
-  managerId: uuid("manager_id").references(() => users.id, { onDelete: "set null" }),
-  status: text("status").notNull().default("active"), // active | inactive
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }),
-}, (t) => ({
-  companyIdx: index("ix_branches_company_id").on(t.companyId),
-  companyCodeIdx: uniqueIndex("ux_branches_company_code").on(t.companyId, t.code),
-  managerIdx: index("ix_branches_manager_id").on(t.managerId),
-}));
-
-/**
- * A user's membership in a branch - many-to-many, so one user (e.g. a
- * regional manager) can belong to more than one branch of the same company.
- * `role` here is a lightweight, branch-local label (e.g. "manager" | "staff")
- * shown in branch rosters - it is deliberately NOT a foreign key into the
- * company-wide `roles`/permissions table above: permissions stay exactly
- * where they already are (users.roleId), this just says which branch(es) a
- * user is attached to and whether they're that branch's primary member.
- */
-export const branchUsers = crm.table("branch_users", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  branchId: uuid("branch_id").notNull().references(() => branches.id, { onDelete: "cascade" }),
-  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  role: text("role").notNull().default("staff"), // free-text branch-local label, e.g. "manager" | "staff"
-  // Whether this is the user's home/default branch (used to pick which
-  // branch a newly created lead/campaign/form defaults to, and which board
-  // the Pipeline page opens on). At most one true row per user - enforced
-  // below by a partial unique index rather than at the application layer
-  // alone, so it can never drift even under concurrent writes.
-  isPrimary: boolean("is_primary").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }),
-}, (t) => ({
-  branchIdx: index("ix_branch_users_branch_id").on(t.branchId),
-  userIdx: index("ix_branch_users_user_id").on(t.userId),
-  branchUserIdx: uniqueIndex("ux_branch_users_branch_user").on(t.branchId, t.userId),
-  onePrimaryPerUserIdx: uniqueIndex("ux_branch_users_one_primary_per_user").on(t.userId).where(sql`is_primary = true`),
-}));
 
 // ---------------------------------------------------------------------------
 // Tenant-level Meta integration (Phase 2)
@@ -781,8 +717,7 @@ export const metaConnections = crm.table(
     tenantIdx: index("ix_meta_connections_tenant_id").on(t.tenantId),
     // "A tenant should normally have one active Meta connection" - a
     // partial unique index (not a plain unique on tenantId) so historical
-    // revoked/expired/error rows can coexist without being deleted, the
-    // same pattern already used for branch_users.isPrimary above.
+    // revoked/expired/error rows can coexist without being deleted.
     oneActivePerTenantIdx: uniqueIndex("ux_meta_connections_one_active_per_tenant")
       .on(t.tenantId)
       .where(sql`status = 'active'`),
@@ -1105,11 +1040,6 @@ export const metaLeadEvents = crm.table(
 export const campaigns = crm.table("campaigns", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-  // Nullable - null means "company-wide" (visible/usable from every branch),
-  // matching every other branchId column added for multi-branch support.
-  // ON DELETE SET NULL: deleting a branch demotes its campaigns to
-  // company-wide rather than cascading the delete onto them.
-  branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   platform: text("platform").notNull().default("facebook"), // facebook | instagram | both
   status: text("status").notNull().default("draft"), // draft | active | paused | archived
@@ -1134,7 +1064,6 @@ export const campaigns = crm.table("campaigns", {
 }, (t) => ({
   companyIdx: index("ix_campaigns_company_id").on(t.companyId),
   statusIdx: index("ix_campaigns_status").on(t.status),
-  branchIdx: index("ix_campaigns_branch_id").on(t.branchId),
 }));
 
 /**
@@ -1843,13 +1772,6 @@ export const leads = crm.table(
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
 
     companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
-    // Nullable - null means "company-wide / unassigned". Set automatically
-    // at write time from the owning campaign's branch (Meta ingestion,
-    // reconciliation) or the submitting form's branch (Add Customer /
-    // public form); a manually-created customer can also be branch-tagged
-    // directly. ON DELETE SET NULL so archiving/deleting a branch never
-    // deletes its leads.
-    branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
     // Our internal campaign record - distinct from `campaignId` below, which
     // is Meta's OWN ad-campaign id/name from the Graph API response.
     crmCampaignId: uuid("crm_campaign_id").references(() => campaigns.id, { onDelete: "cascade" }),
@@ -1963,8 +1885,6 @@ export const leads = crm.table(
     // leadTypeIdx above.
     leadApproachIdx: index("ix_leads_lead_approach").on(t.leadApproach),
     ownerIdx: index("ix_leads_owner_id").on(t.ownerId),
-    branchIdx: index("ix_leads_branch_id").on(t.branchId),
-    companyBranchIdx: index("ix_leads_company_id_branch_id").on(t.companyId, t.branchId),
     // Backs hasRecentLeadWithSameContact's duplicate-submission lookup
     // (repositories.ts) - one new lead's quality check queries this by
     // (companyId, phoneNumber) on every insert, so it's worth an index
@@ -2080,41 +2000,6 @@ export const forms = crm.table(
   {
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    // Nullable - null means the form is company-wide (usable/visible from
-    // every branch, and from the "no branch selected" default view). Set,
-    // it scopes the form (and the "default Add Customer form" invariant
-    // below) to just that one branch. Only authoritative when
-    // branchMode="specific" below - kept as the actual FK column (rather
-    // than folding it into branchFieldMap) so every existing branch-scoping
-    // query (listForms/listSubmissions/getDefaultInternalForm, all written
-    // before Branch Configuration existed) keeps working unchanged for
-    // "specific" and "all" forms with zero modification.
-    branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
-    // Branch Configuration - how a lead captured through this form is
-    // assigned a branch at submission time (see
-    // src/application/formBranch.ts, the one place that turns this into an
-    // actual branchId for both the internal and public submit paths):
-    //   "specific" - always branchId above (or company-wide if that's null).
-    //   "all"      - always company-wide (branchId is ignored/cleared).
-    //   "field"    - resolved per-submission from the value of the form
-    //                field named by branchFieldKey, mapped through
-    //                branchFieldMap. Lets one public form (e.g. "Which
-    //                location are you interested in?") route different
-    //                submitters to different branches automatically.
-    // No DB-level enum - validated at the application layer in
-    // src/application/formBranch.ts, same convention as forms.status/type.
-    branchMode: text("branch_mode").notNull().default("specific"),
-    // Only meaningful when branchMode="field" - the key of a select/radio
-    // field already on this form whose submitted value determines the
-    // branch. Null for "specific"/"all".
-    branchFieldKey: text("branch_field_key"),
-    // Only meaningful when branchMode="field" - maps that field's option
-    // value (e.g. "Ahmedabad") to a branchId. Every value is validated at
-    // save time (src/application/formBranch.ts validateBranchConfig) against
-    // both tenant isolation and the saving user's own branch access, so a
-    // form can never be configured to route into a branch its builder isn't
-    // permitted to manage.
-    branchFieldMap: jsonb("branch_field_map").$type<Record<string, string>>().notNull().default(sql`'{}'::jsonb`),
     name: text("name").notNull(),
     description: text("description"),
     // "internal" | "public" - see comment above.
@@ -2136,10 +2021,9 @@ export const forms = crm.table(
     // snapshot, so editing a form later can never make an old submission
     // unreadable or mis-attributed to the wrong fields.
     schemaVersion: integer("schema_version").notNull().default(1),
-    // At most one form per (companyId, branchId, type="internal") should
-    // have this set - the form Pipeline's "Add Customer" / "Not interested
-    // -> Add to CRM" load automatically for that branch (or company-wide,
-    // when branchId is null). Enforced at the application layer
+    // At most one form per (companyId, type="internal") should have this
+    // set - the form Pipeline's "Add Customer" / "Not interested -> Add to
+    // CRM" load automatically. Enforced at the application layer
     // (setDefaultInternalForm), not a DB constraint, so a company is never
     // left with zero usable forms mid-transition.
     isDefault: boolean("is_default").notNull().default(false),
@@ -2172,7 +2056,6 @@ export const forms = crm.table(
     companyIdx: index("ix_forms_company_id").on(t.companyId),
     publicKeyIdx: uniqueIndex("ux_forms_public_key").on(t.publicKey),
     companyTypeIdx: index("ix_forms_company_id_type").on(t.companyId, t.type),
-    branchIdx: index("ix_forms_branch_id").on(t.branchId),
   }),
 );
 
@@ -2228,9 +2111,6 @@ export const formSubmissions = crm.table(
     // forms - the same defense-in-depth pattern leads.companyId already
     // uses relative to crmCampaignId.
     companyId: uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
-    // Denormalized from the form the same way companyId is - the branch (if
-    // any) the submitted form belonged to at submission time.
-    branchId: uuid("branch_id").references(() => branches.id, { onDelete: "set null" }),
     // The Lead/Customer record this submission created or enriched. Null
     // only in the rare case a submission was received but Lead creation
     // itself failed server-side (status will be "rejected" then).
@@ -2258,7 +2138,6 @@ export const formSubmissions = crm.table(
     formIdx: index("ix_form_submissions_form_id").on(t.formId),
     companyIdx: index("ix_form_submissions_company_id").on(t.companyId),
     createdAtIdx: index("ix_form_submissions_created_at").on(t.createdAt),
-    branchIdx: index("ix_form_submissions_branch_id").on(t.branchId),
   }),
 );
 

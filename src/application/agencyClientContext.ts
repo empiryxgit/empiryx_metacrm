@@ -13,7 +13,7 @@
 // must be attributed to that client's own company, never the agency's.
 //
 // Deliberately NOT baked into the access-token JWT the way permissions/
-// branchIds/assignedClientIds are: this is ephemeral UI-session state (which
+// assignedClientIds are: this is ephemeral UI-session state (which
 // hat is this agency user wearing right now), tracked in its own cookie
 // (CLIENT_CONTEXT_COOKIE_NAME) and RE-VALIDATED IN FULL against live DB
 // state on every single request that honors it - never trusted on its own.
@@ -25,14 +25,14 @@
 //
 // Deliberately narrow in scope: only the six operational CRM handler files
 // above ever call withEffectiveCompanyContext. Company/team administration
-// (admin/users, admin/roles, admin/branches, company settings, the agency's
-// own /api/agency/* endpoints) NEVER does - those always operate on the
+// (admin/users, admin/roles, company settings, the agency's own
+// /api/agency/* endpoints) NEVER does - those always operate on the
 // caller's own real company regardless of any active client context, so an
 // agency user "managing ABC Realty" can never accidentally rename their own
 // agency's company profile as ABC Realty, or vice versa. Widening this to
-// let an agency user manage a CLIENT's own users/roles/branches while
-// "inside" it would be a deliberate, separate decision - not something this
-// switch does today.
+// let an agency user manage a CLIENT's own users/roles while "inside" it
+// would be a deliberate, separate decision - not something this switch does
+// today.
 
 import type { VercelRequest } from "@vercel/node";
 import { parseCookies, type AuthContext } from "../infrastructure/auth/context";
@@ -118,16 +118,10 @@ export async function resolveActiveClientContext(req: VercelRequest, auth: AuthC
  * BEFORE using auth.companyId for anything: returns a (possibly) new
  * AuthContext with companyId swapped to the active client's, or the
  * ORIGINAL auth object unchanged when no valid context applies. Every other
- * field (userId, roleId, permissions, branchIds, assignedClientIds) is left
- * exactly as-is - authorization (which actions this caller may take)
- * always stays governed by the AGENCY user's own real role/permissions;
- * only WHICH company's data those actions read/write changes. A
- * resolveBranchAccess() call downstream still works correctly on the
- * returned object: an agency user's own branchIds are empty (they are not a
- * member of any branch in either their own or a client's company), which
- * resolveBranchAccess already treats as "unrestricted" - so acting inside a
- * client is never incorrectly branch-restricted by the agency user's
- * unrelated (nonexistent) branch memberships.
+ * field (userId, roleId, permissions, assignedClientIds) is left exactly
+ * as-is - authorization (which actions this caller may take) always stays
+ * governed by the AGENCY user's own real role/permissions; only WHICH
+ * company's data those actions read/write changes.
  */
 export async function withEffectiveCompanyContext(req: VercelRequest, auth: AuthContext): Promise<AuthContext> {
   const context = await resolveActiveClientContext(req, auth);

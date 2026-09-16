@@ -2,8 +2,7 @@
 // feature, a THIRD, entirely unrelated public webhook (see "3." below) -
 // share this one file/Vercel Function purely because Vercel's Hobby plan
 // caps a deployment at 12 Functions total and this was already the file
-// for everything Meta touches over raw HTTP (same reasoning api/admin/
-// users/handler.ts documents for folding in /api/branches/*):
+// for everything Meta touches over raw HTTP:
 //
 //   1. The public per-campaign webhook receiver -
 //      https://.../api/webhooks/meta/{slug} - unauthenticated, HMAC-verified

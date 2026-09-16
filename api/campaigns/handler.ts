@@ -31,8 +31,6 @@ import {
 } from "../../src/infrastructure/db/repositories/metaSync";
 import { getSelectedMetaAdAccount } from "../../src/infrastructure/db/repositories/metaIntegration";
 import { PERMISSIONS } from "../../src/domain/permissions";
-import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
-import { listBranches } from "../../src/infrastructure/db/repositories/branches";
 import { evaluateLegacyWebhookMigration } from "../../src/application/metaSync/legacyMigration";
 import { getConnectionForSync, flagConnectionIfAuthError, MetaSyncNotConnectedError } from "../../src/application/metaSync/metaConnectionService";
 import { getCampaignInsights, MetaApiError } from "../../src/infrastructure/meta/graphClient";
@@ -83,21 +81,7 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     if (!auth) return;
     auth = await withEffectiveCompanyContext(req, auth);
 
-    const requestedBranchId = getQueryString(req, "branchId");
-    let access;
-    if (requestedBranchId !== undefined) {
-      const assertion = await assertBranchAccessible(auth, requestedBranchId);
-      if (!assertion.ok) {
-        res.status(assertion.status).json({ error: assertion.error });
-        return;
-      }
-      access = { scope: "restricted" as const, branchIds: assertion.branchId ? [assertion.branchId] : [] };
-    } else {
-      access = resolveBranchAccess(auth);
-    }
-
-    const [campaigns, branches] = await Promise.all([listCampaigns(auth.companyId, access), listBranches(auth.companyId)]);
-    const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+    const campaigns = await listCampaigns(auth.companyId);
     // Powers the "Leads" column on the manual campaigns list (Campaigns
     // screen) - a single grouped query rather than one query per campaign.
     // Phase 9: the separate Meta Campaigns table gets its own lead counts
@@ -107,7 +91,6 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     res.status(200).json({
       campaigns: campaigns.map((c) => ({
         ...c,
-        branchName: c.branchId ? branchNameById.get(c.branchId) ?? null : null,
         leadsCount: leadCounts[c.id] ?? 0,
       })),
     });
@@ -119,15 +102,9 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     if (!auth) return;
     auth = await withEffectiveCompanyContext(req, auth);
 
-    const { name, platform, branchId } = (req.body ?? {}) as { name?: string; platform?: string; branchId?: string };
+    const { name, platform } = (req.body ?? {}) as { name?: string; platform?: string };
     if (!name) {
       res.status(400).json({ error: "name is required." });
-      return;
-    }
-
-    const branchAssertion = await assertBranchAccessible(auth, branchId);
-    if (!branchAssertion.ok) {
-      res.status(branchAssertion.status).json({ error: branchAssertion.error });
       return;
     }
 
@@ -150,7 +127,6 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
 
     const campaign = await createCampaign({
       companyId: auth.companyId,
-      branchId: branchAssertion.branchId,
       name,
       platform: platform && ["facebook", "instagram", "both"].includes(platform) ? platform : "facebook",
       createdBy: auth.userId,
@@ -172,14 +148,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
-    // Tenant isolation (companyId, above) is not enough on its own - a
-    // branch-restricted viewer must never read a campaign scoped to a
-    // branch outside their own access, same contract as every other
-    // branch-scoped resource (see src/application/branchAccess.ts).
-    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
     res.status(200).json({ campaign });
     return;
   }
@@ -194,25 +162,14 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
-    // Guards the campaign's CURRENT branch - a branch-restricted manager can
-    // never edit a campaign already scoped outside their access, regardless
-    // of what's being changed (mirrors the same gate on GET above; the NEW
-    // branchId, if one is being set, is separately validated below).
-    if (!canAccessBranch(resolveBranchAccess(auth), existingCampaign.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
-
-    const { name, platform, status, branchId } = (req.body ?? {}) as {
+    const { name, platform, status } = (req.body ?? {}) as {
       name?: string;
       platform?: string;
       status?: string;
-      branchId?: string | null;
     };
 
     // Only checked when `name` is actually present in the body - PATCH is
-    // partial-update, so omitting it entirely (e.g. the Branch-only save
-    // this endpoint originally only ever saw) must stay a no-op on name,
+    // partial-update, so omitting it entirely must stay a no-op on name,
     // never an accidental validation failure. Newly worth guarding now
     // that campaign.html exposes an actual rename field (previously
     // nothing in the UI ever sent `name` on this route at all).
@@ -221,17 +178,7 @@ async function handleOne(req: VercelRequest, res: VercelResponse, campaignId: st
       return;
     }
 
-    let branchIdPatch: string | null | undefined;
-    if (branchId !== undefined) {
-      const branchAssertion = await assertBranchAccessible(auth, branchId);
-      if (!branchAssertion.ok) {
-        res.status(branchAssertion.status).json({ error: branchAssertion.error });
-        return;
-      }
-      branchIdPatch = branchAssertion.branchId;
-    }
-
-    await updateCampaign(auth.companyId, campaignId, { name, platform, status, branchId: branchIdPatch });
+    await updateCampaign(auth.companyId, campaignId, { name, platform, status });
     res.status(200).json({ updated: true });
     return;
   }
@@ -255,10 +202,6 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
-    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
     const config = await getWebhookConfigForCampaign(auth.companyId, campaignId, getBaseUrl(req));
     // Phase 18 - "safe migration strategy": when this campaign has a legacy
     // config, also report whether its Page has since shown up under the
@@ -280,14 +223,6 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
       res.status(404).json({ error: "Campaign not found." });
       return;
     }
-    // Without this, a branch-restricted user holding webhooks.manage could
-    // rotate another branch's campaign's Meta secrets (appSecret/
-    // accessToken) purely because it shares their company.
-    if (!canAccessBranch(resolveBranchAccess(auth), campaign.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
-
     const { appSecret, accessToken, pageId, formIds } = (req.body ?? {}) as {
       appSecret?: string;
       accessToken?: string;
@@ -377,7 +312,6 @@ async function handleGetOneMetaCampaign(req: VercelRequest, res: VercelResponse,
       lastSyncAt: metaCampaign.lastSyncAt,
       crmCampaignId: metaCampaign.crmCampaignId,
       crmCampaignName: metaCampaign.crmCampaignName,
-      branchId: metaCampaign.crmCampaignBranchId,
       leadsCount: leadCounts[metaCampaign.metaCampaignId] ?? 0,
     },
   });
@@ -425,7 +359,6 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
       lastSyncAt: c.lastSyncAt,
       crmCampaignId: c.crmCampaignId,
       crmCampaignName: c.crmCampaignName,
-      branchId: c.crmCampaignBranchId,
       leadsCount: leadCounts[c.metaCampaignId] ?? 0,
     })),
   });
@@ -447,16 +380,12 @@ async function handleMapMetaCampaign(req: VercelRequest, res: VercelResponse, me
     return;
   }
 
-  // The target CRM campaign must exist, belong to this tenant, and be
-  // within the acting user's branch access - same gate every other
-  // campaign-mutating action in this file applies (see handleOne's PATCH).
+  // The target CRM campaign must exist and belong to this tenant - same
+  // gate every other campaign-mutating action in this file applies (see
+  // handleOne's PATCH).
   const crmCampaign = await getCampaign(auth.companyId, crmCampaignId);
   if (!crmCampaign) {
     res.status(404).json({ error: "CRM campaign not found." });
-    return;
-  }
-  if (!canAccessBranch(resolveBranchAccess(auth), crmCampaign.branchId)) {
-    res.status(403).json({ error: "You do not have access to this branch." });
     return;
   }
 
@@ -490,10 +419,7 @@ async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, 
 
 // Day-by-day Reach/Impressions/Clicks/CTR for one Meta campaign - powers
 // the performance modal on the Campaigns screen. Same CAMPAIGNS_VIEW gate
-// as every other read in this file; deliberately no branch check, matching
-// handleGetOneMetaCampaign above - a Meta campaign itself isn't
-// branch-scoped (only its optional CRM mapping is), and this is read-only
-// performance data, not lead PII.
+// as every other read in this file.
 //
 // Two ways to ask for a window, both resolved to a concrete [since, until]
 // range before ever touching Meta or the cache:

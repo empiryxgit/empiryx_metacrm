@@ -112,7 +112,7 @@ export function rangeOut(range: DateRange): RangeOut {
 }
 
 /**
- * Whether this user's role grants company/branch-wide RUTA queries against
+ * Whether this user's role grants company-wide RUTA queries against
  * OTHER teammates' data. Deliberately off by default, opt-in only - see
  * PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY's own comment in
  * domain/permissions.ts for the full "WhatsApp is a weaker identity

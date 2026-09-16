@@ -82,14 +82,10 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
       // First time this tenant has ever synced this Meta campaign - create
       // and map a same-named CRM campaign automatically so leads land
       // somewhere useful without a manual "create a CRM campaign, then map
-      // it" round trip. Company-wide (branchId null) by default, same as a
-      // manually created campaign left on "All branches"; the tenant can
-      // reassign a branch (campaign.html) or rename it (also
-      // campaign.html) any time afterward - this is only ever a starting
-      // point, never a lock-in.
+      // it" round trip. The tenant can rename it (campaign.html) any time
+      // afterward - this is only ever a starting point, never a lock-in.
       const crmCampaign = await createCampaign({
         companyId: tenantId,
-        branchId: null,
         name: campaign.name,
         platform: "facebook",
         createdBy: null, // system-created, not a person - see createCampaign's own comment

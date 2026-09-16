@@ -83,15 +83,6 @@
     { "source": "/api/admin/users", "destination": "/api/admin/users/handler" },
     { "source": "/api/admin/users/:userId", "destination": "/api/admin/users/handler?userId=:userId" },
 
-    { "source": "/api/branches/mine", "destination": "/api/admin/users/handler?resource=branches&action=mine" },
-    { "source": "/api/branches/company-users", "destination": "/api/admin/users/handler?resource=branches&action=company-users" },
-    { "source": "/api/branches/:branchId/users/:branchUserId/primary", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId&sub=primary" },
-    { "source": "/api/branches/:branchId/users/:branchUserId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users&branchUserId=:branchUserId" },
-    { "source": "/api/branches/:branchId/users", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=users" },
-    { "source": "/api/branches/:branchId/archive", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId&action=archive" },
-    { "source": "/api/branches/:branchId", "destination": "/api/admin/users/handler?resource=branches&branchId=:branchId" },
-    { "source": "/api/branches", "destination": "/api/admin/users/handler?resource=branches" },
-
     { "source": "/api/agency/dashboard", "destination": "/api/admin/users/handler?resource=agency&action=dashboard" },
     { "source": "/api/agency/leads-report", "destination": "/api/admin/users/handler?resource=agency&action=leads-report" },
     { "source": "/api/agency/campaigns", "destination": "/api/admin/users/handler?resource=agency&action=campaigns-report" },

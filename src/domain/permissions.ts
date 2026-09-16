@@ -20,27 +20,19 @@ export const PERMISSIONS = {
   FORMS_VIEW: "forms.view", // see the Forms list + individual form definitions
   FORMS_MANAGE: "forms.manage", // create/edit/publish/archive forms in the builder
   SUBMISSIONS_VIEW: "submissions.view", // view the Submissions list/detail for this company's forms
-  // Create/edit/archive branches and manage which users belong to them.
-  // Also doubles as the "company-wide branch visibility" flag: a user who
-  // holds this permission sees every branch's data; a user who doesn't is
-  // restricted to whichever branch(es) they're a member of (or unrestricted,
-  // same as before this feature existed, if they belong to none) - see
-  // src/application/branchAccess.ts.
-  BRANCHES_MANAGE: "branches.manage",
   // Connect/disconnect the tenant's Meta Business account (Settings ->
   // Integrations -> Meta) and choose which Pages/ad accounts it uses -
   // deliberately separate from the legacy, per-campaign WEBHOOKS_MANAGE
   // above: this one governs the tenant-wide OAuth connection itself, not
   // any single campaign's webhook config.
   INTEGRATIONS_MANAGE: "integrations.manage",
-  // Agency-only visibility flag, same "doubles as the unrestricted-scope
-  // flag" shape as BRANCHES_MANAGE above: an agency user who holds this
-  // sees every client the agency manages; one who doesn't is restricted to
-  // whichever client(s) they've been explicitly assigned via
+  // Agency-only visibility flag: an agency user who holds this sees every
+  // client the agency manages; one who doesn't is restricted to whichever
+  // client(s) they've been explicitly assigned via
   // agency_client_assignments (see src/application/agencyClientAccess.ts) -
-  // with NO "zero assignments means unrestricted" fallback the way branches
-  // has, since the whole point of this permission is that an agency user
-  // must see nothing until someone deliberately assigns them a client.
+  // with no "zero assignments means unrestricted" fallback, since the whole
+  // point of this permission is that an agency user must see nothing until
+  // someone deliberately assigns them a client.
   // Meaningless (never checked) outside an agency company's own dashboard/
   // clients/client-detail endpoints - a client company's own team never
   // consults this.
@@ -50,7 +42,7 @@ export const PERMISSIONS = {
   // teammate's queries are always scoped to their own data only
   // (ownerId/createdBy = themselves), regardless of their web-app role.
   // With it, "my leads" / "follow-ups" / "update on X" style queries can
-  // also resolve company/branch-wide and against OTHER teammates' logged
+  // also resolve company-wide and against OTHER teammates' logged
   // activity. Deliberately off by default for every role, including Owner
   // - WhatsApp is a weaker identity channel (no password/MFA, just
   // possession of a phone number) than an authenticated browser session,
@@ -81,10 +73,9 @@ export const PERMISSION_CATALOG: Array<{ code: PermissionCode; label: string; ca
   { code: PERMISSIONS.FORMS_VIEW, label: "View forms", category: "Forms" },
   { code: PERMISSIONS.FORMS_MANAGE, label: "Create and manage forms", category: "Forms" },
   { code: PERMISSIONS.SUBMISSIONS_VIEW, label: "View form submissions", category: "Forms" },
-  { code: PERMISSIONS.BRANCHES_MANAGE, label: "Create and manage branches", category: "Administration" },
   { code: PERMISSIONS.INTEGRATIONS_MANAGE, label: "Connect and manage the Meta integration", category: "Integrations" },
   { code: PERMISSIONS.AGENCY_CLIENTS_VIEW_ALL, label: "See every client (not just assigned ones)", category: "Clients" },
-  { code: PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY, label: "Query company/branch-wide data & other teammates' activity via the RUTA AI Assistant", category: "Integrations" },
+  { code: PERMISSIONS.RUTA_AI_ASSISTANT_BROAD_QUERY, label: "Query company-wide data & other teammates' activity via the RUTA AI Assistant", category: "Integrations" },
 ];
 
 /** @deprecated Superseded by the per-industry stage lists in

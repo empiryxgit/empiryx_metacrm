@@ -228,9 +228,8 @@ const App = (() => {
     // about the plan/billing screen, not general configuration.
     billing: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="5" width="15" height="10" rx="1.4" stroke="currentColor" stroke-width="1.4"/><path d="M2.5 8.4h15" stroke="currentColor" stroke-width="1.4"/><path d="M5 12h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     // "Agency" nav-group trigger - a small two-building skyline, distinct
-    // from "branches" (a single location pin, used for one specific
-    // client/branch) so the two dropdown triggers read differently at a
-    // glance.
+    // from the location-pin "branches" icon (used for the Clients nav item)
+    // so the two dropdown triggers read differently at a glance.
     agency: `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="5.5" width="6.5" height="10.5" rx="0.8" stroke="currentColor" stroke-width="1.4"/><rect x="10.5" y="8.5" width="6.5" height="7.5" rx="0.8" stroke="currentColor" stroke-width="1.4"/><path d="M5.2 8.2h1.1M5.2 10.6h1.1M5.2 13h1.1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
     // "Invitations" - a simple envelope, used for both the agency nav item
     // and (implicitly, via the same page) the Invite Client / Generate
@@ -294,7 +293,7 @@ const App = (() => {
   ];
 
   // "Settings" is a master/parent menu (dropdown), not a link itself -
-  // Users, Roles, Branches and Meta Integration live under it instead of
+  // Users, Roles, and Meta Integration live under it instead of
   // each being its own top-level nav item. "Meta Integration" points at
   // the same /settings.html page the old flat "Settings" link used to -
   // that page's content (Meta connection management) is unchanged, only
@@ -305,7 +304,6 @@ const App = (() => {
   const SETTINGS_LINKS = [
     { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
-    { href: "/admin/branches.html", label: "Branches", perm: "branches.manage", icon: NAV_ICONS.branches },
     { href: "/settings.html", label: "Meta Integration", perm: "integrations.manage", icon: NAV_ICONS.metaIntegration },
     // Direct entry point for public/subscription.html - same "company.manage"
     // gate as the "Subscription & Capacity" card on settings.html itself
@@ -350,7 +348,7 @@ const App = (() => {
     `;
   }
 
-  /** "Settings" master menu - Users/Roles/Branches/Meta Integration (or a
+  /** "Settings" master menu - Users/Roles/Meta Integration (or a
    * permission-filtered subset). Thin wrapper over dropdownNavMenuHtml so
    * every existing call site/id ("settingsNavBtn"/"settingsNavMenu") stays
    * unchanged. */
@@ -380,7 +378,7 @@ const App = (() => {
     const primaryLinks = isAgencyIdentity ? [] : PRIMARY_LINKS;
     const admin = isAgencyIdentity ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
 
-    // Settings (Users/Roles/Branches/Meta Integration) is deliberately
+    // Settings (Users/Roles/Meta Integration) is deliberately
     // hidden entirely while an agency user is "managing" a client (see
     // src/application/agencyClientContext.ts's header comment): those
     // endpoints always act on the caller's OWN real company, never the
@@ -452,7 +450,6 @@ const App = (() => {
 
         <div class="shell-right">
           <div class="agency-context-switch" id="agencyContextSlot" style="display:none"></div>
-          <div class="branch-switch" id="branchSwitchSlot" style="display:none"></div>
 
           <div class="menu-wrap">
             <button class="icon-btn" id="notifBtn" type="button" aria-label="Notifications" aria-haspopup="true" aria-expanded="false">
@@ -500,7 +497,6 @@ const App = (() => {
     });
     wireShellInteractions();
     loadNotifications();
-    loadBranchSwitcher(me);
     loadAgencyContextSwitcher(me);
   }
 
@@ -558,7 +554,6 @@ const App = (() => {
           <div><div class="user-name">${escapeHtml(displayName)}</div>${roleName ? `<div class="user-role">${escapeHtml(roleName)}</div>` : ""}</div>
         </div>
         <div class="agency-context-switch agency-context-switch-mobile" id="agencyContextSlotMobile" style="display:none"></div>
-        <div class="branch-switch branch-switch-mobile" id="branchSwitchSlotMobile" style="display:none"></div>
         ${primaryLinks.length ? `<div class="mobile-nav-group">${groupHtml(primaryLinks)}</div>` : ""}
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
         ${labeledSection("Agency", agencyLinks)}
@@ -655,8 +650,8 @@ const App = (() => {
   // CLIENT's data instead of the agency's own - see
   // src/application/agencyClientContext.ts for the full server-side design
   // this mirrors (that file's header comment explains exactly which pages
-  // honor this and which never do). Unlike the branch switcher below,
-  // switching here is a FULL-PAGE NAVIGATION, not a live re-filter -
+  // honor this and which never do). Switching here is a FULL-PAGE
+  // NAVIGATION, not a live re-filter -
   // GET /api/auth/me's `company` field itself changes (to the client's own
   // record) once the switch takes effect, and `clientContext` becomes
   // present - which is what makes the "Current Client" nav group appear
@@ -784,7 +779,7 @@ const App = (() => {
    * immediately with just the agency name/current state so the switcher
    * shell never waits on the clients fetch to appear, then re-renders once
    * the list resolves (or hides gracefully on failure - never blocks the
-   * rest of the shell, same convention as loadBranchSwitcher below). */
+   * rest of the shell). */
   async function loadAgencyContextSwitcher(me) {
     if (!me?.agency) {
       agencyContextInfo = null;
@@ -807,185 +802,6 @@ const App = (() => {
     renderAgencyContextSwitcher();
   }
 
-  // ---------------------------------------------------------------------
-  // Branch switcher: a global "[ All Branches ▼ ]" control in the app shell
-  // (desktop nav + mobile drawer, kept in sync) for multi-branch access.
-  // Populated from GET /api/branches/mine, which already returns exactly
-  // the branches this user is allowed to see (every active branch for an
-  // unrestricted user, or just their own membership for a restricted one -
-  // see src/application/branchAccess.ts) - so this control can only ever
-  // offer choices the backend would accept; it narrows what's already
-  // visible, it doesn't grant anything on its own. Hidden entirely when the
-  // user has 0 or 1 accessible branches - "a user who only has one branch
-  // should not need to select it repeatedly".
-  //
-  // Selection is per-user (localStorage key includes the user id) so it
-  // persists across reloads without leaking between accounts on a shared
-  // machine, and is broadcast via a "setu:branchchange" window event so any
-  // page can opt in with App.onBranchChange(fn) - pages that never call it
-  // are simply unaffected, exactly like campaignSelect's existing filter
-  // pattern in pipeline.html.
-  // ---------------------------------------------------------------------
-
-  let branchSwitcherState = { userId: null, selectedId: "" };
-  // Cached result of the one GET /api/branches/mine fetch per page load -
-  // null until it resolves. Page-level toolbars (Pipeline, Dashboard) call
-  // mountBranchFilter() which either renders immediately (data already
-  // here) or queues itself in pendingMounts until loadBranchSwitcher's
-  // fetch completes - so a page can request its own toolbar control before
-  // or after App.renderNav() without caring which happens first.
-  let branchSwitcherData = null;
-  const builtinMounts = [
-    { container: () => document.getElementById("branchSwitchSlot"), allLabel: null },
-    { container: () => document.getElementById("branchSwitchSlotMobile"), allLabel: null },
-  ];
-  const pendingMounts = [];
-
-  function branchStorageKey(userId) {
-    return `setu_branch_${userId}`;
-  }
-
-  function getStoredBranchId(userId) {
-    try {
-      return localStorage.getItem(branchStorageKey(userId)) || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function setStoredBranchId(userId, branchId) {
-    try {
-      if (branchId) localStorage.setItem(branchStorageKey(userId), branchId);
-      else localStorage.removeItem(branchStorageKey(userId));
-    } catch {
-      /* private browsing / storage disabled - selection just won't survive a reload */
-    }
-  }
-
-  function getSelectedBranchId() {
-    return branchSwitcherState.selectedId || null;
-  }
-
-  /** The raw { scope, branches } this user is allowed to see, as last
-   * fetched by the switcher (null until that fetch resolves) - branches[].id
-   * is what getSelectedBranchId()/branchId query params expect, and
-   * branches[].isPrimary (restricted scope only) is there so a page like
-   * "+ Add Customer" can default a picker to the user's primary branch
-   * instead of just the first one in the list. */
-  function getMyBranches() {
-    return branchSwitcherData;
-  }
-
-  function onBranchChange(handler) {
-    window.addEventListener("setu:branchchange", (e) => handler(e.detail.branchId));
-  }
-
-  function applySelectedBranch(userId, branchId, { silent } = {}) {
-    branchSwitcherState = { userId, selectedId: branchId || "" };
-    setStoredBranchId(userId, branchId);
-    document.querySelectorAll(".branch-switch-select").forEach((sel) => {
-      if (sel.value !== branchSwitcherState.selectedId) sel.value = branchSwitcherState.selectedId;
-    });
-    if (!silent) {
-      window.dispatchEvent(new CustomEvent("setu:branchchange", { detail: { branchId: branchSwitcherState.selectedId || null } }));
-    }
-  }
-
-  function renderBranchSwitcherInto(container, branches, allLabel, userId, opts = {}) {
-    if (!container) return;
-    const sel = document.createElement("select");
-    sel.className = "branch-switch-select";
-    if (opts.selectId) sel.id = opts.selectId;
-    sel.setAttribute("aria-label", opts.fieldLabel || "Branch");
-    sel.innerHTML = `<option value="">${escapeHtml(allLabel)}</option>` + branches.map((b) => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join("");
-    sel.value = branchSwitcherState.selectedId;
-    sel.addEventListener("change", () => applySelectedBranch(userId, sel.value));
-    container.innerHTML = "";
-    // A page-level toolbar mount (e.g. next to Pipeline's Campaign filter)
-    // wants a visible <label> matching that field's own styling; the
-    // nav-shell mounts pass no fieldLabel and rely on the select's
-    // aria-label instead, exactly as before this option existed.
-    if (opts.fieldLabel) {
-      const lab = document.createElement("label");
-      if (opts.selectId) lab.setAttribute("for", opts.selectId);
-      lab.textContent = opts.fieldLabel;
-      container.appendChild(lab);
-    }
-    container.appendChild(sel);
-    container.style.display = "";
-  }
-
-  function defaultAllLabel() {
-    return branchSwitcherData?.scope === "all" ? "All Branches" : "All my branches";
-  }
-
-  function renderMount(mount) {
-    const container = typeof mount.container === "function" ? mount.container() : mount.container;
-    if (!container) return;
-    const branches = branchSwitcherData?.branches ?? [];
-    if (branches.length <= 1) {
-      container.style.display = "none";
-      return;
-    }
-    renderBranchSwitcherInto(container, branches, mount.allLabel || defaultAllLabel(), branchSwitcherState.userId, {
-      fieldLabel: mount.fieldLabel,
-      selectId: mount.selectId,
-    });
-  }
-
-  function renderAllMounts() {
-    builtinMounts.forEach(renderMount);
-    pendingMounts.forEach(renderMount);
-  }
-
-  /** Lets any page add its own "[ All Branches ▼ ]" control (e.g. the
-   * Pipeline toolbar next to the Campaign filter, or the Dashboard header) -
-   * kept in sync with the nav-level switcher and every other mounted
-   * instance for free (same shared state, same "setu:branchchange" event).
-   * Safe to call before App.renderNav()'s branch fetch has resolved - it
-   * queues and renders as soon as data is ready - and hides itself the same
-   * way the nav switcher does when the user has 0 or 1 accessible branches. */
-  function mountBranchFilter(container, opts = {}) {
-    if (!container) return;
-    const mount = { container, allLabel: opts.allLabel || null, fieldLabel: opts.fieldLabel || null, selectId: opts.selectId || null };
-    pendingMounts.push(mount);
-    if (branchSwitcherData) renderMount(mount);
-  }
-
-  async function loadBranchSwitcher(me) {
-    if (!me?.user?.id) return;
-    try {
-      const data = await apiJson("/api/branches/mine");
-      branchSwitcherData = data;
-
-      if (!data.branches || data.branches.length <= 1) {
-        branchSwitcherState = { userId: me.user.id, selectedId: "" };
-        renderAllMounts(); // hides every mounted control, built-in or page-level
-        return;
-      }
-
-      const stored = getStoredBranchId(me.user.id);
-      const validStored = data.branches.some((b) => b.id === stored) ? stored : "";
-      branchSwitcherState = { userId: me.user.id, selectedId: validStored };
-      if (validStored !== stored) setStoredBranchId(me.user.id, validStored);
-
-      renderAllMounts();
-
-      // A restored (non-default) selection is broadcast so any page that
-      // already loaded its initial (unfiltered) data re-fetches scoped to
-      // it - the alternative would be every page having to await this
-      // async call before its own first load, which would slow down the
-      // common (no restriction / no prior selection) case for everyone.
-      if (validStored) {
-        window.dispatchEvent(new CustomEvent("setu:branchchange", { detail: { branchId: validStored } }));
-      }
-    } catch {
-      // Never let this block the rest of the shell - just hide every switcher.
-      branchSwitcherData = { scope: "all", branches: [] };
-      renderAllMounts();
-    }
-  }
-
   return {
     api,
     apiJson,
@@ -996,10 +812,6 @@ const App = (() => {
     renderTrialBanner,
     escapeHtml,
     initials,
-    getSelectedBranchId,
-    getMyBranches,
-    onBranchChange,
-    mountBranchFilter,
     enterClient,
   };
 })();

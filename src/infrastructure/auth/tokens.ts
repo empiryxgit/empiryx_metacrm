@@ -46,22 +46,14 @@ export interface AccessTokenClaims {
   companyId: string;
   roleId: string;
   permissions: string[];
-  // Every branch this user is a member of (branch_users rows), carried in
-  // the token the same way permissions already are, to authorize
-  // branch-scoped requests without a DB round trip. Empty array means
-  // "not assigned to any specific branch" - see resolveBranchAccess() in
-  // src/application/branchAccess.ts for what that implies. Optional so a
-  // token issued before this field existed still verifies (jose/JWT just
-  // omits it; branchIds is treated as [] when absent, never as a crash).
-  branchIds?: string[];
   // Every client company this AGENCY user has been explicitly assigned to
-  // (agency_client_assignments rows), same "carry it in the token, avoid a
-  // DB round trip per request" shape as branchIds above. Unlike branchIds,
-  // an empty array here does NOT mean "unrestricted" - see
+  // (agency_client_assignments rows), carried in the token the same way
+  // permissions already are, to avoid a DB round trip per request. An
+  // empty array here does NOT mean "unrestricted" - see
   // resolveAgencyClientAccess() in src/application/agencyClientAccess.ts.
   // Meaningless (and always empty/unused) for a user of a non-agency
-  // company. Optional for the same "token issued before this field
-  // existed still verifies" reason branchIds is.
+  // company. Optional so a token issued before this field existed still
+  // verifies (jose/JWT just omits it; treated as [] when absent).
   assignedClientIds?: string[];
 }
 

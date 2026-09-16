@@ -82,16 +82,12 @@ export async function upsertMetaCampaign(tenantId: string, adAccountRowId: strin
 }
 
 /**
- * Resolves a synced Meta campaign by Meta's OWN campaign id, joined with
- * its mapped CRM campaign's branchId (if mapped) - how the tenant-level
- * lead-ingestion pipeline maps an incoming lead's `details.campaignId`
- * (from the Graph API) back to both the metaCampaigns row itself
- * (crmCampaignId) and, if mapped, which branch the lead belongs to.
- * Returns null if this Meta campaign hasn't been synced for this tenant
- * yet - callers treat that as "capture the lead anyway, just unmapped"
- * rather than a hard failure. crmCampaignBranchId is null both when the
- * Meta campaign is unmapped AND when its mapped CRM campaign is itself
- * company-wide (branchId null) - either way, no branch to attribute.
+ * Resolves a synced Meta campaign by Meta's OWN campaign id - how the
+ * tenant-level lead-ingestion pipeline maps an incoming lead's
+ * `details.campaignId` (from the Graph API) back to the metaCampaigns row
+ * itself (and, if mapped, its CRM campaign id). Returns null if this Meta
+ * campaign hasn't been synced for this tenant yet - callers treat that as
+ * "capture the lead anyway, just unmapped" rather than a hard failure.
  */
 export async function getMetaCampaignByMetaCampaignId(tenantId: string, metaCampaignId: string) {
   const db = await getDb();
@@ -99,7 +95,6 @@ export async function getMetaCampaignByMetaCampaignId(tenantId: string, metaCamp
     .select({
       id: metaCampaigns.id,
       crmCampaignId: metaCampaigns.crmCampaignId,
-      crmCampaignBranchId: campaigns.branchId,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -118,7 +113,7 @@ export async function listSyncedCampaignsForAdAccount(tenantId: string, adAccoun
 
 /**
  * Lists every synced Meta campaign for the tenant, joined with its mapped
- * CRM campaign's name/branch (null if unmapped) and lead count. Unscoped by
+ * CRM campaign's name (null if unmapped) and lead count. Unscoped by
  * ad account - includes campaigns synced under an ad account the tenant is
  * no longer connected to. That makes this the wrong function for anything
  * tenant-facing (see listMetaCampaignsWithMappingForAdAccount below, which
@@ -140,7 +135,6 @@ export async function listMetaCampaignsWithMapping(tenantId: string) {
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
-      crmCampaignBranchId: campaigns.branchId,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -182,7 +176,6 @@ export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string,
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
-      crmCampaignBranchId: campaigns.branchId,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -207,7 +200,6 @@ export async function getMetaCampaignWithMappingByRowId(tenantId: string, metaCa
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
-      crmCampaignBranchId: campaigns.branchId,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -257,8 +249,8 @@ export async function mapMetaCampaignToCrmCampaign(tenantId: string, metaCampaig
 }
 
 /** Clears the mapping - the Meta campaign keeps syncing, its leads simply
- * go back to being captured unmapped (crmCampaignId/branchId both null on
- * new leads) until it's mapped again. */
+ * go back to being captured unmapped (crmCampaignId null on new leads)
+ * until it's mapped again. */
 export async function unmapMetaCampaign(tenantId: string, metaCampaignRowId: string) {
   const db = await getDb();
   const rows = await db

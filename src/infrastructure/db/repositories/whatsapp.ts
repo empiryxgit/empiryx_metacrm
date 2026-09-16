@@ -8,7 +8,7 @@
 
 import { and, eq, lt, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { campaigns, leads, metaAdSets, metaAds, metaCampaigns, metaLeadRoutes, metaWhatsappAccounts, whatsappMessageEvents } from "../schema";
+import { leads, metaAdSets, metaAds, metaCampaigns, metaLeadRoutes, metaWhatsappAccounts, whatsappMessageEvents } from "../schema";
 import { firstOrThrow } from "../util";
 import { isUniqueViolation, scoreLeadSafely, type InsertLeadResult } from "../repositories";
 
@@ -221,7 +221,7 @@ export async function upsertMetaLeadRoute(tenantId: string, input: UpsertMetaLea
  * processWhatsAppMessageEvent.ts recovers campaign/ad-set/campaign
  * attribution for an inbound message without re-calling the Graph API on
  * every event (Phase 4's whole point). Joins all the way out to the ad set,
- * Meta campaign, and (if mapped) CRM campaign/branch in one query - the same
+ * Meta campaign, and (if mapped) CRM campaign in one query - the same
  * "resolved once at sync time, never re-derived" data
  * metaCampaignService.ts already persisted when it first resolved this ad's
  * lead approach, so this pipeline needs no Graph API call of its own. */
@@ -237,13 +237,11 @@ export async function getMetaLeadRouteByMetaAdId(tenantId: string, metaAdId: str
       campaignId: metaCampaigns.metaCampaignId,
       campaignName: metaCampaigns.name,
       crmCampaignId: metaCampaigns.crmCampaignId,
-      crmCampaignBranchId: campaigns.branchId,
     })
     .from(metaLeadRoutes)
     .innerJoin(metaAds, eq(metaLeadRoutes.metaAdId, metaAds.id))
     .leftJoin(metaAdSets, eq(metaLeadRoutes.metaAdSetId, metaAdSets.id))
     .leftJoin(metaCampaigns, eq(metaLeadRoutes.metaCampaignId, metaCampaigns.id))
-    .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
     .where(and(eq(metaLeadRoutes.tenantId, tenantId), eq(metaAds.adId, metaAdId)))
     .limit(1);
   return row ?? null;
@@ -435,7 +433,6 @@ export interface InsertWhatsappLeadInput {
   campaignId: string | null;
   campaignName: string | null;
   crmCampaignId: string | null;
-  branchId: string | null;
 }
 
 /**
@@ -481,7 +478,6 @@ export async function insertWhatsappLead(input: InsertWhatsappLeadInput): Promis
       .insert(leads)
       .values({
         companyId: input.tenantId,
-        branchId: input.branchId,
         crmCampaignId: input.crmCampaignId,
         metaLeadId: `whatsapp:${input.waMessageId}`,
         platform: null,

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, desc, eq, gte, inArray, lt, or, sql as rawSql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql as rawSql } from "drizzle-orm";
 import { getDb } from "./client";
 import { leadFollowUps, leadProcessingLog, leads, rawMetaEvents, reconciliationRuns, users } from "./schema";
 import { firstOrThrow } from "./util";
@@ -87,7 +87,6 @@ export async function leadExistsByMetaLeadId(metaLeadId: string): Promise<boolea
 
 export interface InsertLeadInput {
   companyId: string;
-  branchId?: string | null;
   crmCampaignId: string;
   metaLeadId: string;
   platform: string;
@@ -322,19 +321,9 @@ export async function incrementRetryCount(metaLeadId: string, error: string) {
     .where(eq(leads.metaLeadId, metaLeadId));
 }
 
-/**
- * `branchCondition` (see branchAccessCondition) is folded directly into the
- * UPDATE's own WHERE clause rather than checked in a separate SELECT first -
- * one atomic query, no read-then-write race, and a lead outside the
- * caller's branch access simply matches zero rows (returns false) instead
- * of ever being touched. Omit it for internal/system callers that already
- * have their own scoping (there are none today - every API caller passes
- * one, see api/leads/handler.ts).
- */
-export async function updateLeadPipelineStage(companyId: string, leadId: string, stage: string, branchCondition?: SQL): Promise<boolean> {
+export async function updateLeadPipelineStage(companyId: string, leadId: string, stage: string): Promise<boolean> {
   const db = await getDb();
   const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
-  if (branchCondition) conditions.push(branchCondition);
   const rows = await db
     .update(leads)
     .set({ pipelineStage: stage, updatedAt: new Date() })
@@ -391,7 +380,6 @@ export async function getLeadCountsByMetaCampaignId(companyId: string, metaCampa
 
 export interface InsertManualLeadInput {
   companyId: string;
-  branchId?: string | null;
   fullName: string;
   phoneNumber?: string;
   email?: string;
@@ -414,7 +402,6 @@ export async function insertManualLead(input: InsertManualLeadInput) {
     .insert(leads)
     .values({
       companyId: input.companyId,
-      branchId: input.branchId ?? null,
       metaLeadId: `manual:${randomUUID()}`,
       leadType: "manual_customer",
       source: input.source,
@@ -436,7 +423,6 @@ export async function insertManualLead(input: InsertManualLeadInput) {
 
 export interface InsertFormLeadInput {
   companyId: string;
-  branchId?: string | null;
   crmCampaignId?: string | null;
   fullName: string;
   phoneNumber?: string;
@@ -470,7 +456,6 @@ export async function insertFormLead(input: InsertFormLeadInput) {
     .insert(leads)
     .values({
       companyId: input.companyId,
-      branchId: input.branchId ?? null,
       crmCampaignId: input.crmCampaignId ?? null,
       metaLeadId: `form:${randomUUID()}`,
       leadType: input.leadType,
@@ -501,7 +486,6 @@ export interface UpdateLeadCrmFieldsInput {
   nextFollowUpAt?: Date | null;
   notes?: string;
   customFields?: Record<string, unknown>;
-  branchId?: string | null;
 }
 
 /** Generic CRM-field update for the "Add to CRM" flow (turning a Meta lead
@@ -509,12 +493,9 @@ export interface UpdateLeadCrmFieldsInput {
  * never touches source/leadType/metaLeadId/crmCampaignId/campaignName -
  * a record's original acquisition source is preserved for the life of the
  * record regardless of how the CRM data around it is enriched later. */
-/** Same branchCondition-in-the-WHERE-clause approach as
- * updateLeadPipelineStage above - see its comment. */
-export async function updateLeadCrmFields(companyId: string, leadId: string, input: UpdateLeadCrmFieldsInput, branchCondition?: SQL) {
+export async function updateLeadCrmFields(companyId: string, leadId: string, input: UpdateLeadCrmFieldsInput) {
   const db = await getDb();
   const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
-  if (branchCondition) conditions.push(branchCondition);
   const rows = await db
     .update(leads)
     .set({ ...input, updatedAt: new Date() })
@@ -530,16 +511,17 @@ export async function updateLeadCrmFields(companyId: string, leadId: string, inp
 // `leads.nextFollowUpAt` (just the next due date). See leadFollowUps in
 // schema.ts for the full rationale.
 
-/** Existence + tenant/branch-access check shared by both follow-up
- * endpoints below - same "company_id + branch_id enforced on the backend"
- * contract as updateLeadPipelineStage/updateLeadCrmFields above, so a
- * caller can never list or log a follow-up against a lead outside their
- * own company or branch access just by guessing its id. */
-export async function isLeadAccessible(companyId: string, leadId: string, branchCondition?: SQL): Promise<boolean> {
+/** Existence + tenant check shared by both follow-up endpoints below - same
+ * "company_id enforced on the backend" contract as updateLeadPipelineStage/
+ * updateLeadCrmFields above, so a caller can never list or log a follow-up
+ * against a lead outside their own company just by guessing its id. */
+export async function isLeadAccessible(companyId: string, leadId: string): Promise<boolean> {
   const db = await getDb();
-  const conditions = [eq(leads.companyId, companyId), eq(leads.id, leadId)];
-  if (branchCondition) conditions.push(branchCondition);
-  const rows = await db.select({ id: leads.id }).from(leads).where(and(...conditions)).limit(1);
+  const rows = await db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)))
+    .limit(1);
   return rows.length > 0;
 }
 
@@ -557,8 +539,8 @@ export interface InsertLeadFollowUpInput {
  * the Pipeline list's "Next follow-up" column always reflects whatever was
  * most recently set here without the caller needing a second request.
  * Scoped to companyId on every write as defense in depth (the caller has
- * already been authorized via isLeadAccessible above, including branch
- * access, before this is ever invoked). */
+ * already been authorized via isLeadAccessible above, before this is ever
+ * invoked). */
 export async function insertLeadFollowUp(input: InsertLeadFollowUpInput) {
   const db = await getDb();
   const rows = await db

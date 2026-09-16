@@ -156,7 +156,7 @@ export async function isLeadIngestionBlocked(companyId: string): Promise<boolean
  * (every GET endpoint stays open - see requirePermission in
  * src/infrastructure/auth/context.ts, the only caller of this function),
  * but every WRITE gated by a specific permission (create/update/delete a
- * lead, campaign, user, role, branch, setting, form, etc.) is blocked
+ * lead, campaign, user, role, setting, form, etc.) is blocked
  * until the account subscribes. Identical underlying check to
  * isLeadIngestionBlocked above (same computeEntitlementBlocked helper,
  * same pool-root resolution so a claimed client is locked out by its

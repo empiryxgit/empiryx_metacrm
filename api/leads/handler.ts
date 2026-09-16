@@ -22,8 +22,6 @@ import {
 } from "../../src/infrastructure/db/repositories";
 import { PERMISSIONS } from "../../src/domain/permissions";
 import { getCompanyById } from "../../src/infrastructure/db/repositories/tenancy";
-import { assertBranchAccessible, resolveBranchAccess } from "../../src/application/branchAccess";
-import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
 import {
   resolveEffectiveIndustryTemplate,
   getInitialStageKey,
@@ -94,28 +92,6 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   // WhatsApp and Instant Form leads already render side by side in this
   // same list with no query param needed at all - this only narrows it.
   const leadApproach = typeof req.query.leadApproach === "string" ? req.query.leadApproach : undefined;
-  const requestedBranchId = typeof req.query.branchId === "string" ? req.query.branchId : undefined;
-
-  // An explicit ?branchId= narrows to that one branch, still combined with
-  // company-wide rows the same way every other branch filter is (validated
-  // against both tenant isolation and the caller's own branch access via
-  // assertBranchAccessible); omitted, it falls back to the caller's full
-  // branch access (every branch they're allowed to see, plus company-wide
-  // rows) - never unfiltered across branches the caller doesn't belong to.
-  let branchCondition;
-  if (requestedBranchId !== undefined) {
-    const assertion = await assertBranchAccessible(auth, requestedBranchId);
-    if (!assertion.ok) {
-      res.status(assertion.status).json({ error: assertion.error });
-      return;
-    }
-    branchCondition = branchAccessCondition(
-      leads.branchId,
-      { scope: "restricted", branchIds: assertion.branchId ? [assertion.branchId] : [] },
-    );
-  } else {
-    branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
-  }
 
   try {
     const db = await getDb();
@@ -123,7 +99,6 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     if (status) conditions.push(eq(leads.status, status));
     if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
     if (leadApproach) conditions.push(eq(leads.leadApproach, leadApproach));
-    if (branchCondition) conditions.push(branchCondition);
 
     const rows = await db
       .select()
@@ -164,13 +139,7 @@ async function handleStage(req: VercelRequest, res: VercelResponse, leadId: stri
     return;
   }
 
-  // A branch-restricted user must never be able to move a card belonging to
-  // a lead outside their own branch access, even though it shares their
-  // company - folded into the UPDATE's own WHERE clause (see
-  // updateLeadPipelineStage), same "company_id + branch_id enforced on the
-  // backend" contract as every other branch-scoped write in this codebase.
-  const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
-  const updated = await updateLeadPipelineStage(auth.companyId, leadId, stage, branchCondition);
+  const updated = await updateLeadPipelineStage(auth.companyId, leadId, stage);
   if (!updated) {
     res.status(404).json({ error: "Lead not found." });
     return;
@@ -201,10 +170,10 @@ interface CreateFollowUpBody {
 // Pipeline lead-details popup's "Follow-ups" section - GET lists the full
 // history for one lead, POST logs a new entry (optionally moving the
 // lead's own nextFollowUpAt forward in the same call - see
-// insertLeadFollowUp). Both branches share the same tenant/branch-access
-// check via isLeadAccessible before touching anything, so a caller can
-// never read or write follow-ups against a lead outside their own company
-// or branch access just by guessing its id.
+// insertLeadFollowUp). Both handlers share the same tenant-isolation check
+// via isLeadAccessible before touching anything, so a caller can never read
+// or write follow-ups against a lead outside their own company just by
+// guessing its id.
 async function handleFollowUps(req: VercelRequest, res: VercelResponse, leadId: string) {
   if (req.method !== "GET" && req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -216,8 +185,7 @@ async function handleFollowUps(req: VercelRequest, res: VercelResponse, leadId: 
   if (!auth) return;
   auth = await withEffectiveCompanyContext(req, auth);
 
-  const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
-  const accessible = await isLeadAccessible(auth.companyId, leadId, branchCondition);
+  const accessible = await isLeadAccessible(auth.companyId, leadId);
   if (!accessible) {
     res.status(404).json({ error: "Lead not found." });
     return;
@@ -273,7 +241,6 @@ interface ManualCreateBody {
   email?: string;
   source?: string;
   ownerId?: string;
-  branchId?: string;
   pipelineStage?: string;
   nextFollowUpAt?: string;
   notes?: string;
@@ -309,16 +276,9 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     : getInitialStageKey(template);
   const nextFollowUpAt = body.nextFollowUpAt ? new Date(body.nextFollowUpAt) : undefined;
 
-  const branchAssertion = await assertBranchAccessible(auth, body.branchId);
-  if (!branchAssertion.ok) {
-    res.status(branchAssertion.status).json({ error: branchAssertion.error });
-    return;
-  }
-
   try {
     const lead = await insertManualLead({
       companyId: auth.companyId,
-      branchId: branchAssertion.branchId,
       fullName,
       phoneNumber,
       email: body.email?.trim() || undefined,
@@ -341,7 +301,6 @@ interface UpdateBody {
   email?: string;
   phoneNumber?: string;
   ownerId?: string | null;
-  branchId?: string | null;
   pipelineStage?: string;
   nextFollowUpAt?: string | null;
   notes?: string;
@@ -388,23 +347,9 @@ async function handleUpdate(req: VercelRequest, res: VercelResponse, leadId: str
     }
     patch.pipelineStage = body.pipelineStage;
   }
-  if (body.branchId !== undefined) {
-    const branchAssertion = await assertBranchAccessible(auth, body.branchId);
-    if (!branchAssertion.ok) {
-      res.status(branchAssertion.status).json({ error: branchAssertion.error });
-      return;
-    }
-    patch.branchId = branchAssertion.branchId;
-  }
 
   try {
-    // Same branch-authorization gate as handleStage above - a lead the
-    // caller doesn't have branch access to matches zero rows regardless of
-    // what's in `patch`, including an attempted branchId reassignment (the
-    // NEW branchId is separately validated above via assertBranchAccessible;
-    // this guards the row's CURRENT branch instead).
-    const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
-    const lead = await updateLeadCrmFields(auth.companyId, leadId, patch, branchCondition);
+    const lead = await updateLeadCrmFields(auth.companyId, leadId, patch);
     if (!lead) {
       res.status(404).json({ error: "Lead not found." });
       return;

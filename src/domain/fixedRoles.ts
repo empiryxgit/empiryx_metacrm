@@ -58,8 +58,8 @@ const OWNER_TIER: PermissionCode[] = BASE_ALL_PERMISSIONS;
 const ADMIN_TIER: PermissionCode[] = BASE_ALL_PERMISSIONS.filter((p) => p !== PERMISSIONS.COMPANY_MANAGE);
 // Full day-to-day operational control (campaigns, pipeline, leads, forms,
 // submissions, the Meta integration) but none of the account-administration
-// permissions (company profile, users, roles, branches) - a Manager runs
-// the work, they don't run the account.
+// permissions (company profile, users, roles) - a Manager runs the work,
+// they don't run the account.
 const MANAGER_TIER: PermissionCode[] = [
   PERMISSIONS.DASHBOARD_VIEW,
   PERMISSIONS.CAMPAIGNS_VIEW,

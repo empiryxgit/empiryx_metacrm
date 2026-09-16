@@ -17,15 +17,14 @@
 // per-campaign webhook config to read an access token from. This pipeline
 // uses the SELECTED Page's own page-scoped access token (see
 // getMetaPageInternalByPageId - the same token Phase 5/6's sync already
-// uses for Forms), and resolves which CRM campaign (and therefore branch)
-// the lead belongs to from the lead's OWN Meta campaign id, matched
-// against whatever Phase 6's sync has already brought in
-// (getMetaCampaignByMetaCampaignId). If that Meta campaign hasn't been
-// synced yet, OR has been synced but not yet mapped to a CRM campaign
-// (Phase 9: mapping is a separate, explicit user action - see
-// mapMetaCampaignToCrmCampaign), the lead is still captured - just left
-// unmapped (crmCampaignId/branchId both null) rather than dropped or
-// retried forever over something a resync/mapping will fix on its own.
+// uses for Forms), and resolves which CRM campaign the lead belongs to
+// from the lead's OWN Meta campaign id, matched against whatever Phase 6's
+// sync has already brought in (getMetaCampaignByMetaCampaignId). If that
+// Meta campaign hasn't been synced yet, OR has been synced but not yet
+// mapped to a CRM campaign (Phase 9: mapping is a separate, explicit user
+// action - see mapMetaCampaignToCrmCampaign), the lead is still captured -
+// just left unmapped (crmCampaignId null) rather than dropped or retried
+// forever over something a resync/mapping will fix on its own.
 
 import { getLeadDetails, MetaApiError } from "../../infrastructure/meta/graphClient";
 import { releaseLeadIdClaim, tryClaimLeadId } from "../../infrastructure/cache/redis";
@@ -155,19 +154,17 @@ export async function processMetaLeadEvent(
     // this form was never synced.
     const contact = await resolveLeadFields(tenantId, details.formId, details.fieldData);
 
-    // Resolve which CRM campaign (and therefore branch) this lead belongs
-    // to from the lead's OWN Meta campaign id - see this module's header
-    // comment for why an unsynced or unmapped campaign is
-    // captured-but-unmapped rather than a failure. Phase 9: the lead's
-    // crmCampaignId comes from the Meta campaign's MAPPING
-    // (metaCampaign.crmCampaignId), never from the metaCampaigns row's own
-    // id - a synced-but-unmapped Meta campaign still captures the lead,
-    // just with crmCampaignId left null.
+    // Resolve which CRM campaign this lead belongs to from the lead's OWN
+    // Meta campaign id - see this module's header comment for why an
+    // unsynced or unmapped campaign is captured-but-unmapped rather than a
+    // failure. Phase 9: the lead's crmCampaignId comes from the Meta
+    // campaign's MAPPING (metaCampaign.crmCampaignId), never from the
+    // metaCampaigns row's own id - a synced-but-unmapped Meta campaign
+    // still captures the lead, just with crmCampaignId left null.
     const metaCampaign = details.campaignId ? await getMetaCampaignByMetaCampaignId(tenantId, details.campaignId) : null;
 
     const result = await insertMetaSyncLead({
       companyId: tenantId,
-      branchId: metaCampaign?.crmCampaignBranchId ?? null,
       crmCampaignId: metaCampaign?.crmCampaignId ?? null,
       metaLeadId: details.id,
       // Meta's leadgen webhook envelope's top-level `object` is always

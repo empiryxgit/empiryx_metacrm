@@ -149,7 +149,6 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
           const contact = await resolveLeadFields(config.companyId, lead.formId, lead.fieldData);
           const result = await insertRecoveredLead({
             companyId: config.companyId,
-            branchId: config.branchId,
             crmCampaignId: config.campaignId,
             metaLeadId: lead.id,
             platform: LeadPlatform.Unknown, // reconciliation doesn't know the source object type
@@ -297,7 +296,6 @@ export async function runReconciliation(): Promise<ReconciliationSummary> {
 
           const result = await insertMetaSyncLead({
             companyId: target.tenantId,
-            branchId: metaCampaign?.crmCampaignBranchId ?? null,
             crmCampaignId: metaCampaign?.crmCampaignId ?? null,
             metaLeadId: lead.id,
             platform: LeadPlatform.Facebook,

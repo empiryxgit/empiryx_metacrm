@@ -3,10 +3,9 @@
 // Setu CRM — demo data seed script
 // -----------------------------------------------------------------------
 // Creates ONE brand-new demo company (via the app's own /api/auth/register
-// flow), ONE branch, ONE campaign scoped to that branch, and a set of
-// leads submitted through the app's real internal + public form endpoints
-// — so the Dashboard, Pipeline, Leads, and Branch views all have real data
-// to review.
+// flow), ONE campaign, and a set of leads submitted through the app's real
+// internal + public form endpoints — so the Dashboard, Pipeline, and Leads
+// views all have real data to review.
 //
 // Deliberately does NOT touch Meta Lead Ads / webhooks in any way — no
 // fake Graph API payloads, no source:"meta_lead_ads" leads, no webhook
@@ -216,8 +215,6 @@ async function main() {
   const companyName = `Setu Demo Realty ${runId}`;
   const ownerEmail = `demo.owner.${runId}@empiryxtech-demo.test`;
   const ownerPassword = `DemoPass${runId}!`;
-  const branchName = "Ahmedabad";
-  const branchCode = `AMD${runId}`;
   const campaignName = "Diwali Property Drive";
   const salesEmail = `demo.sales.${runId}@empiryxtech-demo.test`;
   const salesFullName = "Priya Shah";
@@ -227,7 +224,7 @@ async function main() {
 
   // 1. Register the demo company + owner, and log in (register already
   //    logs the new owner in and sets cookies).
-  log("1/9 Registering demo company + owner...");
+  log("1/7 Registering demo company + owner...");
   const registerRes = await api("POST", "/api/auth/register", {
     companyName,
     fullName: "Demo Owner",
@@ -239,45 +236,32 @@ async function main() {
   console.log(`   Owner user id: ${ownerId}`);
 
   // 2. Onboarding step 1 — company profile.
-  log("2/9 Setting company profile (onboarding step 1)...");
+  log("2/7 Setting company profile (onboarding step 1)...");
   await api("POST", "/api/onboarding/company", {
     industry: "real_estate",
     companySize: "11-50",
     timezone: "Asia/Kolkata",
   });
 
-  // 3. Create the one branch.
-  log(`3/9 Creating branch "${branchName}"...`);
-  const branchRes = await api("POST", "/api/branches", {
-    name: branchName,
-    code: branchCode,
-    city: "Ahmedabad",
-    state: "Gujarat",
-    status: "active",
-  });
-  const branchId = branchRes.branch.id;
-  console.log(`   Branch id: ${branchId}`);
-
-  // 4. Create the one campaign, scoped to that branch.
-  log(`4/9 Creating campaign "${campaignName}" (scoped to ${branchName})...`);
+  // 3. Create the one campaign.
+  log(`3/7 Creating campaign "${campaignName}"...`);
   const campaignRes = await api("POST", "/api/campaigns", {
     name: campaignName,
     platform: "facebook",
-    branchId,
   });
   const campaignId = campaignRes.campaign.id;
   console.log(`   Campaign id: ${campaignId}`);
 
-  // 5. Finish onboarding (frontend wizard order: campaign, then complete).
-  log("5/9 Completing onboarding...");
+  // 4. Finish onboarding (frontend wizard order: campaign, then complete).
+  log("4/7 Completing onboarding...");
   await api("POST", "/api/onboarding/complete", {});
 
-  // 6. One extra branch-scoped "sales" user, so Owner filters/columns on
-  //    the Dashboard and Pipeline have more than one value to show.
-  log(`6/9 Creating a branch sales user (${salesFullName})...`);
+  // 5. One extra "sales" user, so Owner filters/columns on the Dashboard
+  //    and Pipeline have more than one value to show.
+  log(`5/7 Creating a sales user (${salesFullName})...`);
   const salesRole = await api("POST", "/api/admin/roles", {
-    name: "Branch Sales Executive",
-    description: "Demo role — manage leads/pipeline/forms for their own branch only.",
+    name: "Sales Executive",
+    description: "Demo role — manage leads/pipeline/forms.",
     permissions: [
       "dashboard.view",
       "pipeline.view",
@@ -295,35 +279,24 @@ async function main() {
     roleId: salesRole.role.id,
   });
   const salesUserId = salesUserRes.user.id;
-  await api("POST", `/api/branches/${branchId}/users`, {
-    userId: salesUserId,
-    role: "member",
-    isPrimary: true,
-  });
   console.log(`   Sales user id: ${salesUserId} (temp password: ${salesUserRes.temporaryPassword})`);
 
-  // 7. Scope the auto-provisioned internal ("Add Customer") form to this
-  //    branch + campaign, so submissions default into them.
-  log("7/9 Configuring the internal Add-Customer form...");
+  // 6. Scope the auto-provisioned internal ("Add Customer") form and the
+  //    auto-provisioned public form to this campaign, then publish the
+  //    public one (used for a handful of "website" leads, exercising the
+  //    real public-submit flow — NOT Meta).
+  log("6/7 Configuring the internal + public forms...");
   const internalForms = await api("GET", "/api/forms?type=internal");
   const internalForm = internalForms.forms[0];
   if (!internalForm) throw new Error("No internal form found — registration should have auto-provisioned one.");
   await api("PUT", `/api/forms/${internalForm.id}`, {
-    branchMode: "specific",
-    branchId,
     defaultCrmCampaignId: campaignId,
   });
 
-  // 8. Scope + publish the auto-provisioned public form (used for a
-  //    handful of "website" leads, exercising the real public-submit
-  //    flow — NOT Meta).
-  log("8/9 Configuring + publishing the public form...");
   const publicForms = await api("GET", "/api/forms?type=public");
   const publicFormMeta = publicForms.forms[0];
   if (!publicFormMeta) throw new Error("No public form found — registration should have auto-provisioned one.");
   await api("PUT", `/api/forms/${publicFormMeta.id}`, {
-    branchMode: "specific",
-    branchId,
     defaultCrmCampaignId: campaignId,
     defaultSource: "public_form",
   });
@@ -332,8 +305,8 @@ async function main() {
   console.log(`   Public form key: ${publicKey}`);
   console.log(`   Public form URL: ${BASE_URL}/public-form.html?key=${publicKey}`);
 
-  // 9. Seed leads.
-  log("9/9 Submitting leads through the internal form (varied stage/source/owner)...");
+  // 7. Seed leads.
+  log("7/7 Submitting leads through the internal form (varied stage/source/owner)...");
   let leadIndex = 0;
   let manualCreated = 0;
   let manualFailed = 0;
@@ -382,7 +355,6 @@ async function main() {
   console.log("\n" + "=".repeat(72));
   console.log("Done. Demo data created:");
   console.log(`  Company:        ${companyName}`);
-  console.log(`  Branch:         ${branchName} (code ${branchCode})`);
   console.log(`  Campaign:       ${campaignName}`);
   console.log(`  Total leads:    ${manualCreated + publicCreated} (${manualCreated} internal + ${publicCreated} public-form)`);
   console.log("");

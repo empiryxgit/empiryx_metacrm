@@ -21,9 +21,6 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import { PERMISSIONS } from "../../src/domain/permissions";
-import { assertBranchAccessible, canAccessBranch, resolveBranchAccess } from "../../src/application/branchAccess";
-import { branchAccessCondition } from "../../src/infrastructure/db/branchFilter";
-import { leads } from "../../src/infrastructure/db/schema";
 import {
   FORM_FIELD_TYPES,
   LEAD_SOURCES,
@@ -39,12 +36,6 @@ import { validateSubmissionValues, type ValidatableField } from "../../src/domai
 import { getCompanyById, getUserById } from "../../src/infrastructure/db/repositories/tenancy";
 import { getCampaign } from "../../src/infrastructure/db/repositories/campaigns";
 import { insertFormLead, updateLeadCrmFields } from "../../src/infrastructure/db/repositories";
-import {
-  validateBranchConfig,
-  resolveFormSubmissionBranch,
-  type FormBranchConfig,
-  type ValidatedBranchConfig,
-} from "../../src/application/formBranch";
 import {
   archiveForm,
   createForm,
@@ -238,24 +229,16 @@ function toFieldsSnapshot(fields: FormFieldLike[]) {
 }
 
 interface FormRow {
-  branchMode: string;
-  branchId: string | null;
-  branchFieldKey: string | null;
-  branchFieldMap: Record<string, string> | null;
   defaultPipelineStage: string | null;
   defaultCrmCampaignId: string | null;
   defaultSource: string | null;
   defaultOwnerId: string | null;
 }
 
-function formBranchConfigFrom(form: FormRow): FormBranchConfig {
-  return { branchMode: form.branchMode, branchId: form.branchId, branchFieldKey: form.branchFieldKey, branchFieldMap: form.branchFieldMap };
-}
-
 /**
- * Layers a form's own Branch Configuration defaults (Pipeline/Initial Stage/
- * Campaign/Lead Source/Default Owner - see the forms table comment in
- * schema.ts) UNDER whatever the submission itself already resolved from its
+ * Layers a form's own defaults (Pipeline/Initial Stage/Campaign/Lead Source/
+ * Default Owner - see the forms table comment in schema.ts) UNDER whatever
+ * the submission itself already resolved from its
  * field values - a value the submitter/salesperson actually provided always
  * wins; the form-level default only fills a gap. Every default is either
  * FK-backed (defaultCrmCampaignId/defaultOwnerId - ON DELETE SET NULL
@@ -400,7 +383,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   auth = await withEffectiveCompanyContext(req, auth);
   const type = getQueryString(req, "type");
   try {
-    const rows = await listForms(auth.companyId, type, resolveBranchAccess(auth));
+    const rows = await listForms(auth.companyId, type);
     res.status(200).json({ forms: rows });
   } catch (err) {
     console.error("[forms] Failed to list forms:", err);
@@ -425,18 +408,8 @@ async function handleDefaultInternal(req: VercelRequest, res: VercelResponse) {
   if (!auth) return;
   auth = await withEffectiveCompanyContext(req, auth);
 
-  const requestedBranchId = getQueryString(req, "branchId");
-  const assertion = await assertBranchAccessible(auth, requestedBranchId);
-  if (!assertion.ok) {
-    // Fail open to the fallback rather than blocking Add Customer on a bad/
-    // inaccessible branchId - same "never block" contract as the try/catch
-    // below.
-    res.status(200).json({ form: null, fields: [] });
-    return;
-  }
-
   try {
-    const result = await getDefaultInternalForm(auth.companyId, assertion.branchId);
+    const result = await getDefaultInternalForm(auth.companyId);
     if (!result) {
       res.status(200).json({ form: null, fields: [] });
       return;
@@ -452,10 +425,6 @@ interface CreateFormBody {
   name?: string;
   description?: string;
   type?: string;
-  branchId?: string;
-  branchMode?: string;
-  branchFieldKey?: string;
-  branchFieldMap?: Record<string, string>;
   fields?: unknown;
   defaultPipelineStage?: string | null;
   defaultCrmCampaignId?: string | null;
@@ -482,12 +451,6 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const branchConfig = await validateBranchConfig(auth, body, validated.fields);
-  if (!branchConfig.ok) {
-    res.status(branchConfig.status).json({ error: branchConfig.error });
-    return;
-  }
-
   const company = await getCompanyById(auth.companyId);
   if (!company) {
     res.status(401).json({ error: "Account no longer exists." });
@@ -503,10 +466,6 @@ async function handleCreate(req: VercelRequest, res: VercelResponse) {
   try {
     const form = await createForm({
       companyId: auth.companyId,
-      branchId: branchConfig.config.branchId,
-      branchMode: branchConfig.config.branchMode,
-      branchFieldKey: branchConfig.config.branchFieldKey,
-      branchFieldMap: branchConfig.config.branchFieldMap,
       name,
       description: body.description?.trim() || undefined,
       type,
@@ -527,10 +486,6 @@ interface UpdateFormBody {
   name?: string;
   description?: string;
   settings?: Record<string, unknown>;
-  branchId?: string | null;
-  branchMode?: string;
-  branchFieldKey?: string;
-  branchFieldMap?: Record<string, string>;
   fields?: unknown;
   defaultPipelineStage?: string | null;
   defaultCrmCampaignId?: string | null;
@@ -546,14 +501,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
     const result = await getFormWithFields(auth.companyId, formId);
     if (!result) {
       res.status(404).json({ error: "Form not found." });
-      return;
-    }
-    // Tenant isolation (companyId, above) is not enough on its own - a
-    // branch-restricted viewer must never read a form (including its
-    // Branch Configuration / CRM defaults) scoped to a branch outside
-    // their own access.
-    if (!canAccessBranch(resolveBranchAccess(auth), result.form.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
       return;
     }
     res.status(200).json(result);
@@ -572,20 +519,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
       res.status(404).json({ error: "Form not found." });
       return;
     }
-    // Guards the form's CURRENT branch - a branch-restricted manager can
-    // never edit a form already scoped outside their access (any NEW
-    // branchId being set is separately validated by validateBranchConfig
-    // below, which itself routes through assertBranchAccessible).
-    if (!canAccessBranch(resolveBranchAccess(auth), existingForm.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
-
-    // Branch Configuration's "field" mode needs the form's OTHER field
-    // definitions to validate branchFieldKey against - use body.fields when
-    // this same request is also replacing them (the Form Builder always
-    // saves meta + fields together), otherwise fall back to what's already
-    // on the form.
     let validatedFields: FormFieldInput[] | null = null;
     if (body.fields !== undefined) {
       const validated = validateFieldDefs(body.fields);
@@ -594,28 +527,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
         return;
       }
       validatedFields = validated.fields;
-    }
-    const fieldsForValidation = validatedFields ?? (await getFormFields(formId));
-
-    const branchTouched =
-      body.branchId !== undefined || body.branchMode !== undefined || body.branchFieldKey !== undefined || body.branchFieldMap !== undefined;
-    let branchPatch: Partial<ValidatedBranchConfig> = {};
-    if (branchTouched) {
-      const branchConfig = await validateBranchConfig(
-        auth,
-        {
-          branchMode: body.branchMode ?? existingForm.branchMode,
-          branchId: body.branchId !== undefined ? body.branchId : existingForm.branchId,
-          branchFieldKey: body.branchFieldKey !== undefined ? body.branchFieldKey : existingForm.branchFieldKey,
-          branchFieldMap: body.branchFieldMap !== undefined ? body.branchFieldMap : existingForm.branchFieldMap,
-        },
-        fieldsForValidation,
-      );
-      if (!branchConfig.ok) {
-        res.status(branchConfig.status).json({ error: branchConfig.error });
-        return;
-      }
-      branchPatch = branchConfig.config;
     }
 
     const defaultsTouched =
@@ -643,14 +554,12 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
       body.name !== undefined ||
       body.description !== undefined ||
       body.settings !== undefined ||
-      branchTouched ||
       defaultsTouched
     ) {
       await updateFormMeta(auth.companyId, formId, {
         name: body.name?.trim(),
         description: body.description?.trim(),
         settings: body.settings,
-        ...branchPatch,
         ...defaultsPatch,
       });
     }
@@ -680,10 +589,6 @@ async function handleOne(req: VercelRequest, res: VercelResponse, formId: string
       res.status(404).json({ error: "Form not found." });
       return;
     }
-    if (!canAccessBranch(resolveBranchAccess(auth), formToDelete.branchId)) {
-      res.status(403).json({ error: "You do not have access to this branch." });
-      return;
-    }
     const deleted = await deleteDraftForm(auth.companyId, formId);
     if (!deleted) {
       res.status(409).json({ error: "Only a draft form with no submissions can be deleted. Archive it instead." });
@@ -710,11 +615,6 @@ async function handlePublish(req: VercelRequest, res: VercelResponse, formId: st
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  if (!canAccessBranch(resolveBranchAccess(auth), existingForm.branchId)) {
-    res.status(403).json({ error: "You do not have access to this branch." });
-    return;
-  }
-
   const form = await publishForm(auth.companyId, formId);
   if (!form) {
     res.status(404).json({ error: "Form not found." });
@@ -737,10 +637,6 @@ async function handleArchive(req: VercelRequest, res: VercelResponse, formId: st
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  if (!canAccessBranch(resolveBranchAccess(auth), form.branchId)) {
-    res.status(403).json({ error: "You do not have access to this branch." });
-    return;
-  }
   await archiveForm(auth.companyId, formId);
   res.status(200).json({ archived: true });
 }
@@ -759,11 +655,6 @@ async function handleSetDefault(req: VercelRequest, res: VercelResponse, formId:
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  if (!canAccessBranch(resolveBranchAccess(auth), existingForm.branchId)) {
-    res.status(403).json({ error: "You do not have access to this branch." });
-    return;
-  }
-
   const ok = await setDefaultInternalForm(auth.companyId, formId);
   if (!ok) {
     res.status(400).json({ error: "Only a published internal form can be set as the default Add Customer form." });
@@ -786,7 +677,7 @@ async function handleSubmissions(req: VercelRequest, res: VercelResponse, formId
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  const rows = await listSubmissions(auth.companyId, formId, 200, resolveBranchAccess(auth));
+  const rows = await listSubmissions(auth.companyId, formId, 200);
   res.status(200).json({ submissions: rows });
 }
 
@@ -795,7 +686,6 @@ async function handleSubmissions(req: VercelRequest, res: VercelResponse, formId
 interface InternalSubmitBody {
   values?: Record<string, unknown>;
   leadId?: string; // present = "convert" (enrich an existing lead); absent = "create"
-  branchId?: string | null; // optional override - see resolution below the form lookup
 }
 
 async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, formId: string) {
@@ -828,21 +718,6 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
   const body = (req.body ?? {}) as InternalSubmitBody;
   const values = body.values ?? {};
 
-  // Multi-branch user override: the Add Customer modal preselects the
-  // caller's branch but lets a multi-branch user pick a different permitted
-  // one - takes precedence over the form's own Branch Configuration
-  // entirely when explicitly provided (pre-existing behavior, unchanged).
-  // Otherwise resolved from the form's own Branch Configuration - specific/
-  // all/field (see src/application/formBranch.ts) - re-validated against
-  // the caller's own branch access either way, so a value the client didn't
-  // actually have permission for can never slip through.
-  const branchResolution = await resolveFormSubmissionBranch(auth.companyId, formBranchConfigFrom(form), values, auth, body.branchId);
-  if (!branchResolution.ok) {
-    res.status(branchResolution.status).json({ error: branchResolution.error });
-    return;
-  }
-  const effectiveBranchId = branchResolution.branchId;
-
   const validationErrors = validateSubmissionValues(fields as unknown as ValidatableField[], values);
   if (Object.keys(validationErrors).length > 0) {
     res.status(400).json({ error: "Please fix the highlighted fields.", fieldErrors: validationErrors });
@@ -861,12 +736,7 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
     if (body.leadId) {
       // "convert" - Not Interested -> Add to CRM (or a re-edit of an
       // existing customer). source is intentionally never included in this
-      // patch - see updateLeadCrmFields' own contract for why. branchCondition
-      // guards the target lead's CURRENT branch, same "company_id + branch_id
-      // enforced on the backend" contract as every other branch-scoped
-      // write - a branch-restricted salesperson could otherwise pass any
-      // leadId here and edit a lead outside their own branch access.
-      const branchCondition = branchAccessCondition(leads.branchId, resolveBranchAccess(auth));
+      // patch - see updateLeadCrmFields' own contract for why.
       lead = await updateLeadCrmFields(auth.companyId, body.leadId, {
         fullName: systemPatch.fullName,
         email: systemPatch.email,
@@ -876,7 +746,7 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
         nextFollowUpAt: systemPatch.nextFollowUpAt,
         notes: systemPatch.notes,
         customFields,
-      }, branchCondition);
+      });
       if (!lead) {
         res.status(404).json({ error: "Lead not found." });
         return;
@@ -890,7 +760,6 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
       const defaults = applyFormDefaults(form, systemPatch, template);
       lead = await insertFormLead({
         companyId: auth.companyId,
-        branchId: effectiveBranchId,
         crmCampaignId: defaults.crmCampaignId ?? null,
         fullName: systemPatch.fullName,
         phoneNumber: systemPatch.phoneNumber,
@@ -908,7 +777,6 @@ async function handleInternalSubmit(req: VercelRequest, res: VercelResponse, for
     const submission = await createSubmission({
       formId,
       companyId: auth.companyId,
-      branchId: effectiveBranchId,
       leadId: lead.id,
       schemaVersion: form.schemaVersion,
       fieldsSnapshot: toFieldsSnapshot(fields),
@@ -954,8 +822,8 @@ async function handlePublicGet(req: VercelRequest, res: VercelResponse, publicKe
     fields: fields
       // never exposed publicly regardless of how the form was built - owner/
       // stage/source/campaign are always either the form's own configured
-      // default (see forms.default* / Branch Configuration's sibling
-      // settings) or left unset, never a visitor's own choice.
+      // default (see forms.default* settings) or left unset, never a
+      // visitor's own choice.
       .filter((f) => !["ownerId", "pipelineStage", "source", "crmCampaignId"].includes(f.systemField ?? ""))
       .map((f) => ({
         key: f.key,
@@ -1028,23 +896,6 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
     return;
   }
 
-  // Branch routing for an anonymous submission - resolved ENTIRELY
-  // server-side from the form's own Branch Configuration (specific/all/
-  // field, see src/application/formBranch.ts) and the submitted field
-  // values. No `auth`, no client-supplied override: a public visitor never
-  // controls their own branch assignment directly, only indirectly through
-  // an answer like "Which location are you interested in?" that the form's
-  // branchFieldMap (set up by an admin who has permission to manage that
-  // branch) translates into a branchId. This is the "must be validated on
-  // the backend" requirement for public forms, satisfied by construction -
-  // there is no other path to a branchId here.
-  const branchResolution = await resolveFormSubmissionBranch(form.companyId, formBranchConfigFrom(form), values);
-  if (!branchResolution.ok) {
-    res.status(branchResolution.status).json({ error: branchResolution.error });
-    return;
-  }
-  const effectiveBranchId = branchResolution.branchId;
-
   // A public form never collects owner/stage/source/campaign from the
   // visitor (filtered out above) - defaults here come entirely from the
   // form's own configuration; "source" falls back to "public_form" (the
@@ -1055,7 +906,6 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
   try {
     const lead = await insertFormLead({
       companyId: form.companyId,
-      branchId: effectiveBranchId,
       crmCampaignId: defaults.crmCampaignId ?? null,
       fullName: systemPatch.fullName,
       phoneNumber: systemPatch.phoneNumber,
@@ -1071,7 +921,6 @@ async function handlePublicSubmit(req: VercelRequest, res: VercelResponse, publi
     const submission = await createSubmission({
       formId: form.id,
       companyId: form.companyId,
-      branchId: effectiveBranchId,
       leadId: lead.id,
       schemaVersion: form.schemaVersion,
       fieldsSnapshot: toFieldsSnapshot(fields),

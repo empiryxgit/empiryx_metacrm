@@ -32,7 +32,7 @@
       <select id="crmCampaignSelect" disabled>
         <option value="">Unmapped</option>
       </select>
-      <div class="hint">Leads from this Meta campaign will be attributed to the LMS campaign you choose here, and will inherit its branch. Don't see the right one? <a href="/campaigns.html">Create an LMS campaign first</a>, then come back here.</div>
+      <div class="hint">Leads from this Meta campaign will be attributed to the LMS campaign you choose here. Don't see the right one? <a href="/campaigns.html">Create an LMS campaign first</a>, then come back here.</div>
       <div style="margin-top:14px; display:flex; gap:10px">
         <button class="btn" type="button" id="saveMappingBtn" style="display:none">Save mapping</button>
         <button class="btn secondary" type="button" id="unmapBtn" style="display:none">Unmap</button>
@@ -76,9 +76,9 @@
     const desc = document.getElementById("mappingStateDesc");
 
     if (metaCampaign.crmCampaignId) {
-      desc.textContent = `Currently mapped to "${metaCampaign.crmCampaignName}". Leads route to ${metaCampaign.branchId ? "its branch" : "all branches (company-wide)"}.`;
+      desc.textContent = `Currently mapped to "${metaCampaign.crmCampaignName}".`;
     } else {
-      desc.textContent = "Not mapped yet - leads from this Meta campaign are still captured, just without an LMS campaign or branch attached.";
+      desc.textContent = "Not mapped yet - leads from this Meta campaign are still captured, just without an LMS campaign attached.";
     }
 
     if (!canManageCampaign) {
@@ -89,7 +89,7 @@
     try {
       const { campaigns } = await App.apiJson("/api/campaigns");
       select.innerHTML = `<option value="">Unmapped</option>` +
-        campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}${c.branchName ? ` (${App.escapeHtml(c.branchName)})` : ""}</option>`).join("");
+        campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
     } catch (err) {
       // Non-fatal - select falls back to "Unmapped" only.
     }

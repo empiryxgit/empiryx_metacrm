@@ -17,8 +17,8 @@ import { agencyClientAssignments } from "../schema";
  * AccessTokenClaims.assignedClientIds and resolveAgencyClientAccess. Not
  * scoped by agencyCompanyId: a user only ever belongs to one company, and
  * every assignment row for them was created under that same company (see
- * setAssignedClients below), so there is nothing cross-tenant to leak here
- * - same reasoning listUserBranches/getUserBranchIds already rely on. */
+ * setAssignedClients below), so there is nothing cross-tenant to leak
+ * here. */
 export async function getUserAssignedClientIds(userId: string): Promise<string[]> {
   const db = await getDb();
   const rows = await db
@@ -121,8 +121,7 @@ export async function setAssignedClients(input: {
 }
 
 /** Every assignment row for this user, filtered down to whichever of the
- * given clientCompanyIds are still valid - used the same way
- * branchIdsForCompany guards branch deletion, so a stale assignment to a
+ * given clientCompanyIds are still valid, so a stale assignment to a
  * since-removed client can be filtered out of a UI list without a separate
  * existence check per id. */
 export async function assignedClientIdsAmong(userId: string, clientCompanyIds: string[]): Promise<Set<string>> {

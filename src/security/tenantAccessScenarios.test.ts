@@ -93,7 +93,6 @@ describe.skipIf(!process.env.DATABASE_URL)("Tenant access control scenarios", ()
     });
     const leadB = await insertLead({
       companyId: clientB.tenantId,
-      branchId: null,
       crmCampaignId: campaignB.id,
       metaLeadId: `meta_lead_b_${randomUUID()}`,
       platform: LeadPlatform.Facebook,

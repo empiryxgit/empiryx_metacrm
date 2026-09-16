@@ -18,7 +18,6 @@ import {
   setCompanyCreatedBy,
   completeOnboarding,
 } from "../infrastructure/db/repositories/tenancy";
-import { getUserBranchIds } from "../infrastructure/db/repositories/branches";
 import { getUserAssignedClientIds } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { hashPassword, verifyPassword } from "../infrastructure/auth/password";
 import {
@@ -345,13 +344,12 @@ export async function login(input: LoginInput): Promise<AuthTokens> {
     throw new AuthError("Account has no role assigned - contact your administrator.", 403);
   }
 
-  const [branchIds, assignedClientIds] = await Promise.all([getUserBranchIds(user.id), getUserAssignedClientIds(user.id)]);
+  const assignedClientIds = await getUserAssignedClientIds(user.id);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
-    branchIds,
     assignedClientIds,
   });
 
@@ -422,13 +420,12 @@ export async function refresh(refreshToken: string): Promise<AuthTokens> {
   // blast radius of a stolen refresh token to a single use.
   await revokeSession(session.id);
 
-  const [branchIds, assignedClientIds] = await Promise.all([getUserBranchIds(user.id), getUserAssignedClientIds(user.id)]);
+  const assignedClientIds = await getUserAssignedClientIds(user.id);
   const accessToken = await signAccessToken({
     sub: user.id,
     companyId: user.companyId,
     roleId: user.roleId,
     permissions: effectivePermissions(role),
-    branchIds,
     assignedClientIds,
   });
   const { token: newRefreshToken, hash: newHash } = generateRefreshToken();

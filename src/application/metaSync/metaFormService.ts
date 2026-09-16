@@ -168,7 +168,6 @@ async function syncHistoricalLeadsForForm(
 
       const result = await insertMetaSyncLead({
         companyId: tenantId,
-        branchId: metaCampaign?.crmCampaignBranchId ?? null,
         crmCampaignId: metaCampaign?.crmCampaignId ?? null,
         metaLeadId: lead.id,
         // Same "no reliable per-lead signal" default the real-time

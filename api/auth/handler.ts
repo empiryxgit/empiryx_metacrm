@@ -360,11 +360,6 @@ async function handleMe(req: VercelRequest, res: VercelResponse) {
               : role.permissions,
         }
       : null,
-    // Branch ids this user is a member of, straight from the access token
-    // (see AccessTokenClaims.branchIds) - empty means "not assigned to a
-    // specific branch," which src/application/branchAccess.ts treats as
-    // unrestricted, not as "no access."
-    branchIds: auth.branchIds ?? [],
   });
 }
 

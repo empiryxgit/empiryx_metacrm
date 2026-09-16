@@ -5,23 +5,11 @@
 // call into these.
 
 import { randomBytes } from "crypto";
-import { and, desc, eq, isNull, type Column } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDb } from "../client";
 import { formFields, formSubmissions, forms } from "../schema";
 import { firstOrThrow } from "../util";
 import type { FormFieldTemplateDef, IndustryTemplate } from "../../../domain/industryTemplates";
-import { branchAccessCondition } from "../branchFilter";
-import type { BranchAccess } from "../../../application/branchAccess";
-
-/** NULL-safe equality for a nullable branch_id column - `eq(col, null)`
- * would compile to `col = NULL`, which SQL always evaluates to unknown/false,
- * never matching a company-wide (NULL) row. Used everywhere a form/submission
- * needs to be matched against a SPECIFIC branch scope (including "no
- * branch"), as opposed to branchAccessCondition's broader "this row OR any
- * company-wide row" read-access filter. */
-function branchIs(column: Column, branchId: string | null) {
-  return branchId === null ? isNull(column) : eq(column, branchId);
-}
 
 // ---- Field shape shared by create + replace --------------------------
 
@@ -63,12 +51,10 @@ async function insertFields(formId: string, fields: FormFieldInput[]) {
 
 // ---- Forms ----------------------------------------------------------------
 
-export async function listForms(companyId: string, type?: string, access?: BranchAccess) {
+export async function listForms(companyId: string, type?: string) {
   const db = await getDb();
   const conditions = [eq(forms.companyId, companyId)];
   if (type) conditions.push(eq(forms.type, type));
-  const branchCondition = access ? branchAccessCondition(forms.branchId, access) : undefined;
-  if (branchCondition) conditions.push(branchCondition);
   return db.select().from(forms).where(and(...conditions)).orderBy(desc(forms.updatedAt));
 }
 
@@ -110,19 +96,6 @@ export async function getPublishedFormByPublicKey(publicKey: string) {
   return { form, fields };
 }
 
-// Branch Configuration - shared shape between create and update. See
-// src/application/formBranch.ts for how these turn into an actual branchId
-// at submission time, and for the validation every caller MUST run before
-// passing these through (never trust a client-supplied branchMode/
-// branchFieldMap directly - validateBranchConfig checks tenant isolation
-// AND the saving user's own branch access on every branchId referenced).
-export interface FormBranchConfigInput {
-  branchMode?: "specific" | "all" | "field";
-  branchId?: string | null; // authoritative only when branchMode="specific"
-  branchFieldKey?: string | null; // authoritative only when branchMode="field"
-  branchFieldMap?: Record<string, string>; // authoritative only when branchMode="field"
-}
-
 // Form-level CRM defaults - shared shape between create and update. See the
 // forms table comment in schema.ts.
 export interface FormDefaultsInput {
@@ -132,7 +105,7 @@ export interface FormDefaultsInput {
   defaultOwnerId?: string | null;
 }
 
-export interface CreateFormInput extends FormBranchConfigInput, FormDefaultsInput {
+export interface CreateFormInput extends FormDefaultsInput {
   companyId: string;
   name: string;
   description?: string;
@@ -147,10 +120,6 @@ export async function createForm(input: CreateFormInput) {
     .insert(forms)
     .values({
       companyId: input.companyId,
-      branchId: input.branchId ?? null,
-      branchMode: input.branchMode ?? (input.branchId ? "specific" : "all"),
-      branchFieldKey: input.branchFieldKey ?? null,
-      branchFieldMap: input.branchFieldMap ?? {},
       name: input.name,
       description: input.description,
       type: input.type,
@@ -166,7 +135,7 @@ export async function createForm(input: CreateFormInput) {
   return form;
 }
 
-export interface UpdateFormMetaInput extends FormBranchConfigInput, FormDefaultsInput {
+export interface UpdateFormMetaInput extends FormDefaultsInput {
   name?: string;
   description?: string;
   settings?: Record<string, unknown>;
@@ -256,13 +225,10 @@ export async function deleteDraftForm(companyId: string, formId: string): Promis
   return true;
 }
 
-/** Marks `formId` the default internal form for its OWN branch scope (auto-
- * loaded by Add Customer / Not Interested -> Add to CRM), clearing the flag
- * on every other internal form in that SAME scope first - company-wide
- * (branchId null) and each individual branch each get their own independent
- * "one default at a time" invariant, so setting a branch's default can never
- * clobber the company-wide default or another branch's. Only a published
- * internal form may be set as default. */
+/** Marks `formId` the company's default internal form (auto-loaded by Add
+ * Customer / Not Interested -> Add to CRM), clearing the flag on every other
+ * internal form first so there's only ever one default at a time. Only a
+ * published internal form may be set as default. */
 export async function setDefaultInternalForm(companyId: string, formId: string): Promise<boolean> {
   const db = await getDb();
   const form = await getFormById(companyId, formId);
@@ -270,50 +236,22 @@ export async function setDefaultInternalForm(companyId: string, formId: string):
   await db
     .update(forms)
     .set({ isDefault: false, updatedAt: new Date() })
-    .where(and(eq(forms.companyId, companyId), eq(forms.type, "internal"), branchIs(forms.branchId, form.branchId)));
+    .where(and(eq(forms.companyId, companyId), eq(forms.type, "internal")));
   await db.update(forms).set({ isDefault: true, updatedAt: new Date() }).where(eq(forms.id, formId));
   return true;
 }
 
 /** What public/pipeline.html loads to drive Add Customer / Not Interested ->
- * Add to CRM. When `branchId` is omitted, behaves exactly as before this
- * feature existed - no branch filtering at all - so every existing caller
- * (which never passes one) is completely unaffected. When a branchId IS
- * given: prefers that branch's own flagged default, then falls back to the
- * company-wide (branchId null) default, then to the most-recently-published
- * internal form in either scope, and finally to null - in which case the
- * caller falls back to its own hard-coded field set unchanged, so this
- * feature can never regress an existing tenant either way. */
-export async function getDefaultInternalForm(companyId: string, branchId?: string | null) {
+ * Add to CRM: the company's flagged default internal form, falling back to
+ * the most-recently-published internal form, and finally to null - in which
+ * case the caller falls back to its own hard-coded field set. */
+export async function getDefaultInternalForm(companyId: string) {
   const db = await getDb();
   const base = [eq(forms.companyId, companyId), eq(forms.type, "internal"), eq(forms.status, "published")];
 
-  async function findFlagged(scopeBranchId: string | null) {
-    const [row] = await db.select().from(forms).where(and(...base, eq(forms.isDefault, true), branchIs(forms.branchId, scopeBranchId))).limit(1);
-    return row;
-  }
-  async function findLatest(scopeBranchId: string | null) {
-    const rows = await db
-      .select()
-      .from(forms)
-      .where(and(...base, branchIs(forms.branchId, scopeBranchId)))
-      .orderBy(desc(forms.publishedAt))
-      .limit(1);
-    return rows[0];
-  }
-
-  let form;
-  if (branchId === undefined) {
-    // Legacy, branch-unaware path - identical query to before this feature.
-    form = (await db.select().from(forms).where(and(...base, eq(forms.isDefault, true))).limit(1))[0]
-      ?? (await db.select().from(forms).where(and(...base)).orderBy(desc(forms.publishedAt)).limit(1))[0];
-  } else {
-    form =
-      (branchId ? await findFlagged(branchId) : undefined) ??
-      (await findFlagged(null)) ??
-      (branchId ? await findLatest(branchId) : undefined) ??
-      (await findLatest(null));
-  }
+  const form =
+    (await db.select().from(forms).where(and(...base, eq(forms.isDefault, true))).limit(1))[0]
+    ?? (await db.select().from(forms).where(and(...base)).orderBy(desc(forms.publishedAt)).limit(1))[0];
 
   if (!form) return null;
   const fields = await getFormFields(form.id);
@@ -325,11 +263,6 @@ export async function getDefaultInternalForm(companyId: string, branchId?: strin
 export interface CreateSubmissionInput {
   formId: string;
   companyId: string;
-  /** Denormalized from the parent form at submission time (see
-   * api/forms/handler.ts) rather than looked up here, so a later branch
-   * reassignment of the form never rewrites history for submissions already
-   * collected under its old branch. */
-  branchId?: string | null;
   leadId?: string | null;
   schemaVersion: number;
   fieldsSnapshot: unknown;
@@ -348,7 +281,6 @@ export async function createSubmission(input: CreateSubmissionInput) {
     .values({
       formId: input.formId,
       companyId: input.companyId,
-      branchId: input.branchId ?? null,
       leadId: input.leadId ?? null,
       schemaVersion: input.schemaVersion,
       fieldsSnapshot: input.fieldsSnapshot as unknown[],
@@ -363,12 +295,10 @@ export async function createSubmission(input: CreateSubmissionInput) {
   return firstOrThrow(rows);
 }
 
-export async function listSubmissions(companyId: string, formId?: string, limit = 200, access?: BranchAccess) {
+export async function listSubmissions(companyId: string, formId?: string, limit = 200) {
   const db = await getDb();
   const conditions = [eq(formSubmissions.companyId, companyId)];
   if (formId) conditions.push(eq(formSubmissions.formId, formId));
-  const branchCondition = access ? branchAccessCondition(formSubmissions.branchId, access) : undefined;
-  if (branchCondition) conditions.push(branchCondition);
   return db
     .select()
     .from(formSubmissions)

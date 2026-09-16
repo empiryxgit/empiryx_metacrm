@@ -246,7 +246,6 @@ export async function markMetaLeadEventFailed(id: string, error: string) {
 
 export interface InsertMetaSyncLeadInput {
   companyId: string;
-  branchId: string | null;
   crmCampaignId: string | null; // null when no synced CRM campaign matched yet (lead is still captured, just unmapped)
   metaLeadId: string;
   platform: string;
@@ -291,7 +290,6 @@ export async function insertMetaSyncLead(input: InsertMetaSyncLeadInput): Promis
       .insert(leads)
       .values({
         companyId: input.companyId,
-        branchId: input.branchId,
         crmCampaignId: input.crmCampaignId,
         metaLeadId: input.metaLeadId,
         platform: input.platform,
