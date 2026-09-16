@@ -31,7 +31,10 @@
 //
 // Optional overrides:
 //   BASE_URL=https://uat.ruta.empiryx.com node seed-existing-tenant-data.mjs
-//   LEAD_COUNT=45 node seed-existing-tenant-data.mjs   (default 45)
+//   CAMPAIGN_COUNT=45 node seed-existing-tenant-data.mjs   (default 45, i.e. 40-50 dummy campaigns)
+//   LEAD_COUNT=135 node seed-existing-tenant-data.mjs      (default CAMPAIGN_COUNT * 3 leads,
+//                                                            spread funnel-shaped across each
+//                                                            campaign's own copy of the pipeline)
 //
 // Run this yourself — it needs your real login password, which this
 // assistant should never handle on your behalf.
@@ -40,7 +43,8 @@
 const BASE_URL = ("https://uatruta.empiryx.com").replace(/\/+$/, "");
 const EMAIL = process.env.RUTA_EMAIL;
 const PASSWORD = process.env.RUTA_PASSWORD;
-const TOTAL_LEADS = Number(process.env.LEAD_COUNT || 45);
+const CAMPAIGN_COUNT = Number(process.env.CAMPAIGN_COUNT || 45);
+const TOTAL_LEADS = Number(process.env.LEAD_COUNT || CAMPAIGN_COUNT * 3);
 
 if (!EMAIL || !PASSWORD) {
   console.error(
@@ -119,8 +123,41 @@ const LAST_NAMES = [
 ];
 const LOCATIONS = ["Satellite", "Bopal", "Vastrapur", "SG Highway", "Thaltej", "Prahladnagar", "Maninagar", "Naranpura", "Chandkheda", "Gota"];
 
+// Now that RUTA scopes leads by campaign (not branch), we seed a realistic
+// SPREAD of campaigns — not just 2-3 — so campaign lists, dashboards, and
+// filters all have enough rows to look and paginate like a real account.
+// These themes cycle (with an index suffix for uniqueness) to cover
+// CAMPAIGN_COUNT campaigns, however many that is.
+const CAMPAIGN_THEMES = [
+  "Diwali Property Drive", "New Year Site Visit Push", "Website Enquiries - Ongoing",
+  "Summer Special Offer", "Republic Day Sale", "Independence Day Campaign",
+  "Monsoon Booking Bonanza", "Flash Sale Weekend", "Referral Rewards Push",
+  "Instagram Reels Promo", "Facebook Lead Gen - Tier 1", "Facebook Lead Gen - Tier 2",
+  "Google Display Retargeting", "WhatsApp Broadcast Campaign", "Local SEO Leads",
+  "Premium Listings Showcase", "First-Time Buyer Special", "Investor Outreach",
+  "NRI Buyer Campaign", "Corporate Tie-up Leads", "Walk-in Event Promotion",
+  "Weekend Site Visit Special", "Festive Season Push", "Early Bird Booking Offer",
+  "Loyalty Referral Drive", "Metro Corridor Launch", "New Project Launch Buzz",
+  "Year-End Clearance Push", "Story Ads Retargeting", "Carousel Ads - New Leads",
+];
+
 function pick(arr, i) {
   return arr[((i % arr.length) + arr.length) % arr.length];
+}
+
+// Generates CAMPAIGN_COUNT campaign plans with varied, human-readable
+// names (cycling through CAMPAIGN_THEMES, disambiguated with a running
+// number + this run's id) and platforms alternating facebook/instagram.
+function buildCampaignPlans(count, runId) {
+  const plans = [];
+  for (let i = 0; i < count; i++) {
+    const theme = pick(CAMPAIGN_THEMES, i);
+    plans.push({
+      name: `${theme} ${i + 1} (${runId})`,
+      platform: pick(["facebook", "instagram"], i),
+    });
+  }
+  return plans;
 }
 
 // Generates a plausible value for one of the tenant's CUSTOM (industry-
@@ -194,10 +231,33 @@ function stageNote(stage) {
 // Funnel-shaped distribution over however many stages this tenant's
 // industry template actually has (varies: real_estate has 8, "general"
 // has only 4, etc.) — front-loaded toward the initial stage, tapering off
-// toward the closed (won/lost) stages, always at least 1 lead per stage.
+// toward the closed (won/lost) stages, at least 1 lead per stage whenever
+// there are enough leads to go around.
+//
+// With CAMPAIGN_COUNT now spread across 40-50 campaigns instead of 3, a
+// single campaign's leads-per-campaign share can legitimately be SMALLER
+// than the tenant's stage count (e.g. 3 leads into an 8-stage real_estate
+// template). The original "always >= 1 per stage" minimum can't be met in
+// that case, and the old balancing loop below would spin forever trying
+// to shave counts back down to a floor of 1 that every stage was already
+// at. Handle that case explicitly: give exactly one lead each to the
+// `total` highest-weighted stages (front-of-funnel first) and leave the
+// rest at 0, instead of looping.
 function buildStagePlan(stages, total) {
   const n = stages.length;
+  if (total <= 0) return stages.map((s) => ({ stage: s, count: 0 }));
+
   const rawWeights = stages.map((s, i) => (s.isWon ? 1.3 : s.isClosed ? 1 : n - i + 1));
+
+  if (total < n) {
+    const topIndexes = stages
+      .map((_, i) => i)
+      .sort((a, b) => rawWeights[b] - rawWeights[a])
+      .slice(0, total);
+    const chosen = new Set(topIndexes);
+    return stages.map((s, i) => ({ stage: s, count: chosen.has(i) ? 1 : 0 }));
+  }
+
   const sum = rawWeights.reduce((a, b) => a + b, 0);
   const counts = rawWeights.map((w) => Math.max(1, Math.round((w / sum) * total)));
   let diff = total - counts.reduce((a, b) => a + b, 0);
@@ -268,13 +328,11 @@ async function main() {
   const sourceFormDetail = await api("GET", `/api/forms/${sourceForm.id}`);
   const fieldDefs = sourceFormDetail.fields;
 
-  // 4. Create 3 campaigns.
-  log("4/7 Creating campaigns...");
-  const campaignPlans = [
-    { name: `Diwali Property Drive ${runId}`, platform: "facebook" },
-    { name: `New Year Site Visit Push ${runId}`, platform: "instagram" },
-    { name: `Website Enquiries - Ongoing ${runId}`, platform: "facebook" },
-  ];
+  // 4. Create CAMPAIGN_COUNT dummy campaigns (40-50 by default) — enough
+  //    to exercise campaign lists/pagination/dashboard rollups now that
+  //    branch scoping is gone and campaigns are the only scoping unit.
+  log(`4/7 Creating ${CAMPAIGN_COUNT} campaigns...`);
+  const campaignPlans = buildCampaignPlans(CAMPAIGN_COUNT, runId);
   const campaigns = [];
   for (const plan of campaignPlans) {
     const res = await api("POST", "/api/campaigns", { name: plan.name, platform: plan.platform });
