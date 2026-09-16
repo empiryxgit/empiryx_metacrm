@@ -148,7 +148,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
 
     const where = and(...conditions);
 
-    const [rows, [{ count }]] = await Promise.all([
+    const [rows, [countRow]] = await Promise.all([
       db
         .select()
         .from(leads)
@@ -158,6 +158,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
         .offset(offset),
       db.select({ count: sql<number>`count(*)::int` }).from(leads).where(where),
     ]);
+    const count = countRow?.count ?? 0;
 
     res.status(200).json({ leads: rows, pagination: buildPaginationMeta(page, pageSize, count) });
   } catch (err) {
