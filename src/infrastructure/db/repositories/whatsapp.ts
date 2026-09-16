@@ -658,6 +658,31 @@ export async function getUserWhatsappLinkByUserId(tenantId: string, userId: stri
   return row ?? null;
 }
 
+/** RUTA AI platform-number identity resolution (see rutaAiAssistant.ts's
+ * header) - the counterpart to getUserWhatsappLinkByPhone for the ONE
+ * WhatsApp number shared by every tenant for Assistant chat + onboarding
+ * welcome. That function is deliberately tenant-scoped because it's only
+ * ever called AFTER a tenant is already known (resolved from the tenant's
+ * OWN selected phone_number_id via getTenantsBySelectedWhatsappPhoneNumberId
+ * - a per-tenant Lead Capture concept). The platform number has no such
+ * pre-resolved tenant - every tenant's users message the SAME number - so
+ * this looks up the sender purely by phone number, with no tenantId filter
+ * at all, and returns every match rather than assuming exactly one:
+ * userWhatsappLinks is only unique on (tenantId, userId) and on
+ * (tenantId, phoneNumber) - NOT on phoneNumber alone - so the same person's
+ * number CAN legitimately be a provisioned RUTA user in more than one
+ * tenant (e.g. a consultant working with two client companies). The normal
+ * case is exactly one match; the caller (metaWhatsappEventService.ts)
+ * queues an Assistant message per match, same as it already does for the
+ * (today always single-tenant) per-number path. Zero matches means this
+ * sender isn't a provisioned RUTA user anywhere - the message is dropped,
+ * never falls through to Lead Capture (this number is never a tenant's own
+ * selected Lead Capture number). */
+export async function getUserWhatsappLinksByPhoneAnyTenant(phoneNumber: string) {
+  const db = await getDb();
+  return db.select().from(userWhatsappLinks).where(eq(userWhatsappLinks.phoneNumber, phoneNumber));
+}
+
 /** @deprecated Phase F relocated this mechanism onto
  * ruta_conversations.pendingContext, keyed by (tenantId, userId,
  * conversationId) instead of (tenantId, userId) alone - see

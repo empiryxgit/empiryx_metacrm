@@ -169,12 +169,12 @@
 // conversations, and webhook duplicate/retry handling.
 
 import { performance } from "node:perf_hooks";
-import { getUserWhatsappLinkByPhone, getSelectedMetaWhatsappAccount, getUserWhatsappLinkByUserId, touchLastInboundMessage, markWelcomeMessageSent } from "../../infrastructure/db/repositories/whatsapp";
-import { getActiveMetaConnectionInternal } from "../../infrastructure/db/repositories/metaIntegration";
+import { getUserWhatsappLinkByPhone, getUserWhatsappLinkByUserId, touchLastInboundMessage, markWelcomeMessageSent } from "../../infrastructure/db/repositories/whatsapp";
 import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
 import { getDb } from "../../infrastructure/db/client";
 import { companies } from "../../infrastructure/db/schema";
 import { eq } from "drizzle-orm";
+import { getEnv } from "../../infrastructure/env";
 import { sendWhatsappTextMessage } from "../../infrastructure/meta/graphClient";
 import { checkRateLimit, tryClaimRutaMessageId } from "../../infrastructure/cache/redis";
 import { rutaLog } from "../../infrastructure/observability/rutaLogger";
@@ -615,8 +615,19 @@ async function classifyWithAiProvider(text: string): Promise<{ name: string; arg
 }
 
 // ---------------------------------------------------------------------------
-// Send context + reply - unchanged from the original implementation, just
-// wrapped with structured logging on the way out.
+// Send context + reply.
+//
+// RUTA AI platform number: every send from this file (a normal reply, and
+// the onboarding welcome message) goes out from the ONE WhatsApp number
+// purchased for RUTA itself - RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID/
+// RUTA_PLATFORM_WHATSAPP_ACCESS_TOKEN (see .env.example) - the same fixed
+// pair for every tenant, never a tenant's own connected number. This is
+// deliberately NOT the same lookup the (separate, per-tenant) Lead Capture
+// pipeline uses for a tenant's own selected WhatsApp account/connection -
+// see metaWhatsappEventService.ts's isRutaPlatformNumber for the inbound
+// counterpart of this same split. Only `timezone` is still resolved
+// per-tenant (companies.timezone) - that's about how a reply's dates are
+// phrased, not which number it's sent from.
 // ---------------------------------------------------------------------------
 
 interface SendContext {
@@ -626,13 +637,19 @@ interface SendContext {
 }
 
 async function getSendContext(tenantId: string): Promise<SendContext | null> {
-  const [account, connection, companyRow] = await Promise.all([
-    getSelectedMetaWhatsappAccount(tenantId),
-    getActiveMetaConnectionInternal(tenantId),
-    getDb().then((db) => db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, tenantId)).limit(1)),
-  ]);
-  if (!account?.phoneNumberId || !connection?.accessToken) return null;
-  return { phoneNumberId: account.phoneNumberId, accessToken: connection.accessToken, timezone: companyRow[0]?.timezone ?? "Asia/Kolkata" };
+  const phoneNumberId = getEnv("RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID");
+  const accessToken = getEnv("RUTA_PLATFORM_WHATSAPP_ACCESS_TOKEN");
+  if (!phoneNumberId || !accessToken) {
+    // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
+    // means the platform number's env vars aren't set (or not set for this
+    // environment - see getEnv's own UAT-override comment) - every send for
+    // every tenant fails closed here until that's fixed, never partially.
+    rutaLog.error("ruta_platform_whatsapp_not_configured", { tenantId });
+    return null;
+  }
+  const db = await getDb();
+  const [companyRow] = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, tenantId)).limit(1);
+  return { phoneNumberId, accessToken, timezone: companyRow?.timezone ?? "Asia/Kolkata" };
 }
 
 async function reply(ctx: SendContext, to: string, body: string, tenantId?: string): Promise<void> {

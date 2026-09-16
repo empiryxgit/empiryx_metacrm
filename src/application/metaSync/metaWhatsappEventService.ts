@@ -47,8 +47,32 @@
 // something the payload can assert on its own.
 
 import { publishWhatsappMessageReceived } from "../../infrastructure/queue/qstash";
-import { getTenantsBySelectedWhatsappPhoneNumberId, getUserWhatsappLinkByPhone, markWhatsappMessageEventEnqueued, recordWhatsappMessageEvent } from "../../infrastructure/db/repositories/whatsapp";
+import {
+  getTenantsBySelectedWhatsappPhoneNumberId,
+  getUserWhatsappLinkByPhone,
+  getUserWhatsappLinksByPhoneAnyTenant,
+  markWhatsappMessageEventEnqueued,
+  recordWhatsappMessageEvent,
+} from "../../infrastructure/db/repositories/whatsapp";
+import { getEnv } from "../../infrastructure/env";
 import type { RutaAssistantInboundMessage } from "./rutaAiAssistant";
+
+/** RUTA AI Assistant platform number (see rutaAiAssistant.ts's header) - the
+ * ONE WhatsApp number, purchased and connected once, shared by every
+ * tenant's users for Assistant chat + the onboarding welcome message. NEVER
+ * a Lead Capture number, and never a tenant's own "selected" WhatsApp
+ * account (meta_whatsapp_accounts) - a message arriving on this
+ * phone_number_id is identified straight to a RUTA user by phone number
+ * alone (getUserWhatsappLinksByPhoneAnyTenant), with no tenant pre-resolved
+ * from the number itself, exactly the opposite of every tenant's own
+ * numbers below. Its access token is a manually-generated, permanent Meta
+ * System User token (see .env.example's own comment on these two vars) -
+ * deliberately NOT stored in meta_connections/meta_whatsapp_accounts, which
+ * model a tenant's own OAuth-authorized connection, not this shared one. */
+function isRutaPlatformNumber(phoneNumberId: string): boolean {
+  const platformPhoneNumberId = getEnv("RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID");
+  return Boolean(platformPhoneNumberId) && phoneNumberId === platformPhoneNumberId;
+}
 
 /** A message routes to the RUTA AI Assistant instead of lead-capture when
  * the sender is already a verified linked RUTA teammate for this tenant -
@@ -196,6 +220,49 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
         // present, value.messages absent) - not a lead event, skip quietly.
         skipped += messages.length > 0 ? 0 : 1;
         continue;
+      }
+
+      if (isRutaPlatformNumber(phoneNumberId)) {
+        // RUTA AI Assistant platform number - see isRutaPlatformNumber's own
+        // comment above. There is no tenant to pre-resolve from the number
+        // itself (every tenant's users share this one number), so each
+        // message's sender is looked up directly by phone number across ALL
+        // tenants (getUserWhatsappLinksByPhoneAnyTenant) - and this never
+        // falls through to Lead Capture, since that pipeline only exists for
+        // a TENANT'S OWN selected number, which this one, by design, never
+        // is.
+        for (const message of messages) {
+          if (!message.id || !message.from) {
+            console.warn("[whatsapp-event] Message missing id or from - skipped", { hasId: Boolean(message.id), hasFrom: Boolean(message.from) });
+            skipped++;
+            continue;
+          }
+          const links = await getUserWhatsappLinksByPhoneAnyTenant(message.from);
+          // DEBUG (temporary, requested for onboarding-welcome-message
+          // diagnosis) - the platform-number counterpart of the "Tenant
+          // resolution for phoneNumberId" log below: zero matched tenants
+          // here means this sender isn't a provisioned RUTA user (userWhatsappLinks
+          // row) in ANY tenant - almost always either a stranger who
+          // messaged the number, or a phone-number FORMAT mismatch between
+          // what's stored on the user's profile and what WhatsApp sent as
+          // message.from (exact string match, no normalization - same as
+          // isRutaAssistantMessage below).
+          console.log("[whatsapp-event] Platform-number tenant resolution by phone", {
+            fromPhoneNumber: message.from,
+            matchedTenantCount: links.length,
+            matchedTenantIds: links.map((l) => l.tenantId),
+          });
+          if (links.length === 0) {
+            console.warn("[whatsapp-event] Platform number: no RUTA user linked to this phone number in any tenant - message dropped", { fromPhoneNumber: message.from });
+            skipped++;
+            continue;
+          }
+          for (const link of links) {
+            console.log("[whatsapp-event] Routed to RUTA Assistant (platform number)", { tenantId: link.tenantId, fromPhoneNumber: message.from, waMessageId: message.id });
+            toHandleAsAssistant.push({ tenantId: link.tenantId, fromPhoneNumber: message.from, waMessageId: message.id, messageText: message.text?.body ?? null });
+          }
+        }
+        continue; // this change is fully handled above - never reaches the per-tenant resolution below
       }
 
       // Identify Tenant - resolved ONLY from the stored, selected
