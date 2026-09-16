@@ -86,13 +86,16 @@ async function isRutaAssistantMessage(tenantId: string, fromPhoneNumber: string,
   // DEBUG (temporary, requested for onboarding-welcome-message diagnosis) -
   // logs the exact routing decision for every inbound message: whether the
   // raw `fromPhoneNumber` Meta sent matched a userWhatsappLinks row for
-  // this tenant. A "matched: false" here for a number that genuinely IS an
-  // onboarded RUTA user's number almost always means a phone-number FORMAT
-  // mismatch (leading '+', leading 0, missing/extra country code) between
-  // what's stored on the user's profile (api/admin/users/handler.ts) and
-  // what WhatsApp actually sends - this is an EXACT string match, no
-  // normalization. When "matched: false", the message silently falls
-  // through to Lead Capture instead of the Assistant (see caller below).
+  // this tenant. getUserWhatsappLinkByPhone matches by last-10-digits
+  // (whatsapp.ts's phoneNumbersMatch), not a byte-for-byte string - fixed
+  // after a real production incident where a stored 10-digit number
+  // ("8128806852", no country code, the common admin-entry shape) never
+  // matched WhatsApp's own always-country-coded "918128806852" under the
+  // old exact match. A "matched: false" now means something more
+  // substantive - a genuinely different number, or a country other than
+  // India (see phoneNumbersMatch's own comment on that fixed 10-digit
+  // assumption). When "matched: false", the message silently falls through
+  // to Lead Capture instead of the Assistant (see caller below).
   console.log("[whatsapp-event] isRutaAssistantMessage check", {
     tenantId,
     fromPhoneNumber,
@@ -241,12 +244,14 @@ export async function captureWhatsappEvents(rawBody: string): Promise<CaptureWha
           // DEBUG (temporary, requested for onboarding-welcome-message
           // diagnosis) - the platform-number counterpart of the "Tenant
           // resolution for phoneNumberId" log below: zero matched tenants
-          // here means this sender isn't a provisioned RUTA user (userWhatsappLinks
-          // row) in ANY tenant - almost always either a stranger who
-          // messaged the number, or a phone-number FORMAT mismatch between
-          // what's stored on the user's profile and what WhatsApp sent as
-          // message.from (exact string match, no normalization - same as
-          // isRutaAssistantMessage below).
+          // here means this sender isn't a provisioned RUTA user
+          // (userWhatsappLinks row) in ANY tenant - matched via
+          // phoneNumbersMatch's last-10-digits comparison (see its own
+          // comment in whatsapp.ts), not a byte-for-byte match, so a zero
+          // result now means either a genuine stranger who messaged the
+          // number, or a country other than India (see that comment's fixed
+          // 10-digit assumption) - same normalization isRutaAssistantMessage
+          // below uses.
           console.log("[whatsapp-event] Platform-number tenant resolution by phone", {
             fromPhoneNumber: message.from,
             matchedTenantCount: links.length,

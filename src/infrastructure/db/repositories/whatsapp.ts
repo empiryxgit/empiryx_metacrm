@@ -635,15 +635,38 @@ export async function deleteUserWhatsappLink(tenantId: string, userId: string): 
   return rows.length > 0;
 }
 
+/** Matches two WhatsApp numbers by their last 10 digits, ignoring any
+ * formatting difference between them - a leading '+', spaces/dashes, AND
+ * (the actual root cause hit in production) a stored number missing its
+ * country code entirely: an admin-entered profile phone number
+ * (api/admin/users/handler.ts) commonly gets typed as a bare 10-digit
+ * Indian mobile number ("8128806852"), never normalized on the way in,
+ * while WhatsApp's Cloud API always sends message.from as digits-only WITH
+ * the full country code ("918128806852" for that same number) - a
+ * byte-for-byte eq() on these two was an EXACT string match with no
+ * normalization at all, and silently dropped a real, correctly-provisioned
+ * user's every message (see getUserWhatsappLinkByPhone and
+ * getUserWhatsappLinksByPhoneAnyTenant, both of which use this). 10 digits
+ * is a bare local mobile number's length - India, this deployment's only
+ * market today; if/when a non-Indian tenant is onboarded this comparison
+ * will need to become country-aware instead of a fixed suffix length. */
+function phoneNumbersMatch(column: typeof userWhatsappLinks.phoneNumber, phoneNumber: string) {
+  return sql`right(regexp_replace(${column}, '[^0-9]', '', 'g'), 10) = right(regexp_replace(${phoneNumber}, '[^0-9]', '', 'g'), 10)`;
+}
+
 /** THE identity check every inbound WhatsApp message runs first (see
  * metaWhatsappEventService.ts's captureWhatsappEvents) - a verified match
- * here is what routes a message to the query bot instead of lead-capture. */
+ * here is what routes a message to the query bot instead of lead-capture.
+ * Matches via phoneNumbersMatch (see its own comment below) rather than a
+ * byte-for-byte match - see that comment for the production incident that
+ * made this necessary (a real, correctly-provisioned user's message was
+ * silently dropped because the stored number had no country code). */
 export async function getUserWhatsappLinkByPhone(tenantId: string, phoneNumber: string) {
   const db = await getDb();
   const [row] = await db
     .select()
     .from(userWhatsappLinks)
-    .where(and(eq(userWhatsappLinks.tenantId, tenantId), eq(userWhatsappLinks.phoneNumber, phoneNumber)))
+    .where(and(eq(userWhatsappLinks.tenantId, tenantId), phoneNumbersMatch(userWhatsappLinks.phoneNumber, phoneNumber)))
     .limit(1);
   return row ?? null;
 }
@@ -677,10 +700,12 @@ export async function getUserWhatsappLinkByUserId(tenantId: string, userId: stri
  * (today always single-tenant) per-number path. Zero matches means this
  * sender isn't a provisioned RUTA user anywhere - the message is dropped,
  * never falls through to Lead Capture (this number is never a tenant's own
- * selected Lead Capture number). */
+ * selected Lead Capture number). Matches via phoneNumbersMatch (see its own
+ * comment above), not a byte-for-byte match, for the same reason
+ * getUserWhatsappLinkByPhone does. */
 export async function getUserWhatsappLinksByPhoneAnyTenant(phoneNumber: string) {
   const db = await getDb();
-  return db.select().from(userWhatsappLinks).where(eq(userWhatsappLinks.phoneNumber, phoneNumber));
+  return db.select().from(userWhatsappLinks).where(phoneNumbersMatch(userWhatsappLinks.phoneNumber, phoneNumber));
 }
 
 /** @deprecated Phase F relocated this mechanism onto
