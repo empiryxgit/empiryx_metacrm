@@ -1,4 +1,4 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { companies, roles, sessions, users } from "../schema";
 import { firstOrThrow } from "../util";
@@ -477,6 +477,39 @@ export async function listUsers(companyId: string) {
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(eq(users.companyId, companyId));
+}
+
+/** Paginated variant of listUsers, for the Users screen's list endpoint
+ * (api/admin/users/handler.ts's handleCollection GET). listUsers itself
+ * stays unpaginated - the dashboard's user count, the pipeline board's
+ * owner lookups, and the agency client-context user list all need the
+ * true full set, not one page of it, so its signature/behavior is
+ * untouched here. */
+export async function listUsersPage(companyId: string, limit: number, offset: number) {
+  const db = await getDb();
+  return db
+    .select({
+      id: users.id,
+      email: users.email,
+      fullName: users.fullName,
+      status: users.status,
+      roleId: users.roleId,
+      roleName: roles.name,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(eq(users.companyId, companyId))
+    .orderBy(desc(users.createdAt))
+    .limit(limit)
+    .offset(offset);
+}
+
+export async function countUsers(companyId: string) {
+  const db = await getDb();
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(users).where(eq(users.companyId, companyId));
+  return row?.count ?? 0;
 }
 
 /** Users across MULTIPLE companies in one query - the cross-client

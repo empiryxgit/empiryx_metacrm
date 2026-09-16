@@ -15,15 +15,18 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAuth, requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import {
+  countCampaigns,
   createCampaign,
   getCampaign,
   getWebhookConfigForCampaign,
-  listCampaigns,
+  listCampaignsPage,
   updateCampaign,
   upsertWebhookConfig,
 } from "../../src/infrastructure/db/repositories/campaigns";
+import { parsePagination, buildPaginationMeta } from "../../src/infrastructure/http/pagination";
 import { getLeadCountsByMetaCampaignId, getLeadCountsForCampaigns } from "../../src/infrastructure/db/repositories";
 import {
+  countMetaCampaignsForAdAccount,
   getMetaCampaignWithMappingByRowId,
   listMetaCampaignsWithMappingForAdAccount,
   mapMetaCampaignToCrmCampaign,
@@ -81,7 +84,12 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
     if (!auth) return;
     auth = await withEffectiveCompanyContext(req, auth);
 
-    const campaigns = await listCampaigns(auth.companyId);
+    const { page, pageSize, offset } = parsePagination(req.query);
+    const search = typeof req.query.search === "string" && req.query.search.trim() ? req.query.search.trim() : undefined;
+    const [campaigns, total] = await Promise.all([
+      listCampaignsPage(auth.companyId, pageSize, offset, search),
+      countCampaigns(auth.companyId, search),
+    ]);
     // Powers the "Leads" column on the manual campaigns list (Campaigns
     // screen) - a single grouped query rather than one query per campaign.
     // Phase 9: the separate Meta Campaigns table gets its own lead counts
@@ -93,6 +101,7 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
         ...c,
         leadsCount: leadCounts[c.id] ?? 0,
       })),
+      pagination: buildPaginationMeta(page, pageSize, total),
     });
     return;
   }
@@ -336,10 +345,16 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
   // happened) simply means nothing to show - same empty state the
   // Campaigns page's "Connect Meta" / "Finish setup" callouts already
   // cover before ever calling this endpoint.
+  const { page, pageSize, offset } = parsePagination(req.query);
+  const search = typeof req.query.search === "string" && req.query.search.trim() ? req.query.search.trim() : undefined;
+
   const selectedAdAccount = await getSelectedMetaAdAccount(auth.companyId);
-  const metaCampaigns = selectedAdAccount
-    ? await listMetaCampaignsWithMappingForAdAccount(auth.companyId, selectedAdAccount.id)
-    : [];
+  const [metaCampaigns, total] = selectedAdAccount
+    ? await Promise.all([
+        listMetaCampaignsWithMappingForAdAccount(auth.companyId, selectedAdAccount.id, pageSize, offset, search),
+        countMetaCampaignsForAdAccount(auth.companyId, selectedAdAccount.id, search),
+      ])
+    : [[], 0];
   // Leads are attributed by Meta's OWN raw campaign id (leads.campaignId),
   // independent of whether the Meta campaign has been mapped to a CRM
   // campaign yet - see getLeadCountsByMetaCampaignId's own comment.
@@ -361,6 +376,7 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
       crmCampaignName: c.crmCampaignName,
       leadsCount: leadCounts[c.metaCampaignId] ?? 0,
     })),
+    pagination: buildPaginationMeta(page, pageSize, total),
   });
 }
 

@@ -87,7 +87,11 @@
     }
 
     try {
-      const { campaigns } = await App.apiJson("/api/campaigns");
+      // pageSize=100 (the max allowed) - this populates a <select>, which
+      // needs the full set, not one paginated page. See /api/campaigns's
+      // handler for the page/pageSize convention this deliberately opts
+      // out of.
+      const { campaigns } = await App.apiJson("/api/campaigns?pageSize=100");
       select.innerHTML = `<option value="">Unmapped</option>` +
         campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
     } catch (err) {

@@ -19,16 +19,21 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
 <main class="admin-wrap">
   <header class="admin-head"><div><h1>Platform Administration</h1><p>System-wide visibility across independent customer accounts.</p></div></header>
   <section class="stats" id="stats"></section>
-  <section class="card" id="customers"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div></section>
+  <section class="card" id="customers"><div class="toolbar"><input id="search" placeholder="Search customer accounts" /><button class="btn" id="searchBtn">Search</button></div><div id="content">Loading…</div><div class="pagination-bar" id="paginationBar" style="display:none"></div></section>
   <section class="card" id="detail" style="display:none"></section>
 </main>
 </div>
+<script src="/assets/app.js"></script>
 <script>
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>\"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[char]));
   const date = (value) => value ? new Date(value).toLocaleDateString("en-IN", { day:"numeric", month:"short", year:"numeric" }) : "-";
+  let page = 1;
+  let pageSize = 25;
   async function load() {
     const query = search.value.trim();
-    const response = await fetch(`/api/platform-admin/dashboard${query ? `?search=${encodeURIComponent(query)}` : ""}`);
+    const params = new URLSearchParams({ page, pageSize });
+    if (query) params.set("search", query);
+    const response = await fetch(`/api/platform-admin/dashboard?${params}`);
     const data = await response.json();
     if (response.status === 401) { window.location.href = "/admin/login.html"; return; }
     if (!response.ok) throw new Error(data.error || "Unable to load dashboard.");
@@ -36,6 +41,10 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
     stats.innerHTML = [["Users",summary.users],["Customer accounts",summary.companies],["Agencies",summary.agencies],["Agency clients",summary.clients],["Active subscriptions",summary.activeSubscriptions],["Active trials",summary.activeTrials],["Expired trials",summary.expiredTrials],["Expired subscriptions",summary.expiredSubscriptions]].map(([label,value]) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div></div>`).join("");
     content.innerHTML = data.companies.length ? `<div class="table-wrap"><table class="admin-table"><thead><tr><th>Account</th><th>Type</th><th>Status</th><th>Trial / subscription</th><th>Usage</th><th>Registered</th><th></th></tr></thead><tbody>${data.companies.map((company) => `<tr><td><strong>${escapeHtml(company.name)}</strong><br><small>${escapeHtml(company.slug)}</small></td><td><span class="pill">${escapeHtml(company.accountType)}</span></td><td>${escapeHtml(company.status)}</td><td>${escapeHtml(company.subscriptionStatus)}<br><small>${company.subscriptionStatus === "trialing" ? `${date(company.trialEndsAt)} trial end` : date(company.subscriptionExpiresAt)}</small></td><td>${company.accountType === "agency" ? `${company.clientCount} clients · ` : ""}${company.campaignCount} campaigns · ${company.leadCount} leads</td><td>${date(company.createdAt)}</td><td><button class="btn" data-company-id="${escapeHtml(company.id)}">View</button></td></tr>`).join("")}</tbody></table></div>` : `<div class="state-block"><p class="state-title">No accounts found</p></div>`;
     content.querySelectorAll("[data-company-id]").forEach((button) => button.addEventListener("click", () => loadDetail(button.dataset.companyId)));
+    App.renderPagination(document.getElementById("paginationBar"), data.pagination, {
+      onPageChange: (p) => { page = p; load().catch((err) => { content.textContent = err.message; }); },
+      onPageSizeChange: (s) => { pageSize = s; page = 1; load().catch((err) => { content.textContent = err.message; }); },
+    });
   }
   async function loadDetail(companyId) {
     const response = await fetch(`/api/platform-admin/companies/${encodeURIComponent(companyId)}`);
@@ -55,8 +64,8 @@ body{background:var(--surface-sunken,#f6f4f0)}.admin-wrap{max-width:1180px;margi
       await loadDetail(companyId);
     });
   }
-  searchBtn.addEventListener("click", () => load().catch((err) => { content.textContent = err.message; }));
-  search.addEventListener("keydown", (event) => { if (event.key === "Enter") load().catch((err) => { content.textContent = err.message; }); });
+  searchBtn.addEventListener("click", () => { page = 1; load().catch((err) => { content.textContent = err.message; }); });
+  search.addEventListener("keydown", (event) => { if (event.key === "Enter") { page = 1; load().catch((err) => { content.textContent = err.message; }); } });
   topLogout.addEventListener("click", async () => { await fetch("/api/platform-admin/logout", { method:"POST" }); window.location.href = "/admin/login.html"; });
   load().catch((err) => { content.textContent = err.message; });
 </script>

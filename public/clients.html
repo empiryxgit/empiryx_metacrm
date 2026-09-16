@@ -46,6 +46,7 @@
     <input class="client-search" id="searchInput" type="search" placeholder="Search client…" />
 
     <div class="client-cards" id="clientCards"><p class="empty">Loading…</p></div>
+    <div class="pagination-bar" id="clientsPaginationBar" style="display:none"></div>
 
     <div class="dash-section" id="onboardingLinksSection" style="display:none">
       <div class="dash-card">
@@ -210,6 +211,8 @@
 <script src="/assets/app.js"></script>
 <script>
   let allClients = [];
+  let clientsPage = 1;
+  let clientsPageSize = 25;
 
   function fmt(n) { return (n ?? 0).toLocaleString(); }
 
@@ -226,16 +229,35 @@
     const q = document.getElementById("searchInput").value.trim().toLowerCase();
     const filtered = q ? allClients.filter((c) => c.name.toLowerCase().includes(q)) : allClients;
     const wrap = document.getElementById("clientCards");
+    const paginationBar = document.getElementById("clientsPaginationBar");
 
     if (allClients.length === 0) {
+      paginationBar.style.display = "none";
       wrap.innerHTML = `<p class="empty">No clients yet. Use “+ Add Client” or “Invite Client” to get started.</p>`;
       return;
     }
     if (filtered.length === 0) {
+      paginationBar.style.display = "none";
       wrap.innerHTML = `<p class="empty">No clients match “${App.escapeHtml(q)}”.</p>`;
       return;
     }
-    wrap.innerHTML = filtered.map((c) => `
+
+    // Client-side pagination over the (already search-filtered) roster -
+    // an INTENTIONAL exception to the rest of the app's real server-side
+    // LIMIT/OFFSET pagination. This roster is built by joining every
+    // claimed client with a live per-client lead-count aggregate and
+    // sorting by lead volume BEFORE anything is paginated (see
+    // buildAgencyClientRoster in src/application/agency.ts) - a DB-level
+    // LIMIT/OFFSET can't sit in front of that sort without restructuring
+    // the aggregation query. Agencies realistically have dozens of
+    // clients, not thousands (the same assumption the rest of this app
+    // used to make about campaigns - but actually true here), so the full
+    // roster is fetched once and paged/searched in the browser instead.
+    const totalPages = Math.max(1, Math.ceil(filtered.length / clientsPageSize));
+    clientsPage = Math.min(Math.max(1, clientsPage), totalPages);
+    const pageItems = filtered.slice((clientsPage - 1) * clientsPageSize, clientsPage * clientsPageSize);
+
+    wrap.innerHTML = pageItems.map((c) => `
       <div class="client-card">
         <div class="client-card-main">
           <span class="client-card-name">${App.escapeHtml(c.name)}</span>
@@ -281,6 +303,11 @@
       btn.addEventListener("click", () => {
         window.location.href = `/client-detail.html?id=${encodeURIComponent(btn.dataset.open)}`;
       });
+    });
+
+    App.renderPagination(paginationBar, { page: clientsPage, pageSize: clientsPageSize, total: filtered.length, totalPages }, {
+      onPageChange: (p) => { clientsPage = p; renderClients(); },
+      onPageSizeChange: (s) => { clientsPageSize = s; clientsPage = 1; renderClients(); },
     });
   }
 
@@ -355,7 +382,7 @@
     }
   }
 
-  document.getElementById("searchInput").addEventListener("input", renderClients);
+  document.getElementById("searchInput").addEventListener("input", () => { clientsPage = 1; renderClients(); });
 
   // ---- Add Client modal ---------------------------------------------------
   const addModal = document.getElementById("addClientModalOverlay");

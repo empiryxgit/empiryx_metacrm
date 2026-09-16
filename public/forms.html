@@ -58,13 +58,15 @@
         <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
+    <div class="pagination-bar" id="paginationBar" style="display:none"></div>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
   let me, canManage;
-  let allForms = [];
   let typeFilter = "";
+  let page = 1;
+  let pageSize = 25;
 
   function fmt(iso){ return iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"; }
 
@@ -73,12 +75,13 @@
     return `<span class="pill ${cls}">${App.escapeHtml(status)}</span>`;
   }
 
-  function renderRows(){
-    const rows = document.getElementById("rows");
-    const filtered = typeFilter ? allForms.filter(f => f.type === typeFilter) : allForms;
+  function renderRows(rows, pagination){
+    const rowsEl = document.getElementById("rows");
+    const paginationBar = document.getElementById("paginationBar");
 
-    if (!filtered.length) {
-      rows.innerHTML = `<tr><td colspan="5">
+    if (!rows.length) {
+      paginationBar.style.display = "none";
+      rowsEl.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">No forms yet</p>
           <p class="state-desc">${canManage ? "Create your first form — the builder walks you through fields, then publish." : "Ask an admin to set up a form."}</p>
@@ -87,7 +90,7 @@
       return;
     }
 
-    rows.innerHTML = filtered.map(f => `
+    rowsEl.innerHTML = rows.map(f => `
       <tr>
         <td>
           <div class="lead-identity">
@@ -105,22 +108,33 @@
         </td>
       </tr>
     `).join("");
+
+    App.renderPagination(paginationBar, pagination, {
+      onPageChange: (p) => { page = p; load(); },
+      onPageSizeChange: (s) => { pageSize = s; page = 1; load(); },
+    });
   }
 
   async function load(){
-    me = await App.requireAuth();
-    if (!me) return;
-    App.renderNav(me, "/forms.html");
-    canManage = App.hasPermission(me, "forms.manage");
-    if (canManage) {
-      document.getElementById("createCard").style.display = "block";
-      document.getElementById("headActions").style.display = "flex";
+    if (!me) {
+      me = await App.requireAuth();
+      if (!me) return;
+      App.renderNav(me, "/forms.html");
+      canManage = App.hasPermission(me, "forms.manage");
+      if (canManage) {
+        document.getElementById("createCard").style.display = "block";
+        document.getElementById("headActions").style.display = "flex";
+      }
     }
 
     const rows = document.getElementById("rows");
+    let data;
     try {
-      ({ forms: allForms } = await App.apiJson("/api/forms"));
+      const params = new URLSearchParams({ page, pageSize });
+      if (typeFilter) params.set("type", typeFilter);
+      data = await App.apiJson(`/api/forms?${params}`);
     } catch (err) {
+      document.getElementById("paginationBar").style.display = "none";
       rows.innerHTML = `<tr><td colspan="5">
         <div class="state-block">
           <p class="state-title">Unable to load forms</p>
@@ -131,15 +145,16 @@
       document.getElementById("retryBtn")?.addEventListener("click", load);
       return;
     }
-    renderRows();
+    renderRows(data.forms, data.pagination);
   }
 
   document.getElementById("typeToggle").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-type]");
     if (!btn) return;
     typeFilter = btn.dataset.type;
+    page = 1;
     document.querySelectorAll("#typeToggle button").forEach(b => b.classList.toggle("active", b === btn));
-    renderRows();
+    load();
   });
 
   document.getElementById("createForm").addEventListener("submit", async (e) => {

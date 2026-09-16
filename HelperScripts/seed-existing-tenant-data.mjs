@@ -31,10 +31,12 @@
 //
 // Optional overrides:
 //   BASE_URL=https://uat.ruta.empiryx.com node seed-existing-tenant-data.mjs
-//   CAMPAIGN_COUNT=45 node seed-existing-tenant-data.mjs   (default 45, i.e. 40-50 dummy campaigns)
-//   LEAD_COUNT=135 node seed-existing-tenant-data.mjs      (default CAMPAIGN_COUNT * 3 leads,
-//                                                            spread funnel-shaped across each
-//                                                            campaign's own copy of the pipeline)
+//   CAMPAIGN_COUNT=4 node seed-existing-tenant-data.mjs   (default 4)
+//   LEAD_COUNT=35 node seed-existing-tenant-data.mjs      (default 35 total leads, split as
+//                                                           evenly as possible across the
+//                                                           CAMPAIGN_COUNT campaigns and
+//                                                           funnel-shaped within each one across
+//                                                           that tenant's own pipeline stages)
 //
 // Run this yourself — it needs your real login password, which this
 // assistant should never handle on your behalf.
@@ -43,8 +45,8 @@
 const BASE_URL = ("https://uatruta.empiryx.com").replace(/\/+$/, "");
 const EMAIL = process.env.RUTA_EMAIL;
 const PASSWORD = process.env.RUTA_PASSWORD;
-const CAMPAIGN_COUNT = Number(process.env.CAMPAIGN_COUNT || 45);
-const TOTAL_LEADS = Number(process.env.LEAD_COUNT || CAMPAIGN_COUNT * 3);
+const CAMPAIGN_COUNT = Number(process.env.CAMPAIGN_COUNT || 4);
+const TOTAL_LEADS = Number(process.env.LEAD_COUNT || 35);
 
 if (!EMAIL || !PASSWORD) {
   console.error(
@@ -123,11 +125,14 @@ const LAST_NAMES = [
 ];
 const LOCATIONS = ["Satellite", "Bopal", "Vastrapur", "SG Highway", "Thaltej", "Prahladnagar", "Maninagar", "Naranpura", "Chandkheda", "Gota"];
 
-// Now that RUTA scopes leads by campaign (not branch), we seed a realistic
-// SPREAD of campaigns — not just 2-3 — so campaign lists, dashboards, and
-// filters all have enough rows to look and paginate like a real account.
-// These themes cycle (with an index suffix for uniqueness) to cover
-// CAMPAIGN_COUNT campaigns, however many that is.
+// Now that RUTA scopes leads by campaign (not branch), we seed a handful of
+// distinctly-named campaigns rather than one generic name repeated, so
+// campaign lists/dashboards/filters have realistic-looking rows to check
+// against, not placeholder duplicates. These themes cycle (with an index
+// suffix for uniqueness) to cover CAMPAIGN_COUNT campaigns, however many
+// that is — the pool of themes below is intentionally larger than the
+// default CAMPAIGN_COUNT so a higher override still gets distinct names
+// for a while before it starts cycling.
 const CAMPAIGN_THEMES = [
   "Diwali Property Drive", "New Year Site Visit Push", "Website Enquiries - Ongoing",
   "Summer Special Offer", "Republic Day Sale", "Independence Day Campaign",
@@ -234,15 +239,18 @@ function stageNote(stage) {
 // toward the closed (won/lost) stages, at least 1 lead per stage whenever
 // there are enough leads to go around.
 //
-// With CAMPAIGN_COUNT now spread across 40-50 campaigns instead of 3, a
-// single campaign's leads-per-campaign share can legitimately be SMALLER
-// than the tenant's stage count (e.g. 3 leads into an 8-stage real_estate
-// template). The original "always >= 1 per stage" minimum can't be met in
-// that case, and the old balancing loop below would spin forever trying
-// to shave counts back down to a floor of 1 that every stage was already
-// at. Handle that case explicitly: give exactly one lead each to the
-// `total` highest-weighted stages (front-of-funnel first) and leave the
-// rest at 0, instead of looping.
+// TOTAL_LEADS is split across CAMPAIGN_COUNT campaigns (see main()'s own
+// perCampaign/remainder math below), so a single campaign's own share can
+// legitimately be SMALLER than the tenant's stage count — e.g. the default
+// 35 leads / 4 campaigns is ~8-9 leads/campaign, which already undercuts an
+// 8-stage real_estate template, and a lower LEAD_COUNT or higher
+// CAMPAIGN_COUNT override makes this even more likely. The original
+// "always >= 1 per stage" minimum can't be met in that case, and the old
+// balancing loop below would spin forever trying to shave counts back down
+// to a floor of 1 that every stage was already at. Handle that case
+// explicitly: give exactly one lead each to the `total` highest-weighted
+// stages (front-of-funnel first) and leave the rest at 0, instead of
+// looping.
 function buildStagePlan(stages, total) {
   const n = stages.length;
   if (total <= 0) return stages.map((s) => ({ stage: s, count: 0 }));
@@ -328,9 +336,11 @@ async function main() {
   const sourceFormDetail = await api("GET", `/api/forms/${sourceForm.id}`);
   const fieldDefs = sourceFormDetail.fields;
 
-  // 4. Create CAMPAIGN_COUNT dummy campaigns (40-50 by default) — enough
-  //    to exercise campaign lists/pagination/dashboard rollups now that
-  //    branch scoping is gone and campaigns are the only scoping unit.
+  // 4. Create CAMPAIGN_COUNT dummy campaigns (4 by default) with
+  //    TOTAL_LEADS leads spread across them (35 by default) — a small,
+  //    easy-to-eyeball batch for smoke-testing campaign lists/dashboard
+  //    rollups now that branch scoping is gone and campaigns are the only
+  //    scoping unit. Bump CAMPAIGN_COUNT/LEAD_COUNT for a heavier load.
   log(`4/7 Creating ${CAMPAIGN_COUNT} campaigns...`);
   const campaignPlans = buildCampaignPlans(CAMPAIGN_COUNT, runId);
   const campaigns = [];

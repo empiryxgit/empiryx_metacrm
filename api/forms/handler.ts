@@ -21,6 +21,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
 import { PERMISSIONS } from "../../src/domain/permissions";
+import { parsePagination, buildPaginationMeta } from "../../src/infrastructure/http/pagination";
 import {
   FORM_FIELD_TYPES,
   LEAD_SOURCES,
@@ -46,8 +47,10 @@ import {
   getFormFields,
   getFormWithFields,
   getPublishedFormByPublicKey,
-  listForms,
+  listFormsPage,
+  countForms,
   listSubmissions,
+  countSubmissions,
   publishForm,
   replaceFormFields,
   setDefaultInternalForm,
@@ -383,8 +386,12 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   auth = await withEffectiveCompanyContext(req, auth);
   const type = getQueryString(req, "type");
   try {
-    const rows = await listForms(auth.companyId, type);
-    res.status(200).json({ forms: rows });
+    const { page, pageSize, offset } = parsePagination(req.query);
+    const [rows, total] = await Promise.all([
+      listFormsPage(auth.companyId, type, pageSize, offset),
+      countForms(auth.companyId, type),
+    ]);
+    res.status(200).json({ forms: rows, pagination: buildPaginationMeta(page, pageSize, total) });
   } catch (err) {
     console.error("[forms] Failed to list forms:", err);
     res.status(500).json({ error: "Failed to list forms." });
@@ -677,8 +684,12 @@ async function handleSubmissions(req: VercelRequest, res: VercelResponse, formId
     res.status(404).json({ error: "Form not found." });
     return;
   }
-  const rows = await listSubmissions(auth.companyId, formId, 200);
-  res.status(200).json({ submissions: rows });
+  const { page, pageSize, offset } = parsePagination(req.query);
+  const [rows, total] = await Promise.all([
+    listSubmissions(auth.companyId, formId, pageSize, offset),
+    countSubmissions(auth.companyId, formId),
+  ]);
+  res.status(200).json({ submissions: rows, pagination: buildPaginationMeta(page, pageSize, total) });
 }
 
 // ---- Internal submission (Add Customer / Not Interested -> Add to CRM) --

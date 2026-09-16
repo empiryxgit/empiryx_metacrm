@@ -59,6 +59,7 @@
         <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
+    <div class="pagination-bar" id="paginationBar" style="display:none"></div>
   </div>
 
   <div id="modalRoot"></div>
@@ -117,9 +118,13 @@
     return Array.from(document.querySelectorAll(`.${idPrefix}-client:checked`)).map(el => el.value);
   }
 
+  let usersPage = 1;
+  let usersPageSize = 25;
+
   async function loadUsers() {
-    const { users } = await App.apiJson("/api/admin/users");
+    const { users, pagination } = await App.apiJson(`/api/admin/users?page=${usersPage}&pageSize=${usersPageSize}`);
     const rows = document.getElementById("rows");
+    const paginationBar = document.getElementById("paginationBar");
     rows.innerHTML = users.map(u => `
       <tr>
         <td>
@@ -149,6 +154,11 @@
         <p class="state-desc">Add your first teammate above.</p>
       </div>
     </td></tr>`;
+
+    App.renderPagination(paginationBar, pagination, {
+      onPageChange: (p) => { usersPage = p; loadUsers(); },
+      onPageSizeChange: (s) => { usersPageSize = s; usersPage = 1; loadUsers(); },
+    });
 
     rows.querySelectorAll("[data-role]").forEach(sel => {
       sel.addEventListener("change", async () => {

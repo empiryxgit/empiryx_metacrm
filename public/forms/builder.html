@@ -576,7 +576,9 @@
       stages = (data.template && data.template.stages) || [];
     } catch { /* non-fatal - dynamic option lists just stay empty */ }
     try {
-      const { campaigns: c } = await App.apiJson("/api/campaigns");
+      // pageSize=100 (the max allowed) - this populates a picker list,
+      // which needs the full set, not one paginated page.
+      const { campaigns: c } = await App.apiJson("/api/campaigns?pageSize=100");
       campaigns = c || [];
     } catch { /* non-fatal */ }
   }

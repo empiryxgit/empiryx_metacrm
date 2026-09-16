@@ -19,12 +19,24 @@
 </nav>
 <main class="wrap-admin">
   <header class="head"><h1>Platform Audit Logs</h1></header>
-  <section class="card"><div id="content">Loading...</div></section>
+  <section class="card"><div id="content">Loading...</div><div class="pagination-bar" id="paginationBar" style="display:none"></div></section>
 </main>
 </div>
+<script src="/assets/app.js"></script>
 <script>
 const esc=(v)=>String(v??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-async function load(){const r=await fetch("/api/platform-admin/audit");const d=await r.json();if(r.status===401){location.href="/admin/login.html";return}if(!r.ok){content.textContent=d.error||"Unable to load logs.";return}content.innerHTML=d.logs.length?`<div class="table-wrap"><table class="audit"><thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Entity</th><th>Change</th><th>Reason</th></tr></thead><tbody>${d.logs.map(log=>`<tr><td>${new Date(log.createdAt).toLocaleString()}</td><td>${esc(log.adminEmail)}</td><td>${esc(log.action)}</td><td>${esc(log.entityType)}<br><small>${esc(log.entityId)}</small></td><td>${esc(JSON.stringify(log.previousValue))} → ${esc(JSON.stringify(log.newValue))}</td><td>${esc(log.reason||"-")}</td></tr>`).join("")}</tbody></table></div>`:"<p class=hint>No audit activity yet.</p>"}
+let page=1, pageSize=25;
+async function load(){
+  const r=await fetch(`/api/platform-admin/audit?page=${page}&pageSize=${pageSize}`);
+  const d=await r.json();
+  if(r.status===401){location.href="/admin/login.html";return}
+  if(!r.ok){content.textContent=d.error||"Unable to load logs.";return}
+  content.innerHTML=d.logs.length?`<div class="table-wrap"><table class="audit"><thead><tr><th>Time</th><th>Admin</th><th>Action</th><th>Entity</th><th>Change</th><th>Reason</th></tr></thead><tbody>${d.logs.map(log=>`<tr><td>${new Date(log.createdAt).toLocaleString()}</td><td>${esc(log.adminEmail)}</td><td>${esc(log.action)}</td><td>${esc(log.entityType)}<br><small>${esc(log.entityId)}</small></td><td>${esc(JSON.stringify(log.previousValue))} → ${esc(JSON.stringify(log.newValue))}</td><td>${esc(log.reason||"-")}</td></tr>`).join("")}</tbody></table></div>`:"<p class=hint>No audit activity yet.</p>";
+  App.renderPagination(document.getElementById("paginationBar"), d.pagination, {
+    onPageChange: (p) => { page = p; load(); },
+    onPageSizeChange: (s) => { pageSize = s; page = 1; load(); },
+  });
+}
 topLogout.addEventListener("click",async()=>{await fetch("/api/platform-admin/logout",{method:"POST"});location.href="/admin/login.html"});load();
 </script>
 </body>

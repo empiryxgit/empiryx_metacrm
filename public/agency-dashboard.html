@@ -73,6 +73,7 @@
             <tbody id="clientsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
           </table>
         </div>
+        <div class="pagination-bar" id="clientsPaginationBar" style="display:none"></div>
       </div>
     </div>
 
@@ -172,14 +173,31 @@
       </div>`).join("");
   }
 
+  let allDashboardClients = [];
+  let dashboardClientsPage = 1;
+  let dashboardClientsPageSize = 25;
+
   function renderClients(clients) {
+    allDashboardClients = clients;
     document.getElementById("clientsSub").textContent =
       clients.length === 0 ? "No clients yet" : `${clients.length} client${clients.length === 1 ? "" : "s"}`;
     const body = document.getElementById("clientsBody");
+    const paginationBar = document.getElementById("clientsPaginationBar");
     if (clients.length === 0) {
+      paginationBar.style.display = "none";
       body.innerHTML = `<tr><td colspan="7" class="empty">No clients yet. Click “+ Add Client” to create one.</td></tr>`;
       return;
     }
+
+    // Client-side pagination - see clients.html's own comment on
+    // renderClients for why this roster isn't server-paginated (it's
+    // built by joining every claimed client with a live per-client
+    // lead-count aggregate and sorting by lead volume before anything is
+    // paginated).
+    const totalPages = Math.max(1, Math.ceil(clients.length / dashboardClientsPageSize));
+    dashboardClientsPage = Math.min(Math.max(1, dashboardClientsPage), totalPages);
+    const pageItems = clients.slice((dashboardClientsPage - 1) * dashboardClientsPageSize, dashboardClientsPage * dashboardClientsPageSize);
+
     // "Open Client" - the same fast path into a client's own, completely
     // unchanged CRM that clients.html's "Open CRM" button and
     // client-detail.html's "Open CRM Dashboard" button already use (see
@@ -188,7 +206,7 @@
     // clients.html already applies, since an "invited"/"pending"
     // relationship has no CRM to open yet.
     const canOpen = (status) => status === "active" || status === "suspended";
-    body.innerHTML = clients.map(c => `
+    body.innerHTML = pageItems.map(c => `
       <tr>
         <td>${App.escapeHtml(c.name)}</td>
         <td><span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></td>
@@ -213,6 +231,11 @@
           btn.textContent = original;
         }
       });
+    });
+
+    App.renderPagination(paginationBar, { page: dashboardClientsPage, pageSize: dashboardClientsPageSize, total: clients.length, totalPages }, {
+      onPageChange: (p) => { dashboardClientsPage = p; renderClients(allDashboardClients); },
+      onPageSizeChange: (s) => { dashboardClientsPageSize = s; dashboardClientsPage = 1; renderClients(allDashboardClients); },
     });
   }
 

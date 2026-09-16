@@ -12,6 +12,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { sql } from "drizzle-orm";
 import { getDb } from "../src/infrastructure/db/client";
 import { requireAuth, requirePermission, requirePlatformAdmin } from "../src/infrastructure/auth/context";
+import { parsePagination } from "../src/infrastructure/http/pagination";
 import { PLATFORM_ADMIN_COOKIE_NAME, cookieOptions, clearCookieOptions } from "../src/infrastructure/auth/tokens";
 import {
   cancelSubscription,
@@ -94,7 +95,8 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
     if (!admin) return;
     try {
       const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
-      res.status(200).json(await getPlatformDashboard(search));
+      const { page, pageSize } = parsePagination(req.query);
+      res.status(200).json(await getPlatformDashboard(search, page, pageSize));
     } catch {
       res.status(500).json({ error: "Failed to load platform dashboard." });
     }
@@ -138,7 +140,8 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
     if (!admin) return;
     try {
       if (req.method === "GET") {
-        res.status(200).json({ notifications: await getPlatformNotificationList() });
+        const { page, pageSize } = parsePagination(req.query);
+        res.status(200).json(await getPlatformNotificationList(page, pageSize));
         return;
       }
       if (req.method === "POST") {
@@ -163,7 +166,8 @@ async function handlePlatformAdmin(req: VercelRequest, res: VercelResponse) {
       res.status(405).json({ error: "Method not allowed" });
       return;
     }
-    res.status(200).json({ logs: await getPlatformAuditLogList() });
+    const { page, pageSize } = parsePagination(req.query);
+    res.status(200).json(await getPlatformAuditLogList(page, pageSize));
     return;
   }
   // Platform Admin "Packages" - editable pricing config. GET returns both

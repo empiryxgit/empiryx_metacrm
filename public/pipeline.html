@@ -120,6 +120,7 @@
           <thead id="listHead"></thead>
           <tbody id="listBody"></tbody>
         </table>
+        <div class="pagination-bar" id="listPaginationBar"></div>
       </div>
     </div>
   </div>
@@ -136,8 +137,26 @@
   // company with no form provisioned yet can never lose this feature.
   let internalForm = null, internalFormFields = [], campaignsList = [];
   let template = null, stages = [], sources = [], owners = [];
+  // allRows: the Kanban board's full, unbounded (well, per-stage-capped -
+  // see api/pipeline/index.ts) row set. Only populated/used when
+  // BOARD_VIEW_ENABLED && viewMode === "board" - see loadBoard() below.
   let allRows = [];
+  // listRows/listPagination: the List view's current page, fetched from
+  // GET /api/leads with real server-side filters and page/pageSize - see
+  // loadListRows()/buildListParams() below. Board and List are now two
+  // independent data fetches instead of one shared allRows (List used to
+  // just flatten the board response, which meant it silently re-loaded the
+  // company's ENTIRE lead set on every page view - see api/pipeline's
+  // header comment and its new ?meta=1 fast path).
+  let listRows = [];
+  let listPagination = null;
+  let listPage = 1, listPageSize = 25;
   let campaignName = "";
+
+  function debounce(fn, wait){
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+  }
   // Board view is hidden for now - flip this to true (and remove the
   // `style="display:none"` on #viewToggle above) to bring it back. Every
   // board-rendering function below (renderBoard/wireDragDrop/leadCard/...)
@@ -279,7 +298,7 @@
       url.searchParams.delete("stage");
       window.history.replaceState({}, "", url);
       renderStageFilterChip();
-      renderView();
+      refreshFilters();
     });
   }
 
@@ -433,20 +452,53 @@
     `).join("") : `<tr><td colspan="${9 + industryFields.length}" class="empty">No leads match your search.</td></tr>`;
   }
 
+  // List view's pagination bar re-fetches (real server page/pageSize)
+  // rather than re-slicing an in-memory array - see loadListRows().
+  function wireListPagination(){
+    App.renderPagination(document.getElementById("listPaginationBar"), listPagination, {
+      onPageChange: (p) => {
+        listPage = p;
+        loadListRows().then(renderView).catch(err => {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        });
+      },
+      onPageSizeChange: (s) => {
+        listPageSize = s;
+        listPage = 1;
+        loadListRows().then(renderView).catch(err => {
+          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        });
+      },
+    });
+  }
+
   function renderView(){
-    const rows = applyFilters(allRows);
-    if (!BOARD_VIEW_ENABLED) {
-      document.getElementById("board").style.display = "none";
-      document.querySelector(".mobile-stage-select").style.display = "none";
-      document.getElementById("listWrap").style.display = "block";
-      renderList(rows);
+    if (BOARD_VIEW_ENABLED && viewMode === "board") {
+      document.querySelectorAll("#viewToggle button").forEach(b => b.classList.toggle("active", b.dataset.view === viewMode));
+      document.getElementById("board").style.display = "grid";
+      document.querySelector(".mobile-stage-select").style.display = "";
+      document.getElementById("listWrap").style.display = "none";
+      renderBoard(applyFilters(allRows));
       return;
     }
     document.querySelectorAll("#viewToggle button").forEach(b => b.classList.toggle("active", b.dataset.view === viewMode));
-    document.getElementById("board").style.display = viewMode === "board" ? "grid" : "none";
-    document.querySelector(".mobile-stage-select").style.display = viewMode === "board" ? "" : "none";
-    document.getElementById("listWrap").style.display = viewMode === "list" ? "block" : "none";
-    if (viewMode === "board") renderBoard(rows); else renderList(rows);
+    document.getElementById("board").style.display = "none";
+    document.querySelector(".mobile-stage-select").style.display = "none";
+    document.getElementById("listWrap").style.display = "block";
+    renderList(listRows);
+    wireListPagination();
+  }
+
+  // Re-fetches just the List view's rows (server-side filters + pagination)
+  // without reloading template/stages/sources/owners - used by every filter
+  // control's change handler. Board view (when re-enabled) still filters
+  // client-side over its own already-fetched allRows, so it just re-renders.
+  function refreshFilters(){
+    if (BOARD_VIEW_ENABLED && viewMode === "board") { renderView(); return; }
+    listPage = 1;
+    loadListRows().then(renderView).catch(err => {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    });
   }
 
   document.getElementById("viewToggle").addEventListener("click", (e) => {
@@ -454,10 +506,13 @@
     if (!btn) return;
     viewMode = btn.dataset.view;
     localStorage.setItem("setu_pipeline_view", viewMode);
-    renderView();
+    // Board and List are independent fetches now (see loadBoard()/
+    // loadListRows()) - switching views needs a real reload, not just a
+    // re-render of already-fetched data.
+    load();
   });
   document.getElementById("mobileStage").addEventListener("change", () => renderView());
-  document.getElementById("searchInput").addEventListener("input", () => renderView());
+  document.getElementById("searchInput").addEventListener("input", debounce(() => refreshFilters(), 300));
 
   // Clicking (or Enter/Space-ing, for keyboard users - see tabindex="0" on
   // each <tr> in renderList) anywhere on a list row opens its full-details
@@ -467,7 +522,7 @@
   document.getElementById("listBody").addEventListener("click", (e) => {
     const tr = e.target.closest("tr[data-lead-id]");
     if (!tr) return;
-    const row = allRows.find(r => r.id === tr.dataset.leadId);
+    const row = listRows.find(r => r.id === tr.dataset.leadId);
     if (row) openLeadDetailsModal(row);
   });
   document.getElementById("listBody").addEventListener("keydown", (e) => {
@@ -475,7 +530,7 @@
     const tr = e.target.closest("tr[data-lead-id]");
     if (!tr) return;
     e.preventDefault();
-    const row = allRows.find(r => r.id === tr.dataset.leadId);
+    const row = listRows.find(r => r.id === tr.dataset.leadId);
     if (row) openLeadDetailsModal(row);
   });
 
@@ -489,12 +544,12 @@
     if (stageFilter) url.searchParams.set("stage", stageFilter); else url.searchParams.delete("stage");
     window.history.replaceState({}, "", url);
     renderStageFilterChip();
-    renderView();
+    refreshFilters();
   });
-  document.getElementById("filterSource").addEventListener("change", () => renderView());
-  document.getElementById("filterLeadApproach").addEventListener("change", () => renderView());
-  document.getElementById("filterOwner").addEventListener("change", () => renderView());
-  document.getElementById("filterCustomerType").addEventListener("change", () => renderView());
+  document.getElementById("filterSource").addEventListener("change", () => refreshFilters());
+  document.getElementById("filterLeadApproach").addEventListener("change", () => refreshFilters());
+  document.getElementById("filterOwner").addEventListener("change", () => refreshFilters());
+  document.getElementById("filterCustomerType").addEventListener("change", () => refreshFilters());
   document.getElementById("filterDateRange").addEventListener("change", (e) => {
     const val = e.target.value;
     const customBox = document.getElementById("filterDateCustom");
@@ -507,7 +562,7 @@
     }
     customBox.style.display = "none";
     dateFilter = { key: val, from: "", to: "" };
-    renderView();
+    refreshFilters();
   });
   document.getElementById("filterDateApply").addEventListener("click", () => {
     dateFilter = {
@@ -515,7 +570,7 @@
       from: document.getElementById("filterDateFrom").value,
       to: document.getElementById("filterDateTo").value,
     };
-    renderView();
+    refreshFilters();
   });
 
   // Rebuilds the Stage/Source/Owner <select> options from whatever `load()`
@@ -1078,7 +1133,9 @@
   async function loadCampaignOptions(){
     const select = document.getElementById("campaignSelect");
     try {
-      const { campaigns } = await App.apiJson("/api/campaigns");
+      // pageSize=100 (the max allowed) - this populates a <select>, which
+      // needs the full set, not one paginated page.
+      const { campaigns } = await App.apiJson("/api/campaigns?pageSize=100");
       campaignsList = campaigns;
       select.innerHTML = `<option value="">All campaigns</option>` + campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
     } catch {
@@ -1104,14 +1161,93 @@
     } catch { /* fall back to legacy fields */ }
   }
 
+  // Board view (only reachable if BOARD_VIEW_ENABLED is flipped back on) -
+  // stays on the company-wide, per-stage-capped /api/pipeline fetch, since
+  // a Kanban column can't be driven by numbered-page pagination.
+  async function loadBoard(){
+    const campaignId = document.getElementById("campaignSelect").value;
+    const params = campaignId ? `?campaignId=${campaignId}` : "";
+    const data = await App.apiJson(`/api/pipeline${params}`);
+    template = data.template;
+    stages = data.template.stages;
+    sources = data.sources;
+    owners = data.owners;
+    campaignName = data.campaign?.name || "";
+    allRows = Object.values(data.board).flat();
+  }
+
+  // List view's metadata-only fetch - template/sources/owners/campaign,
+  // via /api/pipeline's ?meta=1 fast path, which skips the expensive
+  // company-wide leads query entirely (see that endpoint's header comment).
+  // Actual rows come from loadListRows() below, against /api/leads.
+  async function loadListMeta(){
+    const campaignId = document.getElementById("campaignSelect").value;
+    const params = campaignId ? `?meta=1&campaignId=${campaignId}` : "?meta=1";
+    const data = await App.apiJson(`/api/pipeline${params}`);
+    template = data.template;
+    stages = data.template.stages;
+    sources = data.sources;
+    owners = data.owners;
+    campaignName = data.campaign?.name || "";
+  }
+
+  // Builds the /api/leads query string from every filter control this page
+  // exposes - these used to be applied client-side, in-memory, over a full
+  // company-wide fetch (see applyFilters(), still used by Board view above).
+  function buildListParams(){
+    const params = new URLSearchParams();
+    params.set("page", String(listPage));
+    params.set("pageSize", String(listPageSize));
+
+    const campaignId = document.getElementById("campaignSelect").value;
+    if (campaignId) params.set("campaignId", campaignId);
+    if (stageFilter) params.set("stage", stageFilter);
+
+    const source = document.getElementById("filterSource").value;
+    if (source) params.set("source", source);
+
+    const leadApproach = document.getElementById("filterLeadApproach").value;
+    if (leadApproach) params.set("leadApproach", leadApproach);
+
+    // "__unassigned__" is the same sentinel filterOwner's own <option> uses
+    // (see populateFilterOptions) - api/leads/handler.ts maps it to
+    // `ownerId IS NULL` server-side now instead of a client .filter().
+    const owner = document.getElementById("filterOwner").value;
+    if (owner) params.set("ownerId", owner);
+
+    const leadType = document.getElementById("filterCustomerType").value;
+    if (leadType) params.set("leadType", leadType);
+
+    const range = dateFilterRange();
+    if (range) {
+      params.set("dateFrom", range.from.toISOString());
+      params.set("dateTo", range.to.toISOString());
+    }
+
+    const q = document.getElementById("searchInput").value.trim();
+    if (q) params.set("search", q);
+
+    return params;
+  }
+
+  async function loadListRows(){
+    const data = await App.apiJson(`/api/leads?${buildListParams().toString()}`);
+    listRows = data.leads;
+    listPagination = data.pagination;
+  }
+
   async function load(){
     const banner = document.getElementById("banner");
     banner.innerHTML = "";
-    const campaignId = document.getElementById("campaignSelect").value;
-    const params = [campaignId ? `campaignId=${campaignId}` : ""].filter(Boolean).join("&");
-    let data;
+    listPage = 1;
+
     try {
-      data = await App.apiJson(`/api/pipeline${params ? `?${params}` : ""}`);
+      if (BOARD_VIEW_ENABLED && viewMode === "board") {
+        await loadBoard();
+      } else {
+        await loadListMeta();
+        await loadListRows();
+      }
     } catch (err) {
       document.getElementById("pipelineContent").style.display = "none";
       document.getElementById("emptyPipeline").style.display = "none";
@@ -1119,11 +1255,6 @@
       return;
     }
 
-    template = data.template;
-    stages = data.template.stages;
-    sources = data.sources;
-    owners = data.owners;
-    allRows = Object.values(data.board).flat();
     populateFilterOptions();
 
     // A stale/invalid ?stage= (e.g. leftover after an industry template
@@ -1131,8 +1262,18 @@
     if (stageFilter && !stages.some(s => s.key === stageFilter)) stageFilter = null;
     renderStageFilterChip();
 
-    const totalCount = allRows.length;
-    if (totalCount === 0 && !campaignId) {
+    const campaignId = document.getElementById("campaignSelect").value;
+    // Only show the onboarding "pipeline is ready" card when the company
+    // truly has zero leads at all - a filter combination that just happens
+    // to match nothing should render the (empty) table/board instead, not
+    // this card. Filtered-total===0 alone can't tell those apart, since
+    // every filter below is now applied server-side.
+    const filtersActive = !!(campaignId || stageFilter || document.getElementById("filterSource").value ||
+      document.getElementById("filterLeadApproach").value || document.getElementById("filterOwner").value ||
+      document.getElementById("filterCustomerType").value || dateFilter.key || document.getElementById("searchInput").value.trim());
+    const totalCount = (BOARD_VIEW_ENABLED && viewMode === "board") ? allRows.length : (listPagination?.total ?? 0);
+
+    if (totalCount === 0 && !filtersActive) {
       document.getElementById("pipelineContent").style.display = "none";
       document.getElementById("emptyPipeline").style.display = "block";
       document.getElementById("emptyPipeline").innerHTML = `

@@ -7,11 +7,12 @@
 // explicit-rewrite pattern api/system.ts already relied on).
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, isNull, lt, or, sql } from "drizzle-orm";
 import { getDb } from "../../src/infrastructure/db/client";
 import { leads } from "../../src/infrastructure/db/schema";
 import { requirePermission } from "../../src/infrastructure/auth/context";
 import { withEffectiveCompanyContext } from "../../src/application/agencyClientContext";
+import { parsePagination, buildPaginationMeta } from "../../src/infrastructure/http/pagination";
 import {
   insertLeadFollowUp,
   insertManualLead,
@@ -74,6 +75,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 // asynchronously (see README "n8n integration"), it never calls into this
 // ingestion service directly, so a slow or failing n8n workflow can never
 // block or lose a Meta lead.
+//
+// This is also now the List-view data source for public/pipeline.html (see
+// api/pipeline/index.ts's header comment) - every filter that view used to
+// apply client-side over a full company-wide fetch is now a real query
+// param handled here, with page/pageSize/total replacing the old
+// limit-only, no-count behaviour.
 async function handleList(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" });
@@ -84,7 +91,7 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   if (!auth) return;
   auth = await withEffectiveCompanyContext(req, auth);
 
-  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const { page, pageSize, offset } = parsePagination(req.query);
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const campaignId = typeof req.query.campaignId === "string" ? req.query.campaignId : undefined;
   // WhatsApp Lead Capture feature (Phase 10) - the Pipeline/Leads UI's
@@ -92,6 +99,18 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
   // WhatsApp and Instant Form leads already render side by side in this
   // same list with no query param needed at all - this only narrows it.
   const leadApproach = typeof req.query.leadApproach === "string" ? req.query.leadApproach : undefined;
+  // Pipeline List-view filters, formerly applied client-side in
+  // pipeline.html's applyFilters() over a full company-wide fetch.
+  const stage = typeof req.query.stage === "string" ? req.query.stage : undefined;
+  const source = typeof req.query.source === "string" ? req.query.source : undefined;
+  const leadType = typeof req.query.leadType === "string" ? req.query.leadType : undefined;
+  // ownerId="__unassigned__" is the sentinel pipeline.html's filterOwner
+  // select already uses for "no owner set" (ownerId IS NULL) - kept
+  // identical here so the frontend doesn't need to change its values.
+  const ownerId = typeof req.query.ownerId === "string" ? req.query.ownerId : undefined;
+  const dateFrom = typeof req.query.dateFrom === "string" ? req.query.dateFrom : undefined;
+  const dateTo = typeof req.query.dateTo === "string" ? req.query.dateTo : undefined;
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
 
   try {
     const db = await getDb();
@@ -99,15 +118,48 @@ async function handleList(req: VercelRequest, res: VercelResponse) {
     if (status) conditions.push(eq(leads.status, status));
     if (campaignId) conditions.push(eq(leads.crmCampaignId, campaignId));
     if (leadApproach) conditions.push(eq(leads.leadApproach, leadApproach));
+    if (stage) conditions.push(eq(leads.pipelineStage, stage));
+    if (source) conditions.push(eq(leads.source, source));
+    if (leadType) conditions.push(eq(leads.leadType, leadType));
+    if (ownerId === "__unassigned__") {
+      conditions.push(isNull(leads.ownerId));
+    } else if (ownerId) {
+      conditions.push(eq(leads.ownerId, ownerId));
+    }
+    if (dateFrom) {
+      const d = new Date(dateFrom);
+      if (!Number.isNaN(d.getTime())) conditions.push(gte(leads.createdAt, d));
+    }
+    if (dateTo) {
+      const d = new Date(dateTo);
+      if (!Number.isNaN(d.getTime())) conditions.push(lt(leads.createdAt, d));
+    }
+    if (search) {
+      const pattern = `%${search}%`;
+      conditions.push(
+        or(
+          ilike(leads.fullName, pattern),
+          ilike(leads.email, pattern),
+          ilike(leads.phoneNumber, pattern),
+          ilike(leads.metaLeadId, pattern)
+        )!
+      );
+    }
 
-    const rows = await db
-      .select()
-      .from(leads)
-      .where(and(...conditions))
-      .orderBy(desc(leads.createdAt))
-      .limit(limit);
+    const where = and(...conditions);
 
-    res.status(200).json({ leads: rows });
+    const [rows, [{ count }]] = await Promise.all([
+      db
+        .select()
+        .from(leads)
+        .where(where)
+        .orderBy(desc(leads.createdAt))
+        .limit(pageSize)
+        .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(leads).where(where),
+    ]);
+
+    res.status(200).json({ leads: rows, pagination: buildPaginationMeta(page, pageSize, count) });
   } catch (err) {
     console.error("[leads] Failed to list leads:", err);
     res.status(500).json({ error: "Failed to list leads" });

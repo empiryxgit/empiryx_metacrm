@@ -35,6 +35,7 @@
         <tbody id="rows"><tr><td colspan="6" class="empty">Select a form to view its submissions.</td></tr></tbody>
       </table>
     </div>
+    <div class="pagination-bar" id="paginationBar" style="display:none"></div>
   </div>
 
 <script src="/assets/app.js"></script>
@@ -89,9 +90,15 @@
     document.getElementById("detailOverlay").addEventListener("click", (e) => { if (e.target.id === "detailOverlay") closeModal(); });
   }
 
-  function renderRows(){
+  let submissionsPage = 1;
+  let submissionsPageSize = 25;
+  let currentFormId = null;
+
+  function renderRows(pagination){
     const rows = document.getElementById("rows");
+    const paginationBar = document.getElementById("paginationBar");
     if (!submissions.length) {
+      paginationBar.style.display = "none";
       rows.innerHTML = `<tr><td colspan="6"><div class="state-block"><p class="state-title">No submissions yet</p><p class="state-desc">Submissions will appear here as this form is used.</p></div></td></tr>`;
       return;
     }
@@ -111,18 +118,26 @@
         if (sub) openDetail(sub);
       });
     });
+    App.renderPagination(paginationBar, pagination, {
+      onPageChange: (p) => { submissionsPage = p; loadSubmissionsFor(currentFormId); },
+      onPageSizeChange: (s) => { submissionsPageSize = s; submissionsPage = 1; loadSubmissionsFor(currentFormId); },
+    });
   }
 
   async function loadSubmissionsFor(formId){
+    currentFormId = formId;
     const rows = document.getElementById("rows");
     rows.innerHTML = `<tr><td colspan="6" class="empty">Loading…</td></tr>`;
+    let data;
     try {
-      ({ submissions } = await App.apiJson(`/api/forms/${formId}/submissions`));
+      data = await App.apiJson(`/api/forms/${formId}/submissions?page=${submissionsPage}&pageSize=${submissionsPageSize}`);
     } catch (err) {
+      document.getElementById("paginationBar").style.display = "none";
       rows.innerHTML = `<tr><td colspan="6"><div class="state-block"><p class="state-title">Unable to load submissions</p><p class="state-desc">${App.escapeHtml(err.message)}</p></div></td></tr>`;
       return;
     }
-    renderRows();
+    submissions = data.submissions;
+    renderRows(data.pagination);
   }
 
   async function load(){
@@ -132,7 +147,9 @@
 
     const select = document.getElementById("formSelect");
     try {
-      ({ forms } = await App.apiJson("/api/forms"));
+      // pageSize=100 (the max allowed) - this populates a <select>, which
+      // needs the full set, not one paginated page.
+      ({ forms } = await App.apiJson("/api/forms?pageSize=100"));
     } catch (err) {
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       return;
@@ -150,7 +167,7 @@
     await loadSubmissionsFor(initial);
   }
 
-  document.getElementById("formSelect").addEventListener("change", (e) => loadSubmissionsFor(e.target.value));
+  document.getElementById("formSelect").addEventListener("change", (e) => { submissionsPage = 1; loadSubmissionsFor(e.target.value); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && document.getElementById("modalRoot").innerHTML.trim()) closeModal(); });
 
   load();

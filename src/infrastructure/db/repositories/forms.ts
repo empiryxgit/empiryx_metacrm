@@ -5,7 +5,7 @@
 // call into these.
 
 import { randomBytes } from "crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { formFields, formSubmissions, forms } from "../schema";
 import { firstOrThrow } from "../util";
@@ -56,6 +56,27 @@ export async function listForms(companyId: string, type?: string) {
   const conditions = [eq(forms.companyId, companyId)];
   if (type) conditions.push(eq(forms.type, type));
   return db.select().from(forms).where(and(...conditions)).orderBy(desc(forms.updatedAt));
+}
+
+/** Paginated variant of listForms, for the Forms screen's list endpoint
+ * (api/forms/handler.ts's handleList). listForms itself stays unpaginated -
+ * api/onboarding/handler.ts calls it to check whether a default internal
+ * form already exists, which needs the true full set (or at least doesn't
+ * want to accidentally miss a match past page 1), so its signature/
+ * behavior is untouched here. */
+export async function listFormsPage(companyId: string, type: string | undefined, limit: number, offset: number) {
+  const db = await getDb();
+  const conditions = [eq(forms.companyId, companyId)];
+  if (type) conditions.push(eq(forms.type, type));
+  return db.select().from(forms).where(and(...conditions)).orderBy(desc(forms.updatedAt)).limit(limit).offset(offset);
+}
+
+export async function countForms(companyId: string, type?: string) {
+  const db = await getDb();
+  const conditions = [eq(forms.companyId, companyId)];
+  if (type) conditions.push(eq(forms.type, type));
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(forms).where(and(...conditions));
+  return row?.count ?? 0;
 }
 
 export async function getFormById(companyId: string, formId: string) {
@@ -295,7 +316,7 @@ export async function createSubmission(input: CreateSubmissionInput) {
   return firstOrThrow(rows);
 }
 
-export async function listSubmissions(companyId: string, formId?: string, limit = 200) {
+export async function listSubmissions(companyId: string, formId?: string, limit = 200, offset = 0) {
   const db = await getDb();
   const conditions = [eq(formSubmissions.companyId, companyId)];
   if (formId) conditions.push(eq(formSubmissions.formId, formId));
@@ -304,7 +325,16 @@ export async function listSubmissions(companyId: string, formId?: string, limit 
     .from(formSubmissions)
     .where(and(...conditions))
     .orderBy(desc(formSubmissions.createdAt))
-    .limit(limit);
+    .limit(limit)
+    .offset(offset);
+}
+
+export async function countSubmissions(companyId: string, formId?: string) {
+  const db = await getDb();
+  const conditions = [eq(formSubmissions.companyId, companyId)];
+  if (formId) conditions.push(eq(formSubmissions.formId, formId));
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(formSubmissions).where(and(...conditions));
+  return row?.count ?? 0;
 }
 
 export async function getSubmissionById(companyId: string, submissionId: string) {

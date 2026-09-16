@@ -8,7 +8,7 @@
 // Page-scoped since Phase 2). Everything Meta-sync-shaped still lives in
 // this one file.
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { getDb } from "../client";
 import { campaigns, metaAdSets, metaAds, metaCampaigns, metaForms } from "../schema";
 
@@ -163,9 +163,22 @@ export async function listMetaCampaignsWithMapping(tenantId: string) {
  * preserved across a disconnect/reconnect; only a genuinely different ad
  * account's old campaigns are excluded.
  */
-export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string, adAccountRowId: string) {
+function metaCampaignSearchConditions(tenantId: string, adAccountRowId: string, search?: string) {
+  const conditions = [eq(metaCampaigns.tenantId, tenantId), eq(metaCampaigns.metaAdAccountId, adAccountRowId)];
+  if (search) conditions.push(ilike(metaCampaigns.name, `%${search}%`));
+  return and(...conditions);
+}
+
+/** Paginated - `limit`/`offset` optional so existing internal callers that
+ * need the full synced set (if any show up later) aren't forced to pass
+ * them; the Campaigns screen's Meta Campaigns table (the only current
+ * caller) always passes both, plus `search` (server-side now - see
+ * listCampaignsPage's own comment on why the search box moved off the
+ * in-memory array). */
+export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string, adAccountRowId: string, limit?: number, offset?: number, search?: string) {
   const db = await getDb();
-  const rows = await db
+  const conditions = metaCampaignSearchConditions(tenantId, adAccountRowId, search);
+  const query = db
     .select({
       id: metaCampaigns.id,
       metaCampaignId: metaCampaigns.metaCampaignId,
@@ -179,8 +192,21 @@ export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
-    .where(and(eq(metaCampaigns.tenantId, tenantId), eq(metaCampaigns.metaAdAccountId, adAccountRowId)));
-  return rows;
+    .where(conditions)
+    .orderBy(desc(metaCampaigns.lastSyncAt))
+    .$dynamic();
+  if (limit !== undefined) query.limit(limit);
+  if (offset !== undefined) query.offset(offset);
+  return query;
+}
+
+export async function countMetaCampaignsForAdAccount(tenantId: string, adAccountRowId: string, search?: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(metaCampaigns)
+    .where(metaCampaignSearchConditions(tenantId, adAccountRowId, search));
+  return row?.count ?? 0;
 }
 
 /** Same joined shape as listMetaCampaignsWithMapping, narrowed to one Meta

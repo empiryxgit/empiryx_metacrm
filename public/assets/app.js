@@ -802,6 +802,66 @@ const App = (() => {
     renderAgencyContextSwitcher();
   }
 
+  // =========================================================================
+  // Shared numbered-pagination control - generalized from the PAGE_SIZE /
+  // updatePaginationBar pattern originally hand-rolled in campaigns.html.
+  // One implementation for every server-paginated list page: a count line,
+  // Prev/Next, and a 25/50/100 rows-per-page picker. This function holds no
+  // state of its own - it just renders `state` (the `pagination` object
+  // every paginated endpoint now returns: { page, pageSize, total,
+  // totalPages }) into `containerEl` and wires the controls to `handlers`.
+  // The caller owns re-fetching: onPageChange/onPageSizeChange are called
+  // with the new value, the caller re-fetches from the server, then calls
+  // renderPagination again with the fresh response. Hides itself (rather
+  // than just disabling controls) when there's nothing to page through -
+  // same UX rule the original campaigns.html bar used.
+  // =========================================================================
+  const PAGE_SIZE_OPTIONS = [25, 50, 100];
+
+  function renderPagination(containerEl, state, handlers) {
+    if (!containerEl) return;
+    const { page, pageSize, total, totalPages } = state || {};
+    if (!total || totalPages <= 1) {
+      containerEl.style.display = "none";
+      containerEl.innerHTML = "";
+      return;
+    }
+    containerEl.style.display = "flex";
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, total);
+    containerEl.innerHTML = `
+      <span class="pagination-info">${start}–${end} of ${total}</span>
+      <span class="pagination-controls">
+        <label class="pagination-size">Rows:
+          <select class="pagination-size-select" aria-label="Rows per page">
+            ${PAGE_SIZE_OPTIONS.map((s) => `<option value="${s}" ${s === pageSize ? "selected" : ""}>${s}</option>`).join("")}
+          </select>
+        </label>
+        <button type="button" class="btn secondary pagination-prev" ${page <= 1 ? "disabled" : ""}>Prev</button>
+        <span class="page-indicator">Page ${page} of ${totalPages}</span>
+        <button type="button" class="btn secondary pagination-next" ${page >= totalPages ? "disabled" : ""}>Next</button>
+      </span>
+    `;
+    containerEl.querySelector(".pagination-prev")?.addEventListener("click", () => {
+      if (page > 1 && handlers?.onPageChange) handlers.onPageChange(page - 1);
+    });
+    containerEl.querySelector(".pagination-next")?.addEventListener("click", () => {
+      if (page < totalPages && handlers?.onPageChange) handlers.onPageChange(page + 1);
+    });
+    containerEl.querySelector(".pagination-size-select")?.addEventListener("change", (e) => {
+      handlers?.onPageSizeChange?.(Number(e.target.value));
+    });
+  }
+
+  /** Clamps an untrusted/parsed page-size value (e.g. from a query string
+   * or a stale localStorage value) into the one allowed set, same as every
+   * paginated backend endpoint does server-side - keeps the frontend
+   * default in sync with what the server will actually clamp to. */
+  function clampPageSize(value) {
+    const n = Number(value);
+    return PAGE_SIZE_OPTIONS.includes(n) ? n : PAGE_SIZE_OPTIONS[0];
+  }
+
   return {
     api,
     apiJson,
@@ -813,5 +873,7 @@ const App = (() => {
     escapeHtml,
     initials,
     enterClient,
+    renderPagination,
+    clampPageSize,
   };
 })();

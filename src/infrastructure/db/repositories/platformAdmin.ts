@@ -13,9 +13,12 @@ export async function touchPlatformAdminLogin(adminId: string) {
   await db.update(platformAdmins).set({ lastLoginAt: new Date(), updatedAt: new Date() }).where(eq(platformAdmins.id, adminId));
 }
 
-export async function listPlatformCompanies(search?: string) {
+/** `limit`/`offset` optional so callers that genuinely need the full set
+ * aren't forced to pass them; getPlatformDashboard (the only current
+ * caller, powering the Platform Admin company list) always passes both. */
+export async function listPlatformCompanies(search?: string, limit?: number, offset?: number) {
   const db = await getDb();
-  const rows = await db
+  const query = db
     .select({
       id: companies.id,
       name: companies.name,
@@ -37,7 +40,11 @@ export async function listPlatformCompanies(search?: string) {
     .leftJoin(leads, eq(leads.companyId, companies.id))
     .where(search ? ilike(companies.name, `%${search}%`) : undefined)
     .groupBy(companies.id)
-    .orderBy(desc(companies.createdAt));
+    .orderBy(desc(companies.createdAt))
+    .$dynamic();
+  if (limit !== undefined) query.limit(limit);
+  if (offset !== undefined) query.offset(offset);
+  const rows = await query;
 
   const clients = await db
     .select({ agencyCompanyId: agencyClients.agencyCompanyId, count: sql<number>`count(*)` })
@@ -52,6 +59,15 @@ export async function listPlatformCompanies(search?: string) {
     leadCount: Number(row.leadCount),
     clientCount: clientCounts.get(row.id) ?? 0,
   }));
+}
+
+export async function countPlatformCompanies(search?: string) {
+  const db = await getDb();
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(companies)
+    .where(search ? ilike(companies.name, `%${search}%`) : undefined);
+  return row?.count ?? 0;
 }
 
 export async function getPlatformSummary() {
@@ -257,9 +273,15 @@ export async function createPlatformNotification(input: {
   return row;
 }
 
-export async function listPlatformNotifications() {
+export async function listPlatformNotifications(limit = 100, offset = 0) {
   const db = await getDb();
-  return db.select().from(platformNotifications).orderBy(desc(platformNotifications.publishedAt)).limit(100);
+  return db.select().from(platformNotifications).orderBy(desc(platformNotifications.publishedAt)).limit(limit).offset(offset);
+}
+
+export async function countPlatformNotifications() {
+  const db = await getDb();
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(platformNotifications);
+  return row?.count ?? 0;
 }
 
 export async function listUserNotifications(input: { userId: string; companyId: string; accountType: string }) {
@@ -291,17 +313,29 @@ export async function markPlatformNotificationRead(notificationId: string, userI
   await db.insert(platformNotificationReads).values({ notificationId, userId }).onConflictDoNothing();
 }
 
-export async function listPlatformAuditLogs() {
+export async function listPlatformAuditLogs(limit = 200, offset = 0) {
   const db = await getDb();
-  return db.select({
-    id: platformAuditLogs.id,
-    action: platformAuditLogs.action,
-    entityType: platformAuditLogs.entityType,
-    entityId: platformAuditLogs.entityId,
-    previousValue: platformAuditLogs.previousValue,
-    newValue: platformAuditLogs.newValue,
-    reason: platformAuditLogs.reason,
-    createdAt: platformAuditLogs.createdAt,
-    adminEmail: platformAdmins.email,
-  }).from(platformAuditLogs).innerJoin(platformAdmins, eq(platformAdmins.id, platformAuditLogs.adminId)).orderBy(desc(platformAuditLogs.createdAt)).limit(200);
+  return db
+    .select({
+      id: platformAuditLogs.id,
+      action: platformAuditLogs.action,
+      entityType: platformAuditLogs.entityType,
+      entityId: platformAuditLogs.entityId,
+      previousValue: platformAuditLogs.previousValue,
+      newValue: platformAuditLogs.newValue,
+      reason: platformAuditLogs.reason,
+      createdAt: platformAuditLogs.createdAt,
+      adminEmail: platformAdmins.email,
+    })
+    .from(platformAuditLogs)
+    .innerJoin(platformAdmins, eq(platformAdmins.id, platformAuditLogs.adminId))
+    .orderBy(desc(platformAuditLogs.createdAt))
+    .limit(limit)
+    .offset(offset);
+}
+
+export async function countPlatformAuditLogs() {
+  const db = await getDb();
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(platformAuditLogs);
+  return row?.count ?? 0;
 }

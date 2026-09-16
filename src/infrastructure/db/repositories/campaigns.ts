@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { getDb } from "../client";
 import { campaigns, webhookConfigs } from "../schema";
@@ -29,6 +29,42 @@ export async function createCampaign(input: {
 export async function listCampaigns(companyId: string) {
   const db = await getDb();
   return db.select().from(campaigns).where(eq(campaigns.companyId, companyId));
+}
+
+/** Paginated variant of listCampaigns, for the Campaigns screen's list
+ * endpoint (api/campaigns/handler.ts's GET). listCampaigns itself stays
+ * unpaginated - it's used as an internal "give me the whole set" primitive
+ * by the campaign-limit check (billing.ts), the dashboard's campaign count,
+ * agency reports, and tests, all of which need the true full list rather
+ * than one page of it, so its signature/behavior is untouched here.
+ *
+ * `search` is optional and applied server-side (case-insensitive substring
+ * on the campaign name) - the frontend's search box used to filter an
+ * already-fully-fetched array in the browser; now that only one page is
+ * ever fetched, the filter has to happen before the LIMIT/OFFSET or a
+ * search term would only ever be checked against whatever happened to be
+ * on the current page. */
+function campaignSearchConditions(companyId: string, search?: string) {
+  const conditions = [eq(campaigns.companyId, companyId)];
+  if (search) conditions.push(ilike(campaigns.name, `%${search}%`));
+  return and(...conditions);
+}
+
+export async function listCampaignsPage(companyId: string, limit: number, offset: number, search?: string) {
+  const db = await getDb();
+  return db
+    .select()
+    .from(campaigns)
+    .where(campaignSearchConditions(companyId, search))
+    .orderBy(desc(campaigns.createdAt))
+    .limit(limit)
+    .offset(offset);
+}
+
+export async function countCampaigns(companyId: string, search?: string) {
+  const db = await getDb();
+  const [row] = await db.select({ count: sql<number>`count(*)::int` }).from(campaigns).where(campaignSearchConditions(companyId, search));
+  return row?.count ?? 0;
 }
 
 /** Campaigns across MULTIPLE companies in one query - unlike listCampaigns

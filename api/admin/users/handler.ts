@@ -11,14 +11,16 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireAuth, requirePermission, assertNotLockedOut, parseCookies, type AuthContext } from "../../../src/infrastructure/auth/context";
 import {
   countOtherActiveUsersWithRole,
+  countUsers,
   createUser,
   emailExists,
   getCompanyById,
   getRoleById,
   getUserById,
-  listUsers,
+  listUsersPage,
   updateUser,
 } from "../../../src/infrastructure/db/repositories/tenancy";
+import { parsePagination, buildPaginationMeta } from "../../../src/infrastructure/http/pagination";
 // RUTA AI Assistant is mandatory for every user - provisioned automatically
 // (zero-verification, per design) the moment a phone number is on file, and
 // torn down the moment a user is disabled. See rutaAiAssistant.ts's own
@@ -99,8 +101,12 @@ async function handleCollection(req: VercelRequest, res: VercelResponse) {
   if (req.method === "GET") {
     const auth = await requirePermission(req, res, PERMISSIONS.USERS_MANAGE);
     if (!auth) return;
-    const users = await listUsers(auth.companyId);
-    res.status(200).json({ users });
+    const { page, pageSize, offset } = parsePagination(req.query);
+    const [users, total] = await Promise.all([
+      listUsersPage(auth.companyId, pageSize, offset),
+      countUsers(auth.companyId),
+    ]);
+    res.status(200).json({ users, pagination: buildPaginationMeta(page, pageSize, total) });
     return;
   }
 

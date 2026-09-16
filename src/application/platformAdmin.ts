@@ -2,14 +2,17 @@ import { AuthError } from "./auth";
 import { verifyPassword } from "../infrastructure/auth/password";
 import {
   cancelCompanySubscription as cancelCompanySubscriptionRepo,
+  countPlatformCompanies,
   createPlatformNotification,
   extendCompanyTrial as extendCompanyTrialRepo,
   forceActivateCompanySubscription as forceActivateCompanySubscriptionRepo,
   getPlatformAdminByEmail,
   getPlatformCompany,
   getPlatformSummary,
+  countPlatformAuditLogs,
   listPlatformAuditLogs,
   listPlatformCompanies,
+  countPlatformNotifications,
   listPlatformNotifications,
   listUserNotifications,
   markPlatformNotificationRead,
@@ -25,6 +28,7 @@ import { resolveEntitlementState } from "../domain/trial";
 import { BILLING_CYCLE_KEYS, cycleEndDate, isBillingCycle, type BillingCycle } from "../domain/billing";
 import { ACCOUNT_TYPE_KEYS, isAccountType, type AccountType } from "../domain/accountType";
 import { getFallbackPricingConfig, invalidatePricingConfigCache } from "./pricing";
+import { buildPaginationMeta } from "../infrastructure/http/pagination";
 
 export async function loginPlatformAdmin(input: { email: string; password: string }) {
   const admin = await getPlatformAdminByEmail(input.email);
@@ -35,9 +39,14 @@ export async function loginPlatformAdmin(input: { email: string; password: strin
   return { token, admin: { id: admin.id, email: admin.email, fullName: admin.fullName } };
 }
 
-export async function getPlatformDashboard(search?: string) {
-  const [summary, companies] = await Promise.all([getPlatformSummary(), listPlatformCompanies(search)]);
-  return { summary, companies };
+export async function getPlatformDashboard(search?: string, page = 1, pageSize = 25) {
+  const offset = (page - 1) * pageSize;
+  const [summary, companies, total] = await Promise.all([
+    getPlatformSummary(),
+    listPlatformCompanies(search, pageSize, offset),
+    countPlatformCompanies(search),
+  ]);
+  return { summary, companies, pagination: buildPaginationMeta(page, pageSize, total) };
 }
 
 export async function getPlatformCompanyDetail(companyId: string) {
@@ -69,9 +78,13 @@ export async function publishPlatformNotification(input: Parameters<typeof creat
   return createPlatformNotification({ ...input, title: input.title.trim(), message: input.message.trim() });
 }
 
-export async function getPlatformNotificationList() {
-  const rows = await listPlatformNotifications();
-  return rows.map((row) => ({ ...row, publishedAt: row.publishedAt.toISOString(), createdAt: row.createdAt.toISOString() }));
+export async function getPlatformNotificationList(page = 1, pageSize = 25) {
+  const offset = (page - 1) * pageSize;
+  const [rows, total] = await Promise.all([listPlatformNotifications(pageSize, offset), countPlatformNotifications()]);
+  return {
+    notifications: rows.map((row) => ({ ...row, publishedAt: row.publishedAt.toISOString(), createdAt: row.createdAt.toISOString() })),
+    pagination: buildPaginationMeta(page, pageSize, total),
+  };
 }
 
 export async function getUserNotificationList(input: { userId: string; companyId: string; accountType: string }) {
@@ -83,9 +96,13 @@ export async function readUserNotification(notificationId: string, userId: strin
   await markPlatformNotificationRead(notificationId, userId);
 }
 
-export async function getPlatformAuditLogList() {
-  const rows = await listPlatformAuditLogs();
-  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+export async function getPlatformAuditLogList(page = 1, pageSize = 25) {
+  const offset = (page - 1) * pageSize;
+  const [rows, total] = await Promise.all([listPlatformAuditLogs(pageSize, offset), countPlatformAuditLogs()]);
+  return {
+    logs: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })),
+    pagination: buildPaginationMeta(page, pageSize, total),
+  };
 }
 
 // ---------------------------------------------------------------------------
