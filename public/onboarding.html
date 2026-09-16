@@ -46,6 +46,22 @@
 const card = document.getElementById("wizardCard");
 let ctx = null; // last-known OnboardingContext from the server
 
+// RUTA AI Assistant platform number (see src/application/metaSync/
+// rutaAiAssistant.ts's header, and metaWhatsappEventService.ts's
+// isRutaPlatformNumber) - the ONE WhatsApp number RUTA itself owns, shared
+// by every tenant, for Assistant chat + the onboarding welcome message.
+// RUTA can't message a brand-new user first (WhatsApp rejects a free-form
+// send outside the 24h customer-service window, and a user who's never
+// messaged in is always outside it - see sendOnboardingWelcomeMessage's own
+// comment) - so onboarding's last screen asks the user to send the first
+// message instead, which is what actually delivers the welcome text (see
+// handleOneMessagePipeline's deferred-welcome-on-first-inbound-message
+// logic). Keep this number in sync with RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID
+// (.env.example) - there's no live endpoint wiring this HTML to that env var,
+// so a number change on one side must be updated on the other by hand.
+const RUTA_WHATSAPP_DISPLAY = "+91 97272 11848";
+const RUTA_WHATSAPP_WA_LINK = "https://wa.me/919727211848?text=" + encodeURIComponent("Hi");
+
 function esc(s) {
   return App.escapeHtml(s);
 }
@@ -117,6 +133,34 @@ function renderBusinessProfile() {
   });
 }
 
+/** Final screen - shown once account setup itself is done (REVIEW's own
+ * completeWizard() already succeeded), before landing on the Dashboard.
+ * Purely instructional, not a gate: "I'll do this later" still goes
+ * straight to the Dashboard, and RUTA's own deferred-welcome logic re-checks
+ * on every future inbound message regardless of whether the user connects
+ * from here, later from the Dashboard's setup checklist, or never sees this
+ * screen at all (e.g. a page reload lands back on the Dashboard directly
+ * via render()'s COMPLETED branch above). */
+function renderConnectRuta() {
+  wizardShell(`
+    <h1>You're all set! 🎉</h1>
+    <p class="sub">One last step - connect your RUTA AI Assistant on WhatsApp so it can answer questions about your leads and send you updates, right from your phone.</p>
+    <div class="hint" style="font-size:14px; margin:14px 0 20px">
+      Send <strong>Hi</strong> to <strong>${esc(RUTA_WHATSAPP_DISPLAY)}</strong> on WhatsApp to connect.
+    </div>
+    <div class="wizard-actions" style="flex-direction:column">
+      <button class="btn full" type="button" id="waBtn">Message RUTA on WhatsApp</button>
+      <button class="btn secondary full" type="button" id="skipConnectBtn">I'll do this later - go to Dashboard</button>
+    </div>
+  `);
+  document.getElementById("waBtn").addEventListener("click", () => {
+    window.open(RUTA_WHATSAPP_WA_LINK, "_blank", "noopener");
+  });
+  document.getElementById("skipConnectBtn").addEventListener("click", () => {
+    window.location.href = "/dashboard.html";
+  });
+}
+
 function showFinishing(message) {
   wizardShell(`<div style="text-align:center; padding:30px 0; color:var(--text-muted); font-size:13px">${esc(message)}</div>`);
 }
@@ -164,7 +208,7 @@ async function finishRemainingSteps(fromStep) {
     if (step === "REVIEW") {
       ctx = await App.apiJson("/api/onboarding/wizard/complete", { method: "POST", body: {} });
     }
-    window.location.href = "/dashboard.html";
+    renderConnectRuta();
   } catch (err) {
     showFinishingError(err.message || "We couldn't finish setting up your account - please try again.");
   }

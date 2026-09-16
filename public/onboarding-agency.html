@@ -21,12 +21,17 @@
      (getOnboardingLinkPreview, completeAgencyOnboarding) resolves the
      agency purely from the token itself.
 
-     Two screens, matching the flow this page was built from:
+     Three screens:
        1. Welcome ("Welcome to {agency}" + Accept Invitation) - a deliberate
           pause before collecting anything, so the link doesn't drop a
           stranger straight into a form with no idea who's asking or why.
        2. Create Your Account (Company Name / Contact Name / Email / Mobile
-          / Password) - the actual registration. -->
+          / Password) - the actual registration.
+       3. Connect RUTA - instructional only (send "Hi" to RUTA's WhatsApp
+          number to activate the AI Assistant), matching onboarding.html's
+          own final screen - see its comment for why this has to be a
+          user-initiated first message rather than something RUTA can just
+          send. -->
 <body>
   <div class="auth-shell">
     <div class="auth-card wide" id="card">
@@ -39,6 +44,36 @@
   const token = new URLSearchParams(window.location.search).get("token");
   const card = document.getElementById("card");
   let currentPreview = null;
+
+  // RUTA AI Assistant platform number - see onboarding.html's own comment
+  // (same constant, same reasoning: RUTA can't message a brand-new user
+  // first, so the user sending the first "Hi" is what actually opens the
+  // window for the deferred welcome message). Keep in sync with
+  // RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID (.env.example) by hand.
+  const RUTA_WHATSAPP_DISPLAY = "+91 97272 11848";
+  const RUTA_WHATSAPP_WA_LINK = "https://wa.me/919727211848?text=" + encodeURIComponent("Hi");
+
+  // Screen 3 - Connect RUTA. Shown once the client company account itself is
+  // created, before landing on the Dashboard - purely instructional, "I'll
+  // do this later" still goes straight through.
+  function renderConnectRuta() {
+    card.innerHTML = `
+      <h1>You're all set! 🎉</h1>
+      <p class="sub">One last step - connect your RUTA AI Assistant on WhatsApp so it can answer questions about your leads and send you updates, right from your phone.</p>
+      <div class="hint" style="font-size:14px; margin:14px 0 20px">
+        Send <strong>Hi</strong> to <strong>${App.escapeHtml(RUTA_WHATSAPP_DISPLAY)}</strong> on WhatsApp to connect.
+      </div>
+      <div class="wizard-actions" style="flex-direction:column">
+        <button class="btn full" type="button" id="waBtn">Message RUTA on WhatsApp</button>
+        <button class="btn secondary full" type="button" id="skipConnectBtn">I'll do this later - go to Dashboard</button>
+      </div>`;
+    document.getElementById("waBtn").addEventListener("click", () => {
+      window.open(RUTA_WHATSAPP_WA_LINK, "_blank", "noopener");
+    });
+    document.getElementById("skipConnectBtn").addEventListener("click", () => {
+      window.location.href = "/dashboard.html";
+    });
+  }
 
   function renderInvalid(message) {
     card.innerHTML = `
@@ -101,8 +136,9 @@
         // completeAgencyOnboarding in src/application/agencyOnboarding.ts -
         // it creates the company and links it to whichever agency the
         // token names, "active", with no further accept step needed) and
-        // also logs the new owner straight in, so the redirect below lands
-        // on an already-signed-in dashboard rather than a login screen.
+        // also logs the new owner straight in, so the Connect RUTA screen
+        // below (and the Dashboard once they're done with it) both land
+        // already signed in rather than at a login screen.
         await App.apiJson(`/api/public/agency-onboarding/${encodeURIComponent(token)}/complete`, {
           method: "POST",
           body: {
@@ -113,7 +149,7 @@
             password: document.getElementById("password").value,
           },
         });
-        window.location.href = "/dashboard.html";
+        renderConnectRuta();
       } catch (err) {
         banner.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
         submitBtn.disabled = false;
