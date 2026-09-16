@@ -806,20 +806,41 @@ async function handleMetaLeadgenWebhook(req: VercelRequest, res: VercelResponse)
       toHandleAsAssistantCount: waResult.toHandleAsAssistant.length,
       assistantRouted: waResult.toHandleAsAssistant.map((m) => ({ tenantId: m.tenantId, fromPhoneNumber: m.fromPhoneNumber, waMessageId: m.waMessageId })),
     });
+    // RUTA AI Assistant - MUST be awaited BEFORE the response below, not
+    // after (see the comment on enqueueCapturedWhatsappEvents for why that
+    // one is different). Vercel does not guarantee a serverless function
+    // keeps running once its HTTP response has been sent - the invocation
+    // can be frozen/torn down at any point after res.json() resolves, with
+    // no error, no log, nothing. That's fine for enqueueCapturedWhatsappEvents
+    // (a fast QStash publish with a 15-minute reconciliation sweep as a
+    // backstop if it gets cut short - see reconcile.ts), but these messages
+    // never touched whatsapp_message_events at all (see captureWhatsappEvents'
+    // own branch) and have NO reconciliation backstop (redis.ts's
+    // tryClaimRutaMessageId's own comment: "there is no backstop behind
+    // this claim") - a real production incident where messages were
+    // correctly routed here (logged all the way through "pipeline_started")
+    // and then simply vanished, with the webhook still reporting 200 OK to
+    // Meta, is what caught this. This does mean the webhook ack is now as
+    // slow as the RUTA pipeline itself (DB + Redis + a Graph API send, and
+    // occasionally an AI provider call) rather than near-instant - accepted
+    // deliberately: tryClaimRutaMessageId's 24h claim already makes a Meta
+    // retry (if this ever did get slow enough to trigger one) a safe no-op,
+    // which is a far better failure mode than a silently dropped message.
+    await handleRutaAssistantMessages(waResult.toHandleAsAssistant);
     // Return success quickly - same "ack the instant storage is durable"
-    // contract as the leadgen path below.
+    // contract as the leadgen path below. Deliberately AFTER the Assistant
+    // messages above (see that block's own comment) but still BEFORE
+    // enqueueCapturedWhatsappEvents just below, since that one is safe to
+    // let run past the ack.
     res.status(200).json({ received: true, captured: waResult.captured });
     // Process asynchronously - hands each newly-captured message to QStash
     // so processWhatsAppMessageEvent.ts (a separate invocation) can create
     // the Lead. Never awaited by anything Meta is waiting on; a publish
     // failure is logged and recovered later by reconcile.ts's own
-    // unenqueued-WhatsApp-event sweep.
+    // unenqueued-WhatsApp-event sweep - this one CAN safely run after the
+    // response because that sweep exists; see the Assistant block above for
+    // why the same isn't true there.
     await enqueueCapturedWhatsappEvents(waResult.toEnqueue);
-    // RUTA AI Assistant - same post-ack timing as the lead pipeline above;
-    // these messages never touched whatsapp_message_events (see
-    // captureWhatsappEvents' own branch) so there is nothing to enqueue
-    // through QStash for them, just the reply to send.
-    await handleRutaAssistantMessages(waResult.toHandleAsAssistant);
     return;
   }
 
