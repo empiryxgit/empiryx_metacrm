@@ -16,6 +16,8 @@
   .wa-dot{ width:9px; height:9px; border-radius:50%; background:#b8b0a4; flex:none; }
   .wa-dot.on{ background:#2fa86b; }
   .wa-examples{ margin:14px 0 0; padding-left:18px; font-size:13px; color:var(--text-muted); }
+  .wa-connect{ margin:16px 0; padding-top:16px; border-top:1px solid var(--border); }
+  .wa-connect p{ margin:0 0 12px; font-size:13px; color:var(--text-muted); }
   .wa-examples li{ margin-bottom:4px; }
 </style>
 </head>
@@ -33,6 +35,12 @@
     <div class="wa-card">
       <div class="wa-status"><span class="wa-dot" id="statusDot"></span><span id="statusText">Checking…</span></div>
       <p class="wa-hint" id="statusHint"></p>
+
+      <div class="wa-connect">
+        <p>Send <strong>Hi</strong> to <strong>+91 97272 11848</strong> on WhatsApp to connect - that's what actually activates RUTA for you (WhatsApp needs you to message first before RUTA can message back).</p>
+        <button class="btn sm" type="button" id="waConnectBtn">Message RUTA on WhatsApp</button>
+      </div>
+
       <ul class="wa-examples">
         <li>"how many leads did we get today"</li>
         <li>"follow-ups today"</li>
@@ -55,6 +63,18 @@
     const statusHint = document.getElementById("statusHint");
     const banner = document.getElementById("banner");
 
+    // RUTA AI Assistant platform number (see src/application/metaSync/
+    // rutaAiAssistant.ts's header) - the ONE WhatsApp number RUTA itself
+    // owns, shared by every tenant. Same number, same reasoning as
+    // onboarding.html/onboarding-agency.html's own "Connect RUTA" screen -
+    // keep this in sync with RUTA_PLATFORM_WHATSAPP_PHONE_NUMBER_ID
+    // (.env.example) by hand, there's no live endpoint wiring this HTML to
+    // that env var.
+    const RUTA_WHATSAPP_WA_LINK = "https://wa.me/919727211848?text=" + encodeURIComponent("Hi");
+    document.getElementById("waConnectBtn").addEventListener("click", () => {
+      window.open(RUTA_WHATSAPP_WA_LINK, "_blank", "noopener");
+    });
+
     function showError(err) {
       banner.innerHTML = `<div class="state-block"><p class="state-title">${(err && err.message) || "Something went wrong."}</p></div>`;
     }
@@ -67,7 +87,7 @@
       statusDot.classList.toggle("on", data.active);
       if (data.active) {
         statusText.textContent = `Active — ${data.phoneNumber}`;
-        statusHint.textContent = "Just message that number on WhatsApp to start asking RUTA questions.";
+        statusHint.textContent = "Your WhatsApp number is on file - send RUTA a message below to get started (or to reactivate if it's been a while).";
       } else {
         statusText.textContent = "Not active yet";
         statusHint.textContent = "No WhatsApp number is on file for your account. Ask an admin to add one from Users → your profile.";
