@@ -515,6 +515,11 @@ body table:not(.table-wrap table){ border:1px solid var(--border); border-radius
 .kpi-card.is-danger .kpi-value{ color:var(--danger); }
 .kpi-card.is-danger{ border-color:#EAD3D3; }
 
+/* "Current Subscription" tile (Dashboard) - the one KPI card that's a real
+   link to /subscription.html rather than a plain stat. */
+.kpi-card-link{ display:block; text-decoration:none; cursor:pointer; transition:background .1s ease, border-color .1s ease; }
+.kpi-card-link:hover{ background:var(--surface-sunken); border-color:var(--border-strong); }
+
 /* Comparison badge under a KPI value - up/down/flat vs the prior period,
    or "New" when there's no prior-period baseline to compare against. */
 .kpi-delta{ display:inline-flex; align-items:center; gap:3px; margin-top:6px; font-size:11.5px; font-weight:600; }

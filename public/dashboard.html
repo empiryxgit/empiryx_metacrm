@@ -46,34 +46,13 @@
 
       <div class="kpi-grid" id="kpiGrid"></div>
 
-      <div class="dash-section">
-        <div class="dash-card">
-          <div class="dash-card-head">
-            <div>
-              <p class="dash-card-title">Lead List</p>
-              <p class="dash-card-sub" id="leadListRangeLabel"></p>
-            </div>
-            <a href="/pipeline.html" class="dash-card-link">View all in Pipeline</a>
-          </div>
-          <div class="table-wrap" id="leadListTableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Contact</th>
-                  <th>Source</th>
-                  <th>Stage</th>
-                  <th>Campaign</th>
-                  <th>Owner</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody id="leadListBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
-            </table>
-          </div>
-          <p class="hint" id="leadListMore" style="margin:8px 2px 0; display:none"></p>
-        </div>
-      </div>
+      <!-- The "Lead List" card (raw per-lead rows for the selected date
+           range) was removed here - it duplicated Pipeline's own List view
+           (which now has real server-side pagination/filters - see
+           public/pipeline.html), and as a company's lead history grows this
+           card was the slowest thing on an otherwise fast, aggregate-only
+           dashboard page. Individual leads are one click away via
+           "View all in Pipeline" links elsewhere on this page. -->
 
       <div class="dash-section">
         <div class="dash-card">
@@ -221,12 +200,6 @@
       { id: "mock-1", name: "Project Acstya", leads: 84, qualified: 31, won: 7, conversionRate: 8.3 },
       { id: "mock-2", name: "Diwali Offer", leads: 52, qualified: 19, won: 4, conversionRate: 7.7 },
     ],
-    leads: [
-      { id: "mock-1", fullName: "Rahul Patel", email: "rahul.patel@example.com", phoneNumber: "+919812345678", sourceLabel: "Meta Lead Ads", stageKey: "qualified", stageLabel: "Qualified", isWon: false, isLost: false, campaignName: "Project Acstya", ownerName: "Mitul", createdAt: new Date(Date.now() - 20 * 60000).toISOString() },
-      { id: "mock-2", fullName: "Priya Menon", email: null, phoneNumber: "+919876500000", sourceLabel: "Website", stageKey: "site_visit", stageLabel: "Site Visit", isWon: false, isLost: false, campaignName: null, ownerName: "Mitul", createdAt: new Date(Date.now() - 90 * 60000).toISOString() },
-      { id: "mock-3", fullName: "Amit Shah", email: "amit.shah@example.com", phoneNumber: null, sourceLabel: "Referral", stageKey: "won", stageLabel: "Won", isWon: true, isLost: false, campaignName: "Diwali Offer", ownerName: null, createdAt: new Date(Date.now() - 3 * 3600000).toISOString() },
-    ],
-    leadsTotal: 3,
     activity: [
       { text: "Rahul Patel moved to Qualified", timestamp: new Date(Date.now() - 20 * 60000).toISOString() },
       { text: "Amit Shah added as customer", timestamp: new Date(Date.now() - 90 * 60000).toISOString() },
@@ -290,7 +263,48 @@
     return "the prior period";
   }
 
-  function renderKpis(kpis, template) {
+  // Formats me.entitlement (see api/auth/handler.ts's handleMe -
+  // getEntitlementSummary) into the "Current Subscription" KPI tile's
+  // value/note/tone. Same trial/subscription states App.renderTrialBanner
+  // already reads (src/domain/trial.ts's EntitlementState) - kept
+  // deliberately lighter-weight copy here since this is a small tile, not
+  // a full banner. Rendered as a real <a> (not a click listener) so the
+  // whole card is a native, keyboard-accessible link straight to
+  // /subscription.html - no extra fetch, this reuses the entitlement
+  // summary already returned by /api/auth/me.
+  function subscriptionTileHtml(entitlementSummary) {
+    if (!entitlementSummary) return "";
+    const state = entitlementSummary.entitlement;
+    let value = "Active";
+    let note = "All set";
+    let tone = "";
+    if (state.kind === "trialing") {
+      value = "Free Trial";
+      note = `${state.daysRemaining} day${state.daysRemaining === 1 ? "" : "s"} left`;
+      tone = state.daysRemaining <= 3 ? "warning" : "";
+    } else if (state.kind === "trial_expired") {
+      value = "Trial Expired";
+      note = "Subscribe to continue";
+      tone = "danger";
+    } else if (state.kind === "subscription_expired") {
+      value = "Expired";
+      note = "Renew to continue";
+      tone = "danger";
+    } else {
+      value = "Active";
+      note = state.expiresAt
+        ? "Renews " + new Date(state.expiresAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+        : "No renewal date set";
+    }
+    return `
+      <a href="/subscription.html" class="kpi-card kpi-card-link${tone ? " is-" + tone : ""}">
+        <div class="kpi-label">Current Subscription</div>
+        <div class="kpi-value">${App.escapeHtml(value)}</div>
+        <div class="kpi-note">${App.escapeHtml(note)}</div>
+      </a>`;
+  }
+
+  function renderKpis(kpis, template, entitlementSummary) {
     const note = "vs previous " + rangeNoteLabel();
     const cards = [
       { label: "Total Leads", value: kpis.totalLeads.value, delta: deltaBadge(kpis.totalLeads.deltaPct), note: "vs " + rangeNoteLabel() + " ago" },
@@ -320,7 +334,7 @@
         <div class="kpi-value">${typeof c.value === "number" ? c.value.toLocaleString() : c.value}</div>
         ${c.delta}
         <div class="kpi-note">${c.note}</div>
-      </div>`).join("");
+      </div>`).join("") + subscriptionTileHtml(entitlementSummary);
   }
 
   // ---- Chart --------------------------------------------------------------
@@ -442,49 +456,6 @@
       </div>`;
   }
 
-  // ---- Lead list (date-range scoped - see api/dashboard/index.ts's own
-  // comment on `leadList`). Re-fetched and re-rendered on every range
-  // change exactly like every other section on this page - no separate
-  // fetch/state of its own, see renderAll/fetchAndRender below. ----------
-  function fmtLeadDate(iso) {
-    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-  }
-  function stagePillClass(row) {
-    return row.isWon ? "processed" : row.isLost ? "failed" : "pending";
-  }
-  function renderLeadList(leadsList, total) {
-    const body = document.getElementById("leadListBody");
-    if (!leadsList.length) {
-      // Rich empty-state CTA (PHASE 16) rather than a bare "no data" line -
-      // the same message either way (this section is always period-scoped,
-      // so there's no way to tell "brand-new account" from "quiet week"
-      // from here alone), but a brand-new account genuinely has nowhere
-      // else on this page to learn what to do next.
-      body.innerHTML = `<tr><td colspan="7" class="empty">
-        No leads in this period yet. <a href="/pipeline.html">+ Add a customer</a> to get started.
-      </td></tr>`;
-      document.getElementById("leadListMore").style.display = "none";
-      return;
-    }
-    body.innerHTML = leadsList.map(l => `
-      <tr>
-        <td>${App.escapeHtml(l.fullName || "Unnamed lead")}</td>
-        <td>${App.escapeHtml(l.email || l.phoneNumber || "—")}</td>
-        <td>${App.escapeHtml(l.sourceLabel)}</td>
-        <td><span class="pill ${stagePillClass(l)}">${App.escapeHtml(l.stageLabel)}</span></td>
-        <td>${l.campaignName ? App.escapeHtml(l.campaignName) : '<span style="color:var(--text-muted)">—</span>'}</td>
-        <td>${l.ownerName ? App.escapeHtml(l.ownerName) : '<span style="color:var(--text-muted)">Unassigned</span>'}</td>
-        <td>${fmtLeadDate(l.createdAt)}</td>
-      </tr>`).join("");
-    const more = document.getElementById("leadListMore");
-    if (total > leadsList.length) {
-      more.textContent = `Showing the latest ${leadsList.length} of ${total} leads in this period — view all in Pipeline.`;
-      more.style.display = "";
-    } else {
-      more.style.display = "none";
-    }
-  }
-
   // ---- Campaign performance table ---------------------------------------
   function renderCampaigns() {
     const body = document.getElementById("campaignBody");
@@ -564,8 +535,7 @@
   }
 
   function renderAll(data) {
-    renderKpis(data.kpis, data.template);
-    renderLeadList(data.leads || [], data.leadsTotal ?? (data.leads || []).length);
+    renderKpis(data.kpis, data.template, currentMe?.entitlement);
     renderChartLegend();
     renderChart(data.chart);
     renderFunnel(data.funnel);
@@ -576,7 +546,6 @@
     renderActivity(data.activity);
     renderFollowUps(data.followUps);
     const rangeLabel = rangeKey === "today" ? "today" : rangeKey === "7d" ? "the last 7 days" : rangeKey === "30d" ? "the last 30 days" : "the selected range";
-    document.getElementById("leadListRangeLabel").textContent = "Leads captured " + rangeLabel;
     document.getElementById("chartRangeLabel").textContent = "New, qualified and won leads over " + rangeLabel;
     document.getElementById("sourceRangeLabel").textContent = "New leads and customers, " + rangeLabel;
     document.getElementById("leadApproachRangeLabel").textContent = "How leads were captured, " + rangeLabel;
@@ -697,7 +666,7 @@
       return;
     }
 
-    const totalLeads = dashboardData?.kpis?.totalLeads?.value ?? dashboardData?.leadsTotal ?? 0;
+    const totalLeads = dashboardData?.kpis?.totalLeads?.value ?? 0;
     // `href` is the page a pending item's row links to so the user can go
     // complete it directly from here, per the reported request ("any
     // pending steps will have url... where user will click on it").
