@@ -6,7 +6,7 @@
 import { getLeadDetails, MetaApiError } from "../infrastructure/meta/graphClient";
 import { releaseLeadIdClaim, tryClaimLeadId } from "../infrastructure/cache/redis";
 import { insertLead, leadExistsByMetaLeadId, logEvent } from "../infrastructure/db/repositories";
-import { getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
+import { getCampaign, getWebhookConfigByCampaignIdInternal } from "../infrastructure/db/repositories/campaigns";
 import { isLeadIngestionBlocked } from "./billing";
 import { resolveLeadFields } from "./metaSync/resolveLeadFields";
 import { LeadPlatform } from "../domain/types";
@@ -31,6 +31,21 @@ export async function processLead(
   // per-campaign one.
   if (await isLeadIngestionBlocked(companyId)) {
     await logEvent({ rawEventId, eventType: "Blocked", detail: `Account entitlement blocked (trial/subscription expired): ${metaLeadId}` });
+    return "blocked";
+  }
+
+  // Campaign-limit fix - the per-campaign counterpart to the account-level
+  // check just above (mirrors processMetaLeadEvent.ts's own gate on the
+  // tenant-level Meta sync pipeline; see that module's header comment for
+  // the full reasoning). Checked this early, before the Redis claim, is
+  // possible here specifically because this legacy pipeline already knows
+  // crmCampaignId up front (one webhook config per campaign) - no Graph API
+  // round trip needed to learn it, unlike the newer pipeline. A missing
+  // campaign row is treated the same as an explicitly paused/archived one:
+  // fail closed, never ingest.
+  const campaign = await getCampaign(companyId, crmCampaignId);
+  if (!campaign || campaign.status === "paused" || campaign.status === "archived") {
+    await logEvent({ rawEventId, eventType: "Blocked", detail: `Campaign not active (paused/archived/missing): ${metaLeadId}` });
     return "blocked";
   }
 

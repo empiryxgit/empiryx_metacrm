@@ -39,15 +39,14 @@ export interface UpsertMetaCampaignInput {
  * ever refreshes name/status/metaAdAccountId/lastSyncAt - crmCampaignId is
  * NEVER touched here, on insert (defaults to null/"unmapped") or on
  * conflict, since the CRM mapping is owned entirely by an explicit action
- * (see mapMetaCampaignToCrmCampaign), never implicitly by this upsert.
- * That explicit action is usually a person (meta-campaign.html), but as of
- * the sync's own auto-map-on-first-sync step (see
- * syncCampaignsForSelectedAdAccount in metaCampaignService.ts, which calls
- * this function then separately checks "was this row brand new?" before
- * ever calling mapMetaCampaignToCrmCampaign itself) it can also be the
- * sync bootstrapping a brand-new campaign - the contract this comment
- * describes ("never implicitly, only via an explicit call") still holds
- * either way; only WHO calls that explicit function has widened.
+ * (see mapMetaCampaignToCrmCampaign), never implicitly by this upsert. That
+ * explicit action is always a person, via meta-campaign.html's Activate
+ * button (api/campaigns/handler.ts's handleMapMetaCampaign) - the sync
+ * itself (syncCampaignsForSelectedAdAccount in metaCampaignService.ts) used
+ * to also auto-map a brand-new campaign's first sync, but that auto-mapping
+ * was removed as part of the campaign-limit fix (it bypassed the plan's
+ * campaign-slot check entirely); sync's job now is only ever this upsert -
+ * discovery, never mapping.
  */
 export async function upsertMetaCampaign(tenantId: string, adAccountRowId: string, input: UpsertMetaCampaignInput) {
   const db = await getDb();
@@ -189,6 +188,12 @@ export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string,
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
+      // Campaign-limit fix: the CRM campaign's own status (draft/active/
+      // paused/archived - see campaigns.status's schema.ts comment), NOT
+      // Meta's own status above - lets the Meta Campaigns screen show
+      // whether a mapped campaign is currently Activated or Deactivated
+      // (paused) without a second round trip. Null when unmapped.
+      crmCampaignStatus: campaigns.status,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -226,6 +231,8 @@ export async function getMetaCampaignWithMappingByRowId(tenantId: string, metaCa
       lastSyncAt: metaCampaigns.lastSyncAt,
       crmCampaignId: metaCampaigns.crmCampaignId,
       crmCampaignName: campaigns.name,
+      // See listMetaCampaignsWithMappingForAdAccount's own comment.
+      crmCampaignStatus: campaigns.status,
     })
     .from(metaCampaigns)
     .leftJoin(campaigns, eq(metaCampaigns.crmCampaignId, campaigns.id))
@@ -274,9 +281,14 @@ export async function mapMetaCampaignToCrmCampaign(tenantId: string, metaCampaig
   return rows[0] ?? null;
 }
 
-/** Clears the mapping - the Meta campaign keeps syncing, its leads simply
- * go back to being captured unmapped (crmCampaignId null on new leads)
- * until it's mapped again. */
+/** Clears the mapping entirely (crmCampaignId -> null) - the Meta campaign
+ * keeps syncing, but a lead for it now resolves no crmCampaignId at all
+ * until it's mapped again. Campaign-limit fix: this is NOT what the
+ * Deactivate button calls any more - see api/campaigns/handler.ts's
+ * handleUnmapMetaCampaign, which pauses the mapped CRM campaign instead of
+ * severing the link, so history/re-Activation stay intact. Kept as its own
+ * primitive (currently unused outside tests) for the genuinely different
+ * case of undoing a wrong mapping rather than deactivating a right one. */
 export async function unmapMetaCampaign(tenantId: string, metaCampaignRowId: string) {
   const db = await getDb();
   const rows = await db

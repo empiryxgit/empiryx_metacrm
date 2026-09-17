@@ -20,9 +20,7 @@ import {
   replaceMetaAdSets,
   replaceMetaAds,
   getMetaCampaignByMetaCampaignId,
-  mapMetaCampaignToCrmCampaign,
 } from "../../infrastructure/db/repositories/metaSync";
-import { createCampaign } from "../../infrastructure/db/repositories/campaigns";
 import { resolveLeadApproachForAd } from "./metaLeadApproachResolver";
 import { upsertMetaLeadRoute } from "../../infrastructure/db/repositories/whatsapp";
 
@@ -32,7 +30,7 @@ export interface SyncCampaignsResult {
   campaignsCount: number;
   adSetsCount: number;
   adsCount: number;
-  autoMappedCount: number; // brand-new Meta campaigns this run auto-created + mapped a CRM campaign for
+  newCampaignsCount: number; // brand-new Meta campaigns this run discovered (upserted into metaCampaigns) but did NOT auto-map - see this function's own comment
   // WhatsApp Lead Capture feature (Phase 3/4) - how many of this run's ads
   // resolved to each lead approach. UNDETERMINED ads are the "Action
   // required" signal the Settings screen surfaces (Phase 19).
@@ -48,7 +46,7 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
       campaignsCount: 0,
       adSetsCount: 0,
       adsCount: 0,
-      autoMappedCount: 0,
+      newCampaignsCount: 0,
       leadApproachCounts: { metaInstantForm: 0, whatsapp: 0, unknown: 0 },
     };
   }
@@ -57,18 +55,27 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
 
   let adSetsCount = 0;
   let adsCount = 0;
-  let autoMappedCount = 0;
+  let newCampaignsCount = 0;
   const leadApproachCounts = { metaInstantForm: 0, whatsapp: 0, unknown: 0 };
 
   for (const campaign of campaigns) {
-    // Looked up BEFORE the upsert below, specifically so this only ever
-    // fires for a Meta campaign this tenant has never synced before - a
-    // Meta campaign RUTA has already seen, even one currently unmapped
-    // because a person explicitly unmapped it, is left exactly as it is.
-    // upsertMetaCampaign itself still never touches crmCampaignId (its own
-    // contract, unchanged); auto-mapping only ever happens here, as this
-    // one explicit, one-time bootstrap step for a brand-new campaign.
+    // Looked up BEFORE the upsert below, purely to count how many of this
+    // run's campaigns are brand-new discoveries (never seen before) for the
+    // "Loading Campaigns" step's summary note - has no effect on behavior.
+    //
+    // Campaign-limit fix: sync used to auto-create a CRM campaign and
+    // auto-map it for every brand-new Meta campaign found here, with NO
+    // regard for the tenant's plan/trial campaign limit - the root cause of
+    // "all campaigns load regardless of plan." Sync's job is now ONLY
+    // discovery: upsert the raw Meta campaign into metaCampaigns (below) so
+    // it's visible for selection. Turning a discovered Meta campaign into a
+    // tracked CRM campaign (and thus something that can receive leads) is
+    // now always an explicit "Activate" action the user takes on the Meta
+    // Campaigns screen (api/campaigns/handler.ts's handleMapMetaCampaign),
+    // which enforces the plan's remaining slot count at that one action
+    // point - see that handler's own comment.
     const alreadySynced = await getMetaCampaignByMetaCampaignId(tenantId, campaign.id);
+    if (!alreadySynced) newCampaignsCount++;
 
     const metaCampaignRow = await upsertMetaCampaign(tenantId, selectedAdAccount.id, {
       metaCampaignId: campaign.id,
@@ -77,23 +84,6 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
       startTime: campaign.startTime,
       stopTime: campaign.stopTime,
     });
-
-    if (!alreadySynced) {
-      // First time this tenant has ever synced this Meta campaign - create
-      // and map a same-named CRM campaign automatically so leads land
-      // somewhere useful without a manual "create a CRM campaign, then map
-      // it" round trip. The tenant can rename it (campaign.html) any time
-      // afterward - this is only ever a starting point, never a lock-in.
-      const crmCampaign = await createCampaign({
-        companyId: tenantId,
-        name: campaign.name,
-        platform: "facebook",
-        createdBy: null, // system-created, not a person - see createCampaign's own comment
-        source: "meta_sync",
-      });
-      await mapMetaCampaignToCrmCampaign(tenantId, metaCampaignRow.id, crmCampaign.id);
-      autoMappedCount++;
-    }
 
     const adSets = await getCampaignAdSets(campaign.id, userAccessToken);
     if (adSets.length === 0) continue;
@@ -158,5 +148,5 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
     }
   }
 
-  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount, autoMappedCount, leadApproachCounts };
+  return { skipped: false, campaignsCount: campaigns.length, adSetsCount, adsCount, newCampaignsCount, leadApproachCounts };
 }

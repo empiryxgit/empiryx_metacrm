@@ -252,18 +252,19 @@
     if (!mapped.length) {
       rows.innerHTML = `<tr><td colspan="3">
         <div class="state-block">
-          <p class="state-title">No Meta campaigns mapped yet</p>
-          <p class="state-desc">New Meta campaigns are mapped here automatically the next time Meta assets sync - see <a href="/campaigns.html">Campaigns</a>.</p>
+          <p class="state-title">No Meta campaigns activated yet</p>
+          <p class="state-desc">Meta campaigns are discovered automatically, but each one has to be explicitly Activated against an LMS campaign - see <a href="/campaigns.html">Campaigns</a>.</p>
         </div>
       </td></tr>`;
       return;
     }
-    // Report - the manual mapping screen (meta-campaign.html) is disabled;
-    // sync already auto-maps every new Meta campaign to a CRM campaign, so
-    // this row is no longer a link into it - see campaigns.html's own
-    // Meta Campaigns table for the same change.
+    // Campaign-limit fix: sync only discovers Meta campaigns now, it never
+    // auto-maps one on its own (see metaCampaignService.ts's own comment) -
+    // so a row here is once again a real click-through into the
+    // Activate/Deactivate screen, same as campaigns.html's own Meta
+    // Campaigns table.
     rows.innerHTML = mapped.map((c) => `
-      <tr>
+      <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>

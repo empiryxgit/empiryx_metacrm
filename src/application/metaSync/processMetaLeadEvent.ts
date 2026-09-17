@@ -19,12 +19,21 @@
 // getMetaPageInternalByPageId - the same token Phase 5/6's sync already
 // uses for Forms), and resolves which CRM campaign the lead belongs to
 // from the lead's OWN Meta campaign id, matched against whatever Phase 6's
-// sync has already brought in (getMetaCampaignByMetaCampaignId). If that
-// Meta campaign hasn't been synced yet, OR has been synced but not yet
-// mapped to a CRM campaign (Phase 9: mapping is a separate, explicit user
-// action - see mapMetaCampaignToCrmCampaign), the lead is still captured -
-// just left unmapped (crmCampaignId null) rather than dropped or retried
-// forever over something a resync/mapping will fix on its own.
+// sync has already brought in (getMetaCampaignByMetaCampaignId).
+//
+// Campaign-limit fix: a lead is now only ever INGESTED when its Meta
+// campaign is currently Activated - mapped to a CRM campaign that is
+// itself not paused/archived (see api/campaigns/handler.ts's
+// handleMapMetaCampaign/handleUnmapMetaCampaign for what Activate/
+// Deactivate do at the campaign-row level). Never-synced, synced-but-never-
+// mapped, and mapped-but-Deactivated all resolve to the same outcome:
+// "blocked", exactly like an account-level entitlement block. This used to
+// be "capture it anyway, just unmapped (crmCampaignId null)" - that
+// captured-but-unmapped posture is exactly the "system glitch" this feature
+// closes (leads for a campaign nobody selected, or one someone explicitly
+// turned off, must never land in the CRM at all) - never a hard failure or
+// a retry, since an unmapped/deactivated Meta campaign is an ordinary,
+// expected state, not an error.
 
 import { getLeadDetails, MetaApiError } from "../../infrastructure/meta/graphClient";
 import { releaseLeadIdClaim, tryClaimLeadId } from "../../infrastructure/cache/redis";
@@ -40,6 +49,7 @@ import {
 } from "../../infrastructure/db/repositories/metaLeadEvents";
 import { getMetaPageInternalByPageId } from "../../infrastructure/db/repositories/metaIntegration";
 import { getMetaCampaignByMetaCampaignId } from "../../infrastructure/db/repositories/metaSync";
+import { getCampaign } from "../../infrastructure/db/repositories/campaigns";
 import { resolveLeadFields } from "./resolveLeadFields";
 import { RetryableProcessingError } from "../processLead";
 import { LeadPlatform } from "../../domain/types";
@@ -155,17 +165,34 @@ export async function processMetaLeadEvent(
     const contact = await resolveLeadFields(tenantId, details.formId, details.fieldData);
 
     // Resolve which CRM campaign this lead belongs to from the lead's OWN
-    // Meta campaign id - see this module's header comment for why an
-    // unsynced or unmapped campaign is captured-but-unmapped rather than a
-    // failure. Phase 9: the lead's crmCampaignId comes from the Meta
-    // campaign's MAPPING (metaCampaign.crmCampaignId), never from the
-    // metaCampaigns row's own id - a synced-but-unmapped Meta campaign
-    // still captures the lead, just with crmCampaignId left null.
+    // Meta campaign id - see this module's header comment. Phase 9: the
+    // lead's crmCampaignId comes from the Meta campaign's MAPPING
+    // (metaCampaign.crmCampaignId), never from the metaCampaigns row's own
+    // id.
     const metaCampaign = details.campaignId ? await getMetaCampaignByMetaCampaignId(tenantId, details.campaignId) : null;
+    const crmCampaign = metaCampaign?.crmCampaignId ? await getCampaign(tenantId, metaCampaign.crmCampaignId) : null;
+
+    // Campaign-limit fix - see this module's header comment. Not mapped at
+    // all, or mapped to a campaign that's paused/archived (Deactivated),
+    // both mean "do not load this lead into the CRM." Checked here rather
+    // than before getLeadDetails above because campaignId is only known
+    // from the lead's own fetched details, not from the raw webhook event -
+    // an unavoidable one Graph API call even for a campaign that turns out
+    // to be inactive, same tradeoff the account-level block already accepts
+    // once past its own check.
+    if (!crmCampaign || crmCampaign.status === "paused" || crmCampaign.status === "archived") {
+      await releaseLeadIdClaim(metaLeadId); // never insert, so never hold the claim - a later Activate should let this lead (or its next redelivery) through
+      await markMetaLeadEventBlocked(leadEventId);
+      await logEvent({
+        eventType: "Blocked",
+        detail: `Meta campaign not active/selected (metaCampaignId=${details.campaignId ?? "unknown"}): ${metaLeadId}`,
+      });
+      return "blocked";
+    }
 
     const result = await insertMetaSyncLead({
       companyId: tenantId,
-      crmCampaignId: metaCampaign?.crmCampaignId ?? null,
+      crmCampaignId: crmCampaign.id,
       metaLeadId: details.id,
       // Meta's leadgen webhook envelope's top-level `object` is always
       // "page" for both Facebook and Instagram lead ads placements - there

@@ -64,16 +64,18 @@
 
     <div id="metaSection"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading Meta status…</div></div>
 
-    <!-- Report - hidden for now: every Meta campaign already gets its own
-         matching CRM campaign auto-created and mapped during sync (see the
-         "auto-mapped to CRM" step in meta.html's sync checklist), so this
-         manual "create your own CRM campaign and map Meta campaigns to it"
-         section is redundant for the Meta-driven flow this app is actually
-         used for right now. The section, its JS (loadCrmCampaigns et al.),
-         and its API calls are all left completely intact - only display is
-         toggled - so this is a one-line revert if a non-Meta lead source
-         ever needs manual CRM campaigns again. -->
-    <div class="manual-campaigns-section" style="display:none">
+    <!-- Campaign-limit fix: this section used to be hidden, on the
+         assumption that every Meta campaign already got its own matching
+         CRM campaign auto-created and mapped during sync. That auto-create
+         step is exactly what was removed (see metaCampaignService.ts's own
+         comment) - it bypassed the plan's campaign-slot limit entirely.
+         Sync now only ever DISCOVERS Meta campaigns; turning one into
+         something that tracks leads means Activating it on
+         meta-campaign.html against an LMS campaign, and that screen's
+         "LMS campaign" dropdown is populated from THIS section's list - so
+         this is no longer redundant, it's the one place that list comes
+         from. Shown again unconditionally. -->
+    <div class="manual-campaigns-section">
       <div class="page-head" style="margin-bottom:14px">
         <div class="page-head-text">
           <h2 class="section-title" style="margin:0">LMS campaigns</h2>
@@ -212,7 +214,7 @@
   }
 
   // =======================================================================
-  // Meta Campaigns - synced automatically once a Page + Ad Account are
+  // Meta Campaigns - discovered automatically once a Page + Ad Account are
   // selected (Settings -> Integrations -> Meta). No campaign is ever
   // created manually and no Meta ID is ever typed in to get here; the
   // "Connect Meta" flow front-and-center on this screen is deliberately
@@ -221,9 +223,18 @@
   // Phase 9: a Meta Campaign is its own first-class object, entirely
   // separate from the CRM `campaigns` list below - this table is sourced
   // from /api/campaigns/meta (the metaCampaigns table), never filtered out
-  // of /api/campaigns. A Meta campaign can be unmapped (still capturing
-  // leads, just without a CRM campaign attached) or mapped to any one CRM
-  // campaign (and several Meta campaigns can share the same one).
+  // of /api/campaigns.
+  //
+  // Campaign-limit fix: sync only ever DISCOVERS Meta campaigns now - it no
+  // longer auto-creates/auto-maps a CRM campaign for each one (see
+  // metaCampaignService.ts's own comment), so a row here can be "Not
+  // selected" (never activated), "Active" (mapped to a CRM campaign that's
+  // itself live), or "Deactivated" (mapped, but that CRM campaign is
+  // paused/archived - leads already captured are kept, no new ones are
+  // ingested). Turning a row into Active/Deactivated is always the person's
+  // own explicit choice, made on meta-campaign.html (click through to
+  // Activate/Deactivate), gated there by the plan's remaining campaign-slot
+  // count.
   // =======================================================================
 
   function renderMetaSection(status) {
@@ -266,6 +277,7 @@
         <h2 class="section-title">Meta Campaigns</h2>
         <a href="/settings/integrations/meta.html" style="font-size:12.5px">Manage Meta connection →</a>
       </div>
+      <p class="hint" id="metaCampaignLimitHint" style="margin:0 0 10px"></p>
 
       <div class="list-toolbar">
         <div class="field-inline">
@@ -276,7 +288,7 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Campaign</th><th>Status</th><th>Leads</th><th>Mapped LMS campaign</th><th style="width:150px"></th></tr></thead>
+          <thead><tr><th>Campaign</th><th>Meta status</th><th>Leads</th><th>LMS campaign</th><th style="width:150px"></th></tr></thead>
           <tbody id="metaRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
@@ -327,6 +339,11 @@
       metaRows.innerHTML = `<tr><td colspan="5" class="empty">Unable to load Meta campaigns right now.</td></tr>`;
       return;
     }
+    const limitHint = document.getElementById("metaCampaignLimitHint");
+    if (limitHint && data.campaignLimit) {
+      const { used, limit } = data.campaignLimit;
+      limitHint.textContent = `${used} of ${limit} campaign slot${limit === 1 ? "" : "s"} used on your plan. Activate/Deactivate a campaign below to free up or use a slot.`;
+    }
     renderMetaCampaignsTable(data.metaCampaigns, data.pagination);
   }
 
@@ -349,23 +366,28 @@
       return;
     }
 
-    // Report - the manual "click a row to map it to a CRM campaign" screen
-    // (meta-campaign.html) is disabled here: sync already auto-creates and
-    // maps a matching CRM campaign for every new Meta campaign (see the
-    // "auto-mapped to CRM" step in meta.html's sync checklist), so the row
-    // is no longer a link - just data, plus the one action (Performance)
-    // that's still a real manual step.
-    metaRows.innerHTML = rows.map((c) => `
-      <tr>
+    // Campaign-limit fix: rows are clickable again, straight through to
+    // meta-campaign.html's Activate/Deactivate screen - sync no longer
+    // auto-creates/maps a CRM campaign on its own (see this section's own
+    // header comment), so turning a discovered campaign into a live one is
+    // always this explicit click-through, never automatic.
+    metaRows.innerHTML = rows.map((c) => {
+      const isActive = !!c.crmCampaignId && c.crmCampaignStatus !== "paused" && c.crmCampaignStatus !== "archived";
+      const lmsCell = !c.crmCampaignId
+        ? '<span style="color:var(--text-muted)">Not selected</span>'
+        : `<span class="pill ${isActive ? "active" : "paused"}">${isActive ? "Active" : "Deactivated"}</span> ${App.escapeHtml(c.crmCampaignName)}`;
+      return `
+      <tr onclick="window.location.href='/meta-campaign.html?id=${c.id}'" style="cursor:pointer">
         <td><strong>${App.escapeHtml(c.name)}</strong></td>
         <td><span class="pill ${c.status}">${statusLabel(c.status)}</span></td>
         <td>${c.leadsCount}</td>
-        <td>${c.crmCampaignName ? App.escapeHtml(c.crmCampaignName) : '<span style="color:var(--text-muted)">Unmapped</span>'}</td>
+        <td>${lmsCell}</td>
         <td>
-          <button type="button" class="btn secondary sm" onclick="openInsightsModal('${c.id}')">📊 Performance</button>
+          <button type="button" class="btn secondary sm" onclick="event.stopPropagation(); openInsightsModal('${c.id}')">📊 Performance</button>
         </td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
 
     App.renderPagination(metaPaginationBar, pagination, {
       onPageChange: (p) => { metaPage = p; loadMetaCampaigns(); },

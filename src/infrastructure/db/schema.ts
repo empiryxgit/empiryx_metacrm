@@ -1044,18 +1044,23 @@ export const campaigns = crm.table("campaigns", {
   platform: text("platform").notNull().default("facebook"), // facebook | instagram | both
   status: text("status").notNull().default("draft"), // draft | active | paused | archived
   // Provenance only. "manual" - created directly via Create Campaign (or
-  // any other person-initiated action). "meta_sync" - auto-created, either
-  // by the one-time Phase 9 migration backfilling a pre-Phase-9 row that
-  // used to double as both the CRM campaign AND its Meta campaign (see
-  // migration 0009), or - as of the sync pipeline auto-mapping a brand-new
-  // Meta campaign the first time it's ever synced (see
-  // syncCampaignsForSelectedAdAccount in metaCampaignService.ts) -
-  // ongoing, going forward. Either way this is only ever a starting point:
-  // a "meta_sync" row is a completely normal campaigns row from that
-  // moment on, freely renamable/reassignable, and re-mapping a Meta
-  // campaign to a DIFFERENT existing CRM campaign never creates or renames
-  // a `campaigns` row - that still only happens on first sync. Not a DB
-  // enum, same convention as every other status/source column in this
+  // any other person-initiated action) - and, as of the campaign-limit fix,
+  // this is now the ONLY way a row is ever created: the sync pipeline
+  // (syncCampaignsForSelectedAdAccount in metaCampaignService.ts) used to
+  // also auto-create a "meta_sync" row the first time it saw a brand-new
+  // Meta campaign, bypassing the plan's campaign-slot limit entirely - that
+  // auto-create was removed, so sync now only ever discovers/upserts
+  // metaCampaigns rows, and a person always explicitly picks (or first
+  // creates, via the same Create Campaign flow) which EXISTING `campaigns`
+  // row to Activate a Meta campaign against (see
+  // api/campaigns/handler.ts's handleMapMetaCampaign). "meta_sync" itself
+  // is therefore purely historical going forward - still present on rows
+  // created before this fix (either by that old auto-create step, or by
+  // the one-time Phase 9 migration backfilling a pre-Phase-9 row that used
+  // to double as both the CRM campaign AND its Meta campaign, see migration
+  // 0009) - and those rows remain completely normal, freely renamable/
+  // reassignable campaigns rows, same as always. Not a DB enum, same
+  // convention as every other status/source column in this
   // schema.
   source: text("source").notNull().default("manual"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),

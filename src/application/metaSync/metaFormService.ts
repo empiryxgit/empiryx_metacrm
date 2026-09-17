@@ -69,8 +69,8 @@ export async function syncFormsForSelectedPage(tenantId: string): Promise<SyncFo
   // Looked up BEFORE the upsert below, specifically so the historical
   // backfill only ever fires for a form this tenant has never synced
   // before - the exact same "check existence before upsert" pattern
-  // metaCampaignService.ts uses to gate its own "auto-map on first sync"
-  // step. Sequential (a handful of local existence checks, not Graph API
+  // metaCampaignService.ts uses to count its own newCampaignsCount.
+  // Sequential (a handful of local existence checks, not Graph API
   // calls - no rate-limit concern).
   const brandNewFormIds: string[] = [];
   for (const form of forms) {

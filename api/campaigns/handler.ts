@@ -30,7 +30,6 @@ import {
   getMetaCampaignWithMappingByRowId,
   listMetaCampaignsWithMappingForAdAccount,
   mapMetaCampaignToCrmCampaign,
-  unmapMetaCampaign,
 } from "../../src/infrastructure/db/repositories/metaSync";
 import { getSelectedMetaAdAccount } from "../../src/infrastructure/db/repositories/metaIntegration";
 import { PERMISSIONS } from "../../src/domain/permissions";
@@ -45,6 +44,7 @@ import {
   createOverageOrder,
   getBillingHistory,
   getBillingStatus,
+  getCampaignLimitStatus,
   LimitExceededError,
   verifyAndApplyOveragePayment,
 } from "../../src/application/billing";
@@ -275,6 +275,33 @@ async function handleWebhook(req: VercelRequest, res: VercelResponse, campaignId
 // screen's "Meta Campaigns" table. POST .../map and .../unmap are THE
 // mapping action - the only way a Meta campaign's crmCampaignId ever
 // changes (never the sync itself, see upsertMetaCampaign's own comment).
+//
+// Campaign-limit fix: sync no longer auto-creates+auto-maps a CRM campaign
+// for every Meta campaign it discovers (see metaCampaignService.ts's own
+// comment) - .../map is now the ONE place a Meta campaign is turned into
+// something that actively tracks/ingests leads, so it's also the one place
+// that must enforce the plan's remaining campaign-slot count. The UI
+// (meta-campaign.html) presents these two actions as "Activate"/
+// "Deactivate" - the URL segments (map/unmap) and DB verb
+// (mapMetaCampaignToCrmCampaign) are kept unchanged under the hood, only
+// what they DO at the campaign-row level has changed:
+//   - Activate (POST .../map): maps to the chosen CRM campaign as before,
+//     but if that CRM campaign is currently paused/archived (i.e. NOT
+//     occupying a plan slot - see isCampaignCountedForLimit in billing.ts),
+//     reactivating it (status -> "active") is gated by
+//     assertCampaignLimitNotReached first, exactly like creating a brand
+//     new one already was. Mapping to a campaign that's already
+//     active/draft is a no-op on status/limit, same as before this fix.
+//   - Deactivate (POST .../unmap): no longer severs the mapping. It PAUSES
+//     the mapped CRM campaign (status -> "paused") instead, which (a) frees
+//     its plan slot for another campaign to be activated into - the "let
+//     user deactivate the older one and load the new one" swap flow - and
+//     (b) is what processMetaLeadEvent.ts (and its sibling ingestion
+//     workers) now check before ingesting a NEW lead for this Meta
+//     campaign, while every lead already captured stays exactly as it is
+//     (see that file's own comment). Keeping the mapping intact (rather
+//     than nulling crmCampaignId) is what makes Activate-after-Deactivate a
+//     plain status flip instead of a second, ambiguous "map again" pick.
 // ---------------------------------------------------------------------------
 async function handleMetaCampaigns(req: VercelRequest, res: VercelResponse) {
   const metaCampaignId = getQueryString(req, "metaCampaignId");
@@ -309,6 +336,10 @@ async function handleGetOneMetaCampaign(req: VercelRequest, res: VercelResponse,
   }
 
   const leadCounts = await getLeadCountsByMetaCampaignId(auth.companyId, [metaCampaign.metaCampaignId]);
+  // Campaign-limit fix: same "show it before they click" reasoning as
+  // handleMetaCampaignsCollection's own campaignLimit field - see that
+  // handler's comment.
+  const campaignLimitStatus = await getCampaignLimitStatus(auth.companyId);
 
   res.status(200).json({
     metaCampaign: {
@@ -321,7 +352,17 @@ async function handleGetOneMetaCampaign(req: VercelRequest, res: VercelResponse,
       lastSyncAt: metaCampaign.lastSyncAt,
       crmCampaignId: metaCampaign.crmCampaignId,
       crmCampaignName: metaCampaign.crmCampaignName,
+      // Campaign-limit fix: lets meta-campaign.html show "Active" vs
+      // "Deactivated" (paused) without a second call - see
+      // getMetaCampaignWithMappingByRowId's own comment. Null when
+      // unmapped, same as crmCampaignId/crmCampaignName.
+      crmCampaignStatus: metaCampaign.crmCampaignStatus,
       leadsCount: leadCounts[metaCampaign.metaCampaignId] ?? 0,
+    },
+    campaignLimit: {
+      used: campaignLimitStatus.used,
+      limit: campaignLimitStatus.limit,
+      remaining: campaignLimitStatus.remaining,
     },
   });
 }
@@ -362,6 +403,13 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
     auth.companyId,
     metaCampaigns.map((c) => c.metaCampaignId),
   );
+  // Campaign-limit fix: the Meta Campaigns screen needs the tenant's
+  // current used/limit/remaining right alongside the list, so it can show
+  // "2 of 5 campaign slots used" and disable/explain a blocked Activate
+  // button up front, instead of only finding out via a 402 after the click.
+  // The endpoint below is still the authoritative gate either way - this is
+  // purely so the UI can be honest before the user tries.
+  const campaignLimitStatus = await getCampaignLimitStatus(auth.companyId);
 
   res.status(200).json({
     metaCampaigns: metaCampaigns.map((c) => ({
@@ -374,9 +422,15 @@ async function handleMetaCampaignsCollection(req: VercelRequest, res: VercelResp
       lastSyncAt: c.lastSyncAt,
       crmCampaignId: c.crmCampaignId,
       crmCampaignName: c.crmCampaignName,
+      crmCampaignStatus: c.crmCampaignStatus,
       leadsCount: leadCounts[c.metaCampaignId] ?? 0,
     })),
     pagination: buildPaginationMeta(page, pageSize, total),
+    campaignLimit: {
+      used: campaignLimitStatus.used,
+      limit: campaignLimitStatus.limit,
+      remaining: campaignLimitStatus.remaining,
+    },
   });
 }
 
@@ -405,13 +459,33 @@ async function handleMapMetaCampaign(req: VercelRequest, res: VercelResponse, me
     return;
   }
 
+  // "Activate" - see this section's own header comment. Only reactivating a
+  // currently paused/archived campaign actually needs the limit check: it's
+  // the one transition that moves a campaign from NOT occupying a plan slot
+  // to occupying one. Mapping to a campaign that's already active/draft
+  // (already occupying its slot, whether this is its first mapping or a
+  // re-point to a different Meta campaign) changes nothing about how many
+  // slots are in use, so it's left exactly as unrestricted as it always was.
+  if (crmCampaign.status === "paused" || crmCampaign.status === "archived") {
+    try {
+      await assertCampaignLimitNotReached(auth.companyId);
+    } catch (err) {
+      if (err instanceof LimitExceededError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...err.details });
+        return;
+      }
+      throw err;
+    }
+    await updateCampaign(auth.companyId, crmCampaignId, { status: "active" });
+  }
+
   const updated = await mapMetaCampaignToCrmCampaign(auth.companyId, metaCampaignId, crmCampaignId);
   if (!updated) {
     res.status(404).json({ error: "Meta campaign not found." });
     return;
   }
 
-  res.status(200).json({ mapped: true });
+  res.status(200).json({ activated: true, mapped: true });
 }
 
 async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, metaCampaignId: string) {
@@ -424,13 +498,28 @@ async function handleUnmapMetaCampaign(req: VercelRequest, res: VercelResponse, 
   if (!auth) return;
   auth = await withEffectiveCompanyContext(req, auth);
 
-  const updated = await unmapMetaCampaign(auth.companyId, metaCampaignId);
-  if (!updated) {
+  // "Deactivate" - see this section's own header comment. Deliberately does
+  // NOT call unmapMetaCampaign (which severs crmCampaignId entirely) -
+  // instead it pauses the mapped CRM campaign, which frees its plan slot
+  // and (via processMetaLeadEvent.ts's own gating) stops new leads, while
+  // keeping the mapping itself intact so leads already captured stay fully
+  // attributed and Activate-ing again later is a plain status flip.
+  const metaCampaign = await getMetaCampaignWithMappingByRowId(auth.companyId, metaCampaignId);
+  if (!metaCampaign) {
     res.status(404).json({ error: "Meta campaign not found." });
     return;
   }
+  if (!metaCampaign.crmCampaignId) {
+    // Nothing mapped to deactivate - treat as already-inactive rather than
+    // an error, since the UI's Deactivate button is only ever shown for a
+    // currently-mapped campaign anyway (a double-click racing itself is the
+    // realistic way this branch is hit).
+    res.status(200).json({ deactivated: true, unmapped: true, note: "Not currently mapped." });
+    return;
+  }
 
-  res.status(200).json({ unmapped: true });
+  await updateCampaign(auth.companyId, metaCampaign.crmCampaignId, { status: "paused" });
+  res.status(200).json({ deactivated: true, unmapped: true });
 }
 
 // Day-by-day Reach/Impressions/Clicks/CTR for one Meta campaign - powers

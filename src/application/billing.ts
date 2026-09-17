@@ -188,6 +188,20 @@ function activeExtraSlots(company: { extraCampaignSlots: number; extraClientSlot
   return { extraCampaigns: company.extraCampaignSlots, extraClients: company.extraClientSlots };
 }
 
+/** Campaign-limit fix: whether a campaign row counts as an occupied plan
+ * slot. A paused or archived campaign does NOT count - this is what makes
+ * "deactivate an old campaign to free a slot for a new one" (the swap flow
+ * api/campaigns/handler.ts's handleMapMetaCampaign/handleUnmapMetaCampaign
+ * now support) actually work, instead of every campaign a tenant has ever
+ * created counting against the limit forever regardless of status. Reuses
+ * the exact same draft/active-are-"live" predicate reconcileCapacityDowngrade
+ * already uses to decide what's excess on a downgrade (see its own
+ * campaignCandidates mapping below) - one definition of "counts against the
+ * limit," never two that could quietly drift apart. */
+function isCampaignCountedForLimit(campaign: { status: string }): boolean {
+  return campaign.status !== "paused" && campaign.status !== "archived";
+}
+
 export interface CampaignLimitStatus {
   accountType: AccountType;
   rootCompanyId: string;
@@ -208,6 +222,12 @@ export interface CampaignLimitStatus {
  * entering a client context, and "10 campaigns total" on the marketing
  * page is framed as a total across the whole book, not just clients.
  * Excluding the agency's own company would be a loophole, not a feature.
+ *
+ * `used` only counts campaigns that are actually occupying a slot right now
+ * - see isCampaignCountedForLimit above. This used to count every campaign
+ * row regardless of status (draft/active/paused/archived all counted the
+ * same), which meant "deactivating" a campaign never freed anything up for
+ * a new one - a confirmed gap in the original campaign-limit enforcement.
  */
 export async function getCampaignLimitStatus(companyId: string): Promise<CampaignLimitStatus> {
   const { rootCompanyId, accountType } = await resolvePoolRootCompanyId(companyId);
@@ -218,9 +238,9 @@ export async function getCampaignLimitStatus(companyId: string): Promise<Campaig
   if (accountType === "agency") {
     const claimed = await listClaimedClientOrganizations(rootCompanyId);
     const poolCompanyIds = [rootCompanyId, ...claimed.map((c) => c.clientCompanyId)];
-    used = (await listCampaignsForCompanies(poolCompanyIds)).length;
+    used = (await listCampaignsForCompanies(poolCompanyIds)).filter(isCampaignCountedForLimit).length;
   } else {
-    used = (await listCampaigns(rootCompanyId)).length;
+    used = (await listCampaigns(rootCompanyId)).filter(isCampaignCountedForLimit).length;
   }
 
   const { extraCampaigns } = activeExtraSlots(rootCompany);
@@ -364,7 +384,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
   const campaignCandidates: DowngradeCandidate[] = campaignRows.map((c) => ({
     id: c.id,
     createdAt: c.createdAt,
-    isActive: c.status !== "paused" && c.status !== "archived",
+    isActive: isCampaignCountedForLimit(c),
   }));
   const campaignsToPause = selectExcessForDowngrade(campaignCandidates, campaignLimit);
   for (const campaignId of campaignsToPause) {

@@ -28,6 +28,13 @@
 // UI's own fallback rendering) already renders correctly - NEVER guessed
 // from the message text, the contact name, or anything else.
 //
+// Campaign-limit fix: an attributed lead whose resolved campaign has since
+// been Deactivated (paused/archived) is blocked, not ingested - see the
+// per-campaign check inline below and processMetaLeadEvent.ts's own header
+// comment for the shared reasoning across every ingestion pipeline. An
+// unattributed ("Unknown / Organic WhatsApp") lead is unaffected either way
+// - campaign selection has nothing to say about a lead with no campaign.
+//
 // Idempotency: same two-layer defense as processMetaLeadEvent.ts - a Redis
 // fast-path claim (a miss just means "check Postgres", never proof of
 // non-existence) plus the authoritative unique index on leads.metaLeadId
@@ -49,6 +56,7 @@ import {
 } from "../../infrastructure/db/repositories/whatsapp";
 import { RetryableProcessingError } from "../processLead";
 import { isLeadIngestionBlocked } from "../billing";
+import { getCampaign } from "../../infrastructure/db/repositories/campaigns";
 
 export type ProcessWhatsAppMessageEventOutcome = "processed" | "duplicate" | "blocked";
 
@@ -151,6 +159,29 @@ export async function processWhatsAppMessageEvent(
       // No matching route (this ad hasn't been synced by
       // metaCampaignService.ts yet, or the referral names an ad this tenant
       // does not own) - every field above simply stays null. Never guessed.
+    }
+
+    // Campaign-limit fix: an ATTRIBUTED lead (crmCampaignId resolved from a
+    // real ad route above) must not be ingested if that campaign has since
+    // been Deactivated (paused/archived) - the same per-campaign gate
+    // processMetaLeadEvent.ts applies to Instant Form leads (see that
+    // module's own header comment for the full reasoning). An UNattributed
+    // lead (no referral, or a referral naming an ad this tenant hasn't
+    // synced) is the pre-existing, legitimate "Unknown / Organic WhatsApp"
+    // case - deliberately left untouched by this check, exactly as before
+    // this feature; campaign selection has nothing to say about a lead that
+    // was never attributed to a campaign in the first place.
+    if (crmCampaignId) {
+      const campaign = await getCampaign(tenantId, crmCampaignId);
+      if (!campaign || campaign.status === "paused" || campaign.status === "archived") {
+        await releaseLeadIdClaim(metaLeadId);
+        await markWhatsappMessageEventBlocked(messageEventId);
+        await logEvent({
+          eventType: "Blocked",
+          detail: `Campaign not active/selected (crmCampaignId=${crmCampaignId}): ${waMessageId}`,
+        });
+        return "blocked";
+      }
     }
 
     const result = await insertWhatsappLead({

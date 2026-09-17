@@ -363,7 +363,19 @@
     const height = 220;
     const padding = { top: 14, right: 14, bottom: 26, left: 30 };
     const pxPerPoint = buckets.length > 20 ? 34 : 52;
-    const width = Math.max(560, buckets.length * pxPerPoint);
+    // Bug fix: this used to be a flat `Math.max(560, ...)`, so a short
+    // range (e.g. "7 Days" -> 7-8 buckets) always rendered at a fixed
+    // ~560px regardless of how wide the card actually was - on anything
+    // wider than a small laptop that left a large dead gap to the right of
+    // the chart (see the "not showing correctly" report). The chart now
+    // stretches to fill the card's real width, and only falls back to the
+    // tighter per-point minimum when there are enough buckets that
+    // squeezing them into the container would make the line unreadable -
+    // overflow-x:auto on .chart-svg-wrap (see app.css) lets that case
+    // scroll horizontally instead of cramming.
+    const minWidth = buckets.length * pxPerPoint;
+    const containerWidth = wrap.clientWidth || minWidth;
+    const width = Math.max(containerWidth, minWidth);
     const innerW = width - padding.left - padding.right;
     const innerH = height - padding.top - padding.bottom;
 
@@ -386,7 +398,13 @@
       if (i % labelEvery !== 0 && i !== buckets.length - 1) return "";
       const d = new Date(b.date);
       const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      return `<text x="${xAt(i)}" y="${height - 6}" font-size="10" fill="var(--text-muted)" text-anchor="middle">${label}</text>`;
+      // Bug fix: the first/last label used to share the same centered
+      // anchor as every middle label, so at the very edges of the chart
+      // roughly half the text ran outside the plot area and got clipped by
+      // the SVG's own bounds ("Sep 16" reading as a truncated sliver in
+      // the report). Anchor the two edge labels inward instead.
+      const anchor = i === 0 ? "start" : i === buckets.length - 1 ? "end" : "middle";
+      return `<text x="${xAt(i)}" y="${height - 6}" font-size="10" fill="var(--text-muted)" text-anchor="${anchor}">${label}</text>`;
     }).join("");
 
     const seriesSvg = activeSeries.map(s => {
@@ -403,6 +421,16 @@
       ${gridLines}${xLabels}${seriesSvg}
     </svg>`;
   }
+
+  // Re-fit the chart when the window (and therefore the card) is resized -
+  // without this, a chart rendered wide-to-fit on load would stay pinned to
+  // its old pixel width forever, quietly reintroducing the exact dead-space
+  // (or now, cramped-space) bug the width fix above addresses.
+  let chartResizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(chartResizeTimer);
+    chartResizeTimer = setTimeout(() => renderChart(window.__lastChartData || []), 150);
+  });
 
   // ---- Funnel ---------------------------------------------------------
   function renderFunnel(funnel) {

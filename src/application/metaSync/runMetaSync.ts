@@ -148,11 +148,16 @@ export async function runMetaSync(tenantId: string): Promise<MetaSyncResult> {
       if (result.skipped) {
         setStep("campaigns", "skipped", result.reason);
       } else {
-        const autoMappedNote = result.autoMappedCount > 0 ? `, ${pluralize(result.autoMappedCount, "new campaign")} auto-mapped to CRM` : "";
+        // Campaign-limit fix: sync no longer auto-maps new campaigns to CRM
+        // (see metaCampaignService.ts's own comment) - it only discovers
+        // them, so the note here points the tenant at the explicit
+        // Activate step instead of implying anything was already mapped.
+        const newCampaignsNote =
+          result.newCampaignsCount > 0 ? `, ${pluralize(result.newCampaignsCount, "new campaign")} found - activate in Meta Campaigns` : "";
         setStep(
           "campaigns",
           "done",
-          `${pluralize(result.campaignsCount, "campaign")}, ${pluralize(result.adSetsCount, "ad set")}, ${pluralize(result.adsCount, "ad")}${autoMappedNote}`,
+          `${pluralize(result.campaignsCount, "campaign")}, ${pluralize(result.adSetsCount, "ad set")}, ${pluralize(result.adsCount, "ad")}${newCampaignsNote}`,
         );
       }
     } catch (err) {
