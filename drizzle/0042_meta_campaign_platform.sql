@@ -1,0 +1,13 @@
+-- One-Meta-table-source-of-truth fix (2026-09): campaigns.html no longer
+-- shows a separate "LMS campaigns" list or any manual "Create campaign"
+-- flow - every campaign a person sees is sourced straight from Meta, and
+-- needs its own real platform (facebook/instagram/both), derived during
+-- sync from the UNION of the campaign's own ad sets' targeting.
+-- publisher_platforms (see metaCampaignService.ts's derivePlatformFromAdSets
+-- and graphClient.getCampaignAdSets). Meta only exposes this at the ad-set
+-- level, never on the campaign node itself, so it can't simply be read off
+-- an existing column - this is a new one. Nullable: unset until at least
+-- one ad set with a recognized platform has synced for this campaign; never
+-- required, never defaulted, same "only what Meta itself reports" posture
+-- every other synced column on this table already takes.
+ALTER TABLE "crm"."meta_campaigns" ADD COLUMN IF NOT EXISTS "platform" text;

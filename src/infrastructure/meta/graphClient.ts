@@ -603,6 +603,20 @@ export interface MetaAdSetSummary {
   // classify - metaLeadApproachResolver.ts only ever branches on this being
   // exactly "WHATSAPP", never inferring meaning from any other value.
   destinationType: string | null;
+  // One-Meta-table-source-of-truth fix (2026-09) - Meta only exposes which
+  // surfaces an ad set is allowed to run on (facebook/instagram/audience_
+  // network/messenger/...) at the ad-set level, under targeting - there is
+  // no equivalent field on the campaign itself. metaCampaignService.ts
+  // aggregates this across a campaign's ad sets into that campaign's own
+  // `platform` (facebook/instagram/both). Null when Meta reports no
+  // targeting.publisher_platforms at all (rare - usually means "automatic
+  // placements", which Meta represents as the field being absent rather
+  // than an empty array). Optional (not just nullable) so every existing
+  // test file's hand-built MetaAdSetSummary mock - written before this
+  // field existed - keeps compiling without being touched; every real call
+  // site (getCampaignAdSets below, derivePlatformFromAdSets's own `?? []`)
+  // already treats "absent" exactly the same as "null".
+  publisherPlatforms?: string[] | null;
 }
 
 interface GraphAdSetNode {
@@ -610,12 +624,15 @@ interface GraphAdSetNode {
   name: string;
   status: string;
   destination_type?: string;
+  targeting?: { publisher_platforms?: string[] };
 }
 
 /** Every ad set under one campaign. */
 export async function getCampaignAdSets(campaignId: string, userAccessToken: string): Promise<MetaAdSetSummary[]> {
   const results: MetaAdSetSummary[] = [];
-  let url = `${getBaseUrl()}/${campaignId}/adsets?fields=id,name,status,destination_type&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
+  let url =
+    `${getBaseUrl()}/${campaignId}/adsets?fields=id,name,status,destination_type,targeting{publisher_platforms}` +
+    `&limit=100&access_token=${encodeURIComponent(userAccessToken)}`;
 
   while (url) {
     const response = await fetchWithRetry(url);
@@ -624,7 +641,13 @@ export async function getCampaignAdSets(campaignId: string, userAccessToken: str
     }
     const page = (await response.json()) as GraphPagedResponse<GraphAdSetNode>;
     for (const node of page.data) {
-      results.push({ id: node.id, name: node.name, status: node.status, destinationType: node.destination_type ?? null });
+      results.push({
+        id: node.id,
+        name: node.name,
+        status: node.status,
+        destinationType: node.destination_type ?? null,
+        publisherPlatforms: node.targeting?.publisher_platforms ?? null,
+      });
     }
     url = page.paging?.next ?? "";
   }

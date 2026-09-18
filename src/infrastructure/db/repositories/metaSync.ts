@@ -36,17 +36,16 @@ export interface UpsertMetaCampaignInput {
 /**
  * Upsert one synced Meta campaign, keyed on the (tenantId, metaCampaignId)
  * unique index (`ux_meta_campaigns_tenant_meta_campaign`). A re-sync only
- * ever refreshes name/status/metaAdAccountId/lastSyncAt - crmCampaignId is
+ * ever refreshes name/status/metaAdAccountId/lastSyncAt (platform is set
+ * separately - see updateMetaCampaignPlatform below) - crmCampaignId is
  * NEVER touched here, on insert (defaults to null/"unmapped") or on
  * conflict, since the CRM mapping is owned entirely by an explicit action
  * (see mapMetaCampaignToCrmCampaign), never implicitly by this upsert. That
  * explicit action is always a person, via meta-campaign.html's Activate
- * button (api/campaigns/handler.ts's handleMapMetaCampaign) - the sync
- * itself (syncCampaignsForSelectedAdAccount in metaCampaignService.ts) used
- * to also auto-map a brand-new campaign's first sync, but that auto-mapping
- * was removed as part of the campaign-limit fix (it bypassed the plan's
- * campaign-slot check entirely); sync's job now is only ever this upsert -
- * discovery, never mapping.
+ * button (api/campaigns/handler.ts's handleMapMetaCampaign, which - as of
+ * the one-Meta-table-source-of-truth fix - auto-creates the CRM campaign
+ * row to map to as well, gated by the plan's campaign-slot limit) - sync's
+ * own job here is only ever this upsert: discovery, never mapping.
  */
 export async function upsertMetaCampaign(tenantId: string, adAccountRowId: string, input: UpsertMetaCampaignInput) {
   const db = await getDb();
@@ -78,6 +77,26 @@ export async function upsertMetaCampaign(tenantId: string, adAccountRowId: strin
   const row = rows[0];
   if (!row) throw new Error("Expected upsertMetaCampaign to return a row");
   return row;
+}
+
+/**
+ * One-Meta-table-source-of-truth fix (2026-09) - sets this Meta campaign's
+ * derived `platform` (facebook/instagram/both), computed by
+ * metaCampaignService.ts from the UNION of its ad sets'
+ * targeting.publisher_platforms. A separate call from upsertMetaCampaign
+ * because platform can only be known AFTER that campaign's ad sets have
+ * been fetched (a later step in the same sync run), not at upsert time.
+ * Deliberately a no-op when `platform` is null - a sync run that happens to
+ * see zero ad sets for an otherwise-already-classified campaign (e.g. a
+ * transient partial fetch) must never blank out a previously-derived value;
+ * see metaCampaignService.ts's own comment on this.
+ */
+export async function updateMetaCampaignPlatform(tenantId: string, metaCampaignRowId: string, platform: string) {
+  const db = await getDb();
+  await db
+    .update(metaCampaigns)
+    .set({ platform, updatedAt: new Date() })
+    .where(and(eq(metaCampaigns.tenantId, tenantId), eq(metaCampaigns.id, metaCampaignRowId)));
 }
 
 /**
@@ -129,6 +148,7 @@ export async function listMetaCampaignsWithMapping(tenantId: string) {
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      platform: metaCampaigns.platform,
       startTime: metaCampaigns.startTime,
       stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,
@@ -183,6 +203,7 @@ export async function listMetaCampaignsWithMappingForAdAccount(tenantId: string,
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      platform: metaCampaigns.platform,
       startTime: metaCampaigns.startTime,
       stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,
@@ -226,6 +247,7 @@ export async function getMetaCampaignWithMappingByRowId(tenantId: string, metaCa
       metaCampaignId: metaCampaigns.metaCampaignId,
       name: metaCampaigns.name,
       status: metaCampaigns.status,
+      platform: metaCampaigns.platform,
       startTime: metaCampaigns.startTime,
       stopTime: metaCampaigns.stopTime,
       lastSyncAt: metaCampaigns.lastSyncAt,

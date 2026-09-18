@@ -1043,25 +1043,25 @@ export const campaigns = crm.table("campaigns", {
   name: text("name").notNull(),
   platform: text("platform").notNull().default("facebook"), // facebook | instagram | both
   status: text("status").notNull().default("draft"), // draft | active | paused | archived
-  // Provenance only. "manual" - created directly via Create Campaign (or
-  // any other person-initiated action) - and, as of the campaign-limit fix,
-  // this is now the ONLY way a row is ever created: the sync pipeline
-  // (syncCampaignsForSelectedAdAccount in metaCampaignService.ts) used to
-  // also auto-create a "meta_sync" row the first time it saw a brand-new
-  // Meta campaign, bypassing the plan's campaign-slot limit entirely - that
-  // auto-create was removed, so sync now only ever discovers/upserts
-  // metaCampaigns rows, and a person always explicitly picks (or first
-  // creates, via the same Create Campaign flow) which EXISTING `campaigns`
-  // row to Activate a Meta campaign against (see
-  // api/campaigns/handler.ts's handleMapMetaCampaign). "meta_sync" itself
-  // is therefore purely historical going forward - still present on rows
-  // created before this fix (either by that old auto-create step, or by
-  // the one-time Phase 9 migration backfilling a pre-Phase-9 row that used
-  // to double as both the CRM campaign AND its Meta campaign, see migration
-  // 0009) - and those rows remain completely normal, freely renamable/
-  // reassignable campaigns rows, same as always. Not a DB enum, same
-  // convention as every other status/source column in this
-  // schema.
+  // Provenance only - never gates behavior, purely informational. "manual" -
+  // created directly via Create Campaign - vs "meta_sync" - created
+  // automatically the moment a person clicks "Activate" on a Meta campaign
+  // that had no CRM campaign yet (see api/campaigns/handler.ts's
+  // handleMapMetaCampaign). Both still go through the exact same
+  // assertCampaignLimitNotReached gate first, so a "meta_sync" row is just
+  // as plan-limit-respecting as a manually created one - the campaign-limit
+  // fix's actual root-cause bug (auto-creating with NO regard for the
+  // limit) is what's gone, not auto-creation itself. One-Meta-table-source-
+  // of-truth fix (2026-09): campaigns.html no longer exposes ANY way to
+  // create or browse a `campaigns` row directly - every "meta_sync" row is
+  // now fully auto-managed (name/platform snapshotted from the Meta
+  // campaign at Activate time, status flipped by Activate/Deactivate) and
+  // never shown to the person as its own object; they only ever see the
+  // Meta campaign. Existing hand-created "manual" rows from before this
+  // change are untouched in the database and remain reachable directly
+  // (e.g. by URL) but are no longer linked to from anywhere in the app.
+  // Not a DB enum, same convention as every other status/source column in
+  // this schema.
   source: text("source").notNull().default("manual"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1114,6 +1114,18 @@ export const metaCampaigns = crm.table(
     // external object, not a CRM-owned one. Not a DB enum, same convention
     // as every other status column in this schema.
     status: text("status").notNull().default("active"),
+    // One-Meta-table-source-of-truth fix (2026-09) - "facebook" | "instagram"
+    // | "both", derived during sync from the UNION of this campaign's own ad
+    // sets' targeting.publisher_platforms (see graphClient.getCampaignAdSets
+    // and metaCampaignService.ts's derivePlatformFromAdSets) - Meta exposes
+    // this at the ad-set level, never on the campaign node itself, so it's
+    // computed here rather than fetched directly. Null until at least one ad
+    // set with a recognized platform has synced; never downgraded back to
+    // null by a later sync that happens to see zero ad sets (see
+    // metaCampaignService.ts's own comment on that). Distinct from
+    // `campaigns.platform` below, which is a required field on the
+    // CRM-owned table.
+    platform: text("platform"),
     // Meta's OWN campaign schedule (Graph API `start_time`/`stop_time` on
     // the campaign node) - surfaced read-only in the Performance popup
     // (campaigns.html) so a person can see when a campaign ran without

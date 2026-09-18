@@ -18,36 +18,31 @@
     <div id="banner"></div>
 
     <!-- =====================================================================
-         Phase 9 - THE mapping UI. A Meta campaign is an external Meta
-         object (see src/infrastructure/db/schema.ts's metaCampaigns doc
-         comment) that exists independently of any CRM campaign - this
-         screen's ONE job is letting a person connect it to a CRM campaign
-         (or several Meta campaigns to the same one), never edit the Meta
-         campaign itself (name/status come from the sync).
-
-         Campaign-limit fix: Meta sync no longer auto-creates/auto-maps a
-         CRM campaign for every Meta campaign it finds (see
-         metaCampaignService.ts's own comment) - this screen's "Activate"
-         button (still the .../map endpoint under the hood) is now the ONE
-         place that turns a discovered Meta campaign into something that
-         actually tracks/ingests leads, gated by the plan's remaining
-         campaign-slot count. "Deactivate" (.../unmap) pauses the mapped
-         CRM campaign rather than severing the link, which frees its slot
-         for another campaign and stops new leads while keeping every lead
-         already captured exactly as it is - see
-         api/campaigns/handler.ts's own comment on both actions.
+         One-Meta-table-source-of-truth fix (2026-09) - this screen used to
+         be THE mapping UI, letting a person pick which CRM campaign a Meta
+         campaign should be attributed to. That picker is gone: there's no
+         longer any CRM campaign for a person to see, name, or choose. This
+         screen's ONE job now is just the Activate/Deactivate toggle - a
+         Meta campaign is an external Meta object (see
+         src/infrastructure/db/schema.ts's metaCampaigns doc comment) that
+         exists independently of any CRM campaign, and Activate silently
+         auto-creates/reuses one hidden CRM campaign row behind the scenes
+         so the rest of the app (dashboard/Pipeline/the AI assistant/agency
+         reporting) keeps working exactly as before - see
+         api/campaigns/handler.ts's handleMapMetaCampaign for exactly what
+         that does. Gated by the plan's remaining campaign-slot count, same
+         as always. "Deactivate" (.../unmap) pauses the mapped CRM campaign
+         rather than severing the link, which frees its slot for another
+         campaign and stops new leads while keeping every lead already
+         captured exactly as it is.
          ===================================================================== -->
     <h2 class="section-title">Activate for lead capture</h2>
     <div class="card">
       <div id="mappingStateDesc" class="hint" style="margin:0 0 8px"></div>
       <div id="limitHint" class="hint" style="margin:0 0 14px"></div>
-      <label for="crmCampaignSelect">LMS campaign</label>
-      <select id="crmCampaignSelect" disabled>
-        <option value="">Not selected</option>
-      </select>
-      <div class="hint">Leads from this Meta campaign are only captured while it's Activated against the LMS campaign you choose here. Don't see the right one? <a href="/campaigns.html">Create an LMS campaign first</a>, then come back here.</div>
-      <div style="margin-top:14px; display:flex; gap:10px">
-        <button class="btn" type="button" id="saveMappingBtn" style="display:none">Activate</button>
+      <div class="hint" style="margin:0 0 14px">Leads from this Meta campaign are only captured while it's Activated. Deactivating keeps every lead already captured but stops new ones until you Activate it again.</div>
+      <div style="display:flex; gap:10px">
+        <button class="btn" type="button" id="activateBtn" style="display:none">Activate</button>
         <button class="btn secondary" type="button" id="unmapBtn" style="display:none">Deactivate</button>
       </div>
     </div>
@@ -61,6 +56,16 @@
   let metaCampaign;
 
   function statusLabel(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  // One-Meta-table-source-of-truth fix: duplicated from campaigns.html's
+  // own small self-contained helper (this page has no shared JS module to
+  // put it in) - see that copy's comment for why platform can be null.
+  function platformLabel(p){
+    if (p === "facebook") return "Facebook";
+    if (p === "instagram") return "Instagram";
+    if (p === "both") return "Facebook + Instagram";
+    return "—";
+  }
 
   async function load() {
     me = await App.requireAuth();
@@ -83,72 +88,54 @@
 
     document.getElementById("metaCampaignName").textContent = metaCampaign.name;
     document.getElementById("metaCampaignSub").innerHTML =
-      `<span class="pill ${metaCampaign.status}">${statusLabel(metaCampaign.status)}</span> · ${metaCampaign.leadsCount} lead${metaCampaign.leadsCount === 1 ? "" : "s"} · <span class="pill system">Synced from Meta</span>`;
+      `<span class="pill ${metaCampaign.status}">${statusLabel(metaCampaign.status)}</span> · ${platformLabel(metaCampaign.platform)} · ${metaCampaign.leadsCount} lead${metaCampaign.leadsCount === 1 ? "" : "s"} · <span class="pill system">Synced from Meta</span>`;
 
     const canManageCampaign = App.hasPermission(me, "campaigns.manage");
-    const select = document.getElementById("crmCampaignSelect");
     const desc = document.getElementById("mappingStateDesc");
     const limitHint = document.getElementById("limitHint");
 
-    // Campaign-limit fix: "active" here means mapped AND the mapped CRM
-    // campaign isn't itself paused/archived - see api/campaigns/handler.ts's
-    // own comment on what Activate/Deactivate do at the campaign-row level.
-    // Mapped-but-paused reads as "Deactivated," never as if it were still
-    // mapped-and-live.
+    // Campaign-limit fix / one-Meta-table-source-of-truth fix: "active"
+    // here means mapped AND the mapped (hidden) CRM campaign isn't itself
+    // paused/archived - see api/campaigns/handler.ts's own comment on what
+    // Activate/Deactivate do at the campaign-row level. Mapped-but-paused
+    // reads as "Deactivated," never as if it were still mapped-and-live.
     const isActive = !!metaCampaign.crmCampaignId && metaCampaign.crmCampaignStatus !== "paused" && metaCampaign.crmCampaignStatus !== "archived";
     if (isActive) {
-      desc.innerHTML = `<span class="pill active">Active</span> · attributed to "${App.escapeHtml(metaCampaign.crmCampaignName)}" - new leads are being captured.`;
+      desc.innerHTML = `<span class="pill active">Active</span> · new leads are being captured.`;
     } else if (metaCampaign.crmCampaignId) {
-      desc.innerHTML = `<span class="pill paused">Deactivated</span> · was attributed to "${App.escapeHtml(metaCampaign.crmCampaignName)}" - leads already captured are kept, but no new ones will be. Click Activate to resume.`;
+      desc.innerHTML = `<span class="pill paused">Deactivated</span> · leads already captured are kept, but no new ones will be. Click Activate to resume.`;
     } else {
-      desc.textContent = "Not selected yet - this Meta campaign's leads are not being captured until you choose an LMS campaign and Activate it below.";
+      desc.textContent = "Not activated yet - this Meta campaign's leads are not being captured until you Activate it below.";
     }
 
     if (campaignLimit) {
       limitHint.textContent = `${campaignLimit.used} of ${campaignLimit.limit} campaign slot${campaignLimit.limit === 1 ? "" : "s"} used on your plan.`;
     }
 
-    if (!canManageCampaign) {
-      select.value = metaCampaign.crmCampaignId || "";
-      return;
-    }
+    if (!canManageCampaign) return;
 
-    try {
-      // pageSize=100 (the max allowed) - this populates a <select>, which
-      // needs the full set, not one paginated page. See /api/campaigns's
-      // handler for the page/pageSize convention this deliberately opts
-      // out of.
-      const { campaigns } = await App.apiJson("/api/campaigns?pageSize=100");
-      select.innerHTML = `<option value="">Not selected</option>` +
-        campaigns.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}${c.status === "paused" || c.status === "archived" ? " (deactivated)" : ""}</option>`).join("");
-    } catch (err) {
-      // Non-fatal - select falls back to "Not selected" only.
+    if (isActive) {
+      document.getElementById("unmapBtn").style.display = "inline-flex";
+    } else {
+      document.getElementById("activateBtn").style.display = "inline-flex";
     }
-    select.value = metaCampaign.crmCampaignId || "";
-    select.disabled = false;
-    document.getElementById("saveMappingBtn").style.display = "inline-flex";
-    if (isActive) document.getElementById("unmapBtn").style.display = "inline-flex";
   }
 
-  document.getElementById("saveMappingBtn").addEventListener("click", async () => {
+  document.getElementById("activateBtn").addEventListener("click", async () => {
     const banner = document.getElementById("banner");
     banner.innerHTML = "";
-    const crmCampaignId = document.getElementById("crmCampaignSelect").value;
-    if (!crmCampaignId) {
-      banner.innerHTML = `<div class="banner error">Choose an LMS campaign to activate, or use "Deactivate" below to turn off an active one.</div>`;
-      return;
-    }
-    const btn = document.getElementById("saveMappingBtn");
+    const btn = document.getElementById("activateBtn");
     btn.disabled = true;
     try {
-      await App.apiJson(`/api/campaigns/meta/${metaCampaignId}/map`, { method: "POST", body: { crmCampaignId } });
+      await App.apiJson(`/api/campaigns/meta/${metaCampaignId}/map`, { method: "POST" });
       banner.innerHTML = `<div class="banner success">Campaign activated - new leads will be captured.</div>`;
       await load();
     } catch (err) {
       // 402 = plan's campaign limit reached (see assertCampaignLimitNotReached
       // in src/application/billing.ts, applied here by handleMapMetaCampaign
-      // when reactivating a previously Deactivated campaign) - same hard
-      // block/redirect campaigns.html already uses for manual creation.
+      // whenever Activate is about to occupy a new plan slot - either a
+      // brand-new hidden campaign or reactivating a previously Deactivated
+      // one) - hard block, redirect straight to the subscription page.
       if (err.status === 402) {
         window.location.href = "/subscription.html";
         return;

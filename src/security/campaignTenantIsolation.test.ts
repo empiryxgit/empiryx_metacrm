@@ -110,7 +110,7 @@ describe.skipIf(!process.env.DATABASE_URL)("Security: Campaign tenant isolation 
     expect(mapped?.crmCampaignId).toBe(campaignA.id);
   });
 
-  it("POST /api/campaigns/meta/:id/map: an agency user managing Client A can never map Client A's Meta campaign to Client B's CRM campaign, even though the same agency operator manages both", async () => {
+  it("POST /api/campaigns/meta/:id/map: an agency user managing both clients, acting 'inside' Client A, can never have Client A's Meta campaign land on a Client B CRM campaign - the endpoint auto-creates its own campaign under the effective tenant, it never accepts a caller-supplied target", async () => {
     const agency = await makeTenant("camp-agency3", "agency");
     const clientA = await makeTenant("camp-clientA3");
     const clientB = await makeTenant("camp-clientB3");
@@ -118,45 +118,54 @@ describe.skipIf(!process.env.DATABASE_URL)("Security: Campaign tenant isolation 
     await claimAndAssign(agency.tenantId, clientB.tenantId, agency.userId);
 
     const metaCampaignA = await insertRawMetaCampaign(clientA.tenantId, "raw-meta-3a", "Spring Promo (Meta)");
-    const campaignB = await createCampaign({ companyId: clientB.tenantId, name: "Spring Promo", platform: "facebook", createdBy: clientB.userId });
-    const campaignA = await createCampaign({ companyId: clientA.tenantId, name: "Other Campaign", platform: "facebook", createdBy: clientA.userId });
+    const campaignB = await createCampaign({ companyId: clientB.tenantId, name: "Spring Promo (Meta)", platform: "facebook", createdBy: clientB.userId });
 
     const cookie = cookieHeader(await accessCookieFor(agency.tenantId, agency.userId, [clientA.tenantId, clientB.tenantId]), clientA.tenantId);
 
-    // Cross-tenant attempt, while legitimately "inside" Client A - must be
-    // rejected exactly like any other not-found target, never silently
-    // linked.
-    // handleMapMetaCampaign reads req.body directly (this file, unlike
-    // api/webhooks/meta/handler.ts, keeps Vercel's default bodyParser on -
-    // no `export const config = { api: { bodyParser: false } } }` here), so
-    // the fake request needs an already-parsed `.body`, not a raw byte
-    // stream - fakeReq's rawBody/async-iterator is for the other file's
-    // handlers.
-    const badReq = fakeReq({
+    // One-Meta-table-source-of-truth fix: Activate (.../map) no longer
+    // accepts a crmCampaignId body - there's nothing to send, and nothing
+    // for a caller (malicious or not) to point at Client B's campaign
+    // with. handleMapMetaCampaign reads req.body directly (this file,
+    // unlike api/webhooks/meta/handler.ts, keeps Vercel's default
+    // bodyParser on), so the fake request just needs no body at all.
+    const req = fakeReq({
       method: "POST",
       query: { resource: "meta-campaigns", metaCampaignId: metaCampaignA.id, sub: "map" },
       headers: { cookie },
     });
-    badReq.body = { crmCampaignId: campaignB.id };
-    const badRes = fakeRes();
-    await handler(badReq, badRes);
-    expect(badRes.calls[0]?.status).toBe(404);
+    const res = fakeRes();
+    await handler(req, res);
+    expect(res.calls[0]?.status).toBe(200);
+    expect(res.calls[0]?.json).toEqual({ activated: true, mapped: true });
 
     const db = await getDb();
-    const [stillUnmapped] = await db.select().from(metaCampaigns).where(eq(metaCampaigns.id, metaCampaignA.id));
-    expect(stillUnmapped?.crmCampaignId).toBeNull();
+    const [mapped] = await db.select().from(metaCampaigns).where(eq(metaCampaigns.id, metaCampaignA.id));
+    expect(mapped?.crmCampaignId).not.toBeNull();
+    // The auto-created CRM campaign must land under Client A (the
+    // effective tenant this request was acting "inside"), never Client B -
+    // and it must be its OWN new row, never the identically-named
+    // pre-existing campaignB that belongs to a different tenant.
+    expect(mapped?.crmCampaignId).not.toBe(campaignB.id);
+    const createdCrmCampaign = await getCampaign(clientA.tenantId, mapped!.crmCampaignId!);
+    expect(createdCrmCampaign).not.toBeNull();
+    expect(createdCrmCampaign?.companyId).toBe(clientA.tenantId);
 
-    // The legitimate same-tenant mapping through the same endpoint still
-    // succeeds.
-    const goodReq = fakeReq({
+    // Client B's own campaign list is completely unaffected by this call.
+    const clientBCampaigns = await listCampaigns(clientB.tenantId);
+    expect(clientBCampaigns.map((c) => c.id)).toEqual([campaignB.id]);
+
+    // A second Activate call is an idempotent no-op - it must not create a
+    // second hidden CRM campaign for the same Meta campaign.
+    const secondReq = fakeReq({
       method: "POST",
       query: { resource: "meta-campaigns", metaCampaignId: metaCampaignA.id, sub: "map" },
       headers: { cookie },
     });
-    goodReq.body = { crmCampaignId: campaignA.id };
-    const goodRes = fakeRes();
-    await handler(goodReq, goodRes);
-    expect(goodRes.calls[0]?.json).toEqual({ mapped: true });
+    const secondRes = fakeRes();
+    await handler(secondReq, secondRes);
+    expect(secondRes.calls[0]?.status).toBe(200);
+    const [mappedAgain] = await db.select().from(metaCampaigns).where(eq(metaCampaigns.id, metaCampaignA.id));
+    expect(mappedAgain?.crmCampaignId).toBe(mapped?.crmCampaignId);
   });
 
   it("Agency Leads report: two identically-named campaigns across two clients aggregate independently - filtering by one campaign never leaks the other's leads, and both are listed as separate, correctly-attributed filter options", async () => {

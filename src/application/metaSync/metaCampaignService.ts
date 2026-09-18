@@ -13,16 +13,42 @@
 // sync, a known/accepted limit for this phase rather than something this
 // phase builds a job queue to solve.
 
-import { getAdAccountCampaigns, getCampaignAdSets, getAdSetAds } from "../../infrastructure/meta/graphClient";
+import { getAdAccountCampaigns, getCampaignAdSets, getAdSetAds, MetaAdSetSummary } from "../../infrastructure/meta/graphClient";
 import { getSelectedMetaAdAccount } from "../../infrastructure/db/repositories/metaIntegration";
 import {
   upsertMetaCampaign,
+  updateMetaCampaignPlatform,
   replaceMetaAdSets,
   replaceMetaAds,
   getMetaCampaignByMetaCampaignId,
 } from "../../infrastructure/db/repositories/metaSync";
 import { resolveLeadApproachForAd } from "./metaLeadApproachResolver";
 import { upsertMetaLeadRoute } from "../../infrastructure/db/repositories/whatsapp";
+
+/**
+ * One-Meta-table-source-of-truth fix (2026-09) - Meta only reports which
+ * surfaces a campaign can run on at the AD SET level (targeting.
+ * publisher_platforms), never on the campaign node itself, so a campaign's
+ * own `platform` is derived here as the union across all its ad sets,
+ * narrowed to the two this app's `platform` column actually distinguishes
+ * (facebook/instagram/both) - other Meta surfaces (audience_network,
+ * messenger, ...) an ad set may also be targeting are ignored for this
+ * purpose, same as campaigns.platform's own "facebook | instagram | both"
+ * catalog. Returns null (meaning: don't touch the stored value - see
+ * updateMetaCampaignPlatform's own comment) when no ad set reports either
+ * platform at all, rather than guessing.
+ */
+export function derivePlatformFromAdSets(adSets: Pick<MetaAdSetSummary, "publisherPlatforms">[]): string | null {
+  const platforms = new Set<string>();
+  for (const adSet of adSets) {
+    for (const p of adSet.publisherPlatforms ?? []) {
+      if (p === "facebook" || p === "instagram") platforms.add(p);
+    }
+  }
+  if (platforms.size === 0) return null;
+  if (platforms.has("facebook") && platforms.has("instagram")) return "both";
+  return platforms.has("facebook") ? "facebook" : "instagram";
+}
 
 export interface SyncCampaignsResult {
   skipped: boolean;
@@ -87,6 +113,16 @@ export async function syncCampaignsForSelectedAdAccount(tenantId: string, userAc
 
     const adSets = await getCampaignAdSets(campaign.id, userAccessToken);
     if (adSets.length === 0) continue;
+
+    // One-Meta-table-source-of-truth fix - derive this campaign's platform
+    // from the ad sets just fetched (see derivePlatformFromAdSets's own
+    // comment). A no-op write when null - never blanks out a previously
+    // derived value just because this particular run's ad sets didn't carry
+    // targeting.publisher_platforms.
+    const derivedPlatform = derivePlatformFromAdSets(adSets);
+    if (derivedPlatform) {
+      await updateMetaCampaignPlatform(tenantId, metaCampaignRow.id, derivedPlatform);
+    }
 
     const adSetRows = await replaceMetaAdSets(
       tenantId,
