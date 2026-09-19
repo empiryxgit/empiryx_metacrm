@@ -12,11 +12,48 @@
 -- companion application-code changes for the full removal.
 
 -- ---- Data cleanup (explicit, ahead of the column/table drops below) ----
-DELETE FROM "crm"."branch_users";--> statement-breakpoint
-UPDATE "crm"."leads" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;--> statement-breakpoint
-UPDATE "crm"."campaigns" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;--> statement-breakpoint
-UPDATE "crm"."forms" SET "branch_id" = NULL, "branch_mode" = 'all', "branch_field_key" = NULL, "branch_field_map" = '{}'::jsonb WHERE "branch_id" IS NOT NULL OR "branch_mode" <> 'all' OR "branch_field_key" IS NOT NULL;--> statement-breakpoint
-UPDATE "crm"."form_submissions" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;--> statement-breakpoint
+-- Guarded (unlike a plain DELETE/UPDATE) for the same reason every later
+-- statement in this file already uses IF EXISTS: an environment that never
+-- actually applied 0003_amusing_blink.sql (the branches feature's own
+-- creation migration) never had these tables/columns to begin with - see
+-- this project's own running incident log (meta-lead-ads-integration-
+-- status.md) for the recurring "a migration silently never ran in some
+-- environment" pattern this exact shape of bug keeps taking. A raw DELETE/
+-- UPDATE against a relation/column that was never created fails outright
+-- (42P01/42703) before ever reaching the guarded drops below - checking
+-- existence first makes this migration safe to run against a database in
+-- ANY state: fully fresh, fully already-applied, partially applied, or one
+-- that never had the branches feature's own tables at all.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'crm' AND table_name = 'branch_users') THEN
+    DELETE FROM "crm"."branch_users";
+  END IF;
+END $$;--> statement-breakpoint
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'crm' AND table_name = 'leads' AND column_name = 'branch_id') THEN
+    UPDATE "crm"."leads" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;
+  END IF;
+END $$;--> statement-breakpoint
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'crm' AND table_name = 'campaigns' AND column_name = 'branch_id') THEN
+    UPDATE "crm"."campaigns" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;
+  END IF;
+END $$;--> statement-breakpoint
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'crm' AND table_name = 'forms' AND column_name = 'branch_id') THEN
+    UPDATE "crm"."forms" SET "branch_id" = NULL, "branch_mode" = 'all', "branch_field_key" = NULL, "branch_field_map" = '{}'::jsonb WHERE "branch_id" IS NOT NULL OR "branch_mode" <> 'all' OR "branch_field_key" IS NOT NULL;
+  END IF;
+END $$;--> statement-breakpoint
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'crm' AND table_name = 'form_submissions' AND column_name = 'branch_id') THEN
+    UPDATE "crm"."form_submissions" SET "branch_id" = NULL WHERE "branch_id" IS NOT NULL;
+  END IF;
+END $$;--> statement-breakpoint
 
 -- ---- Drop indexes on the columns about to be dropped ----
 DROP INDEX IF EXISTS "crm"."ix_campaigns_branch_id";--> statement-breakpoint
