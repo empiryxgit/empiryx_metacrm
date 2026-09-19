@@ -1555,6 +1555,25 @@ export const rutaConversations = crm.table(
     // never accumulates - see rutaConversation.ts's setPendingContext.
     pendingContext: jsonb("pending_context"),
     pendingContextExpiresAt: timestamp("pending_context_expires_at", { withTimezone: true }),
+    // Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+    // scoping.md) - the WhatsApp equivalent of the web app's client-context
+    // cookie (src/application/agencyClientContext.ts), just conversation-
+    // scoped instead of cookie-scoped. ONLY ever meaningful when this
+    // conversation's OWN company (tenantId above) is an Agency account - see
+    // src/application/metaSync/rutaAgencyClientScoping.ts, which is the ONLY
+    // code that reads/writes this column. Always null for an Individual
+    // account's conversations, and null for an Agency conversation until a
+    // client has actually been resolved (a named client, or a numbered pick
+    // from the "which client" prompt). NEVER trusted on its own once set -
+    // re-validated in full (still one of THIS agency's actively-claimed
+    // clients, still covered by this user's own current assignments) on
+    // every message that would use it, exactly the same "never just trust a
+    // stale pointer" posture the web's own client-context cookie already
+    // follows (see agencyClientContext.ts's own header). ON DELETE SET NULL
+    // (not CASCADE) - a claimed client being removed should just drop this
+    // conversation back to "ask which client," never break the conversation
+    // row itself.
+    activeClientCompanyId: uuid("active_client_company_id").references(() => companies.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }),
   },

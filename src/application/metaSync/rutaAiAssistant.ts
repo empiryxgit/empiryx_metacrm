@@ -170,7 +170,7 @@
 
 import { performance } from "node:perf_hooks";
 import { getUserWhatsappLinkByPhone, getUserWhatsappLinkByUserId, touchLastInboundMessage, markWelcomeMessageSent } from "../../infrastructure/db/repositories/whatsapp";
-import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
+import { clearPendingContext, getOrCreateActiveConversation, getPendingContext, recordConversationTurn, setActiveClientCompanyId, setPendingContext } from "../../infrastructure/db/repositories/rutaConversation";
 import { getDb } from "../../infrastructure/db/client";
 import { companies } from "../../infrastructure/db/schema";
 import { eq } from "drizzle-orm";
@@ -182,18 +182,29 @@ import { newRequestId, runWithRutaContext, setRutaContextField, logToolCall, rec
 import { getAiProvider } from "../../infrastructure/ai/provider";
 import { composeReply } from "./rutaReplyComposer";
 import { matchBareDateFollowUp } from "./rutaDateRange";
+import { resolveAccountType, type AccountType } from "../../domain/accountType";
 import {
   rutaToolSchemas,
   getRutaTool,
   matchPattern,
   resolveLeadPick,
   resolveTeammatePick,
+  NO_CLIENT_RESOLUTION_TOOLS,
   type DateRange,
   type PendingOption,
   type PendingQueryContext,
   type RutaToolContext,
   type RutaToolResult,
 } from "./rutaTools";
+import {
+  extractClientMention,
+  formatClientPickerPrompt,
+  listAccessibleClientsForRutaUser,
+  matchClientByName,
+  resolveClientPick,
+  revalidateActiveClient,
+  type AccessibleClient,
+} from "./rutaAgencyClientScoping";
 
 export interface RutaAssistantInboundMessage {
   tenantId: string;
@@ -461,12 +472,41 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
   setRutaContextField("conversationId", conversation.id);
   const pending = (await getPendingContext(msg.tenantId, link.userId, conversation.id)) as PendingQueryContext | null;
 
+  // Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+  // scoping.md) - resolved once here from the asking user's OWN company's
+  // accountType, reused below for both the numbered-pick resolution branch
+  // and the normal tool-dispatch branch. Always false/undefined for every
+  // Individual account - see SendContext.accountType's own comment.
+  const isAgencyTenant = sendCtx.accountType === "agency";
+
   if (pending?.kind === "disambiguation") {
     const picked = resolvePendingSelection(text, pending);
     if (picked) {
       await clearPendingContext(msg.tenantId, link.userId, conversation.id);
-      const toolCtx: RutaToolContext = { tenantId: msg.tenantId, userId: link.userId, timezone: sendCtx.timezone, lastInsightId: resolveLastInsightId(link) };
-      const replyText = await runResolvedPick(toolCtx, picked.kind, picked.id);
+      // A lead/teammate pick (never a "client" pick itself) made while a
+      // client is already active must still resolve against THAT client's
+      // data, not the agency's own tenant - re-validated here (never
+      // trusted stale) exactly as resolveAgencyClientForTurn does for the
+      // normal dispatch path below.
+      let activeClientCompanyId: string | undefined;
+      let activeClientName: string | undefined;
+      if (isAgencyTenant && picked.kind !== "client" && conversation.activeClientCompanyId) {
+        const revalidated = await revalidateActiveClient(msg.tenantId, link.userId, conversation.activeClientCompanyId);
+        if (revalidated) {
+          activeClientCompanyId = revalidated.clientCompanyId;
+          activeClientName = revalidated.clientName;
+        }
+      }
+      const toolCtx: RutaToolContext = {
+        tenantId: msg.tenantId,
+        userId: link.userId,
+        timezone: sendCtx.timezone,
+        lastInsightId: resolveLastInsightId(link),
+        isAgencyTenant,
+        activeClientCompanyId,
+        activeClientName,
+      };
+      const replyText = await runResolvedPick(toolCtx, conversation.id, picked.kind, picked.id);
       await recordConversationTurn(msg.tenantId, link.userId, conversation.id, { toolName: "resolvedPick", userMessageText: text });
       await sendReply(sendCtx, msg, link, "resolvedPick", replyText);
       return;
@@ -480,6 +520,7 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
     timezone: sendCtx.timezone,
     defaultDateRange: anchor ? decodeAnchorRange(anchor.range) : undefined,
     lastInsightId: resolveLastInsightId(link),
+    isAgencyTenant,
   };
 
   // Classification - fast pattern matcher first, AI provider only on a
@@ -515,20 +556,48 @@ async function handleOneMessagePipeline(msg: RutaAssistantInboundMessage): Promi
     return;
   }
 
+  // Agency client-scoping - resolves (or prompts for) which CLIENT's data
+  // this turn's tool should run against, BEFORE the tool itself ever runs.
+  // A no-op (bailResult stays undefined, toolCtx unchanged) for every
+  // Individual account and for every tool in NO_CLIENT_RESOLUTION_TOOLS
+  // (rutaTools.ts) - see resolveAgencyClientForTurn's own comment for the
+  // full mention/reuse/auto-pick/ask contract.
+  let bailResult: RutaToolResult | undefined;
+  if (isAgencyTenant) {
+    const resolution = await resolveAgencyClientForTurn(msg.tenantId, link.userId, conversation.id, conversation.activeClientCompanyId, tool.name, text);
+    if (resolution.client) {
+      toolCtx.activeClientCompanyId = resolution.client.clientCompanyId;
+      toolCtx.activeClientName = resolution.client.clientName;
+    }
+    bailResult = resolution.bail;
+  }
+
   let result: RutaToolResult;
-  const toolStartedAt = performance.now();
-  try {
-    result = await tool.run(toolCtx, { query: typeof call.arguments.query === "string" ? call.arguments.query : undefined });
-    logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "ok" });
-  } catch (err) {
-    // Error handling: a tool failure (a DB error, a bad query) must never
-    // leave the user with silence - log the real error, reply with a safe
-    // generic message.
-    const error = err instanceof Error ? err.message : String(err);
-    rutaLog.error("tool_failed", { tenantId: msg.tenantId, userId: link.userId, tool: tool.name, error });
-    logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "error", error });
-    await sendReply(sendCtx, msg, link, tool.name, "Something went wrong looking that up - please try again in a moment.");
-    return;
+  if (bailResult) {
+    // Client resolution itself needs a reply (a picker, an ambiguous-match
+    // prompt, or "no clients set up yet") - the tool this turn originally
+    // asked for is never run at all this turn. Once the client question is
+    // answered (a numbered reply, resolved via runResolvedPick's "client"
+    // branch below), the client becomes active for this conversation and
+    // the user's ORIGINAL question simply needs asking again - same
+    // one-more-turn cost as any other disambiguation (lead/teammate) already
+    // has.
+    result = bailResult;
+  } else {
+    const toolStartedAt = performance.now();
+    try {
+      result = await tool.run(toolCtx, { query: typeof call.arguments.query === "string" ? call.arguments.query : undefined });
+      logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "ok" });
+    } catch (err) {
+      // Error handling: a tool failure (a DB error, a bad query) must never
+      // leave the user with silence - log the real error, reply with a safe
+      // generic message.
+      const error = err instanceof Error ? err.message : String(err);
+      rutaLog.error("tool_failed", { tenantId: msg.tenantId, userId: link.userId, tool: tool.name, error });
+      logToolCall({ tool: tool.name, latencyMs: performance.now() - toolStartedAt, status: "error", error });
+      await sendReply(sendCtx, msg, link, tool.name, "Something went wrong looking that up - please try again in a moment.");
+      return;
+    }
   }
 
   // Session state for the NEXT turn - see RutaTool.sessionRole's own
@@ -585,8 +654,120 @@ function decodeAnchorRange(range: { startIso: string; endIso: string; label: str
   return { start: new Date(range.startIso), end: new Date(range.endIso), label: range.label };
 }
 
-async function runResolvedPick(ctx: RutaToolContext, kind: "lead" | "teammate", id: string): Promise<string> {
-  return kind === "lead" ? resolveLeadPick(ctx, id) : resolveTeammatePick(ctx, id);
+async function runResolvedPick(ctx: RutaToolContext, conversationId: string, kind: "lead" | "teammate" | "client", id: string): Promise<string> {
+  if (kind === "lead") return resolveLeadPick(ctx, id);
+  if (kind === "teammate") return resolveTeammatePick(ctx, id);
+  return resolveClientPick(ctx.tenantId, ctx.userId, conversationId, id);
+}
+
+// ---------------------------------------------------------------------------
+// Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+// scoping.md) - resolves which CLIENT company this turn's tool should query
+// against, in priority order:
+//   1. An explicit "for <client name>" / "at <client name>" mention in THIS
+//      message (extractClientMention) always wins, even overriding whatever
+//      client is already active - a one-off "and how about for Acme?" style
+//      question shouldn't require first "switching" away from whoever is
+//      currently active.
+//   2. Otherwise, whatever client is already active for this conversation
+//      (existingActiveClientCompanyId) - RE-VALIDATED against the live,
+//      current accessible-client list every single time (never trusted
+//      stale - see revalidateActiveClient's own comment), so a client
+//      removed from the roster or unassigned from this user drops out on
+//      the very next message rather than silently continuing to answer
+//      against data this user no longer has any claim to.
+//   3. Otherwise, auto-select the sole accessible client when there is
+//      exactly one - the common case for an agency with a small roster
+//      shouldn't force a "which client?" round-trip on every single
+//      question.
+//   4. Otherwise (zero, or more than one, accessible client with no
+//      explicit mention and nothing already active) - "bail": produce the
+//      RutaToolResult the pipeline should send INSTEAD of running the tool
+//      this turn (a numbered picker, or "you don't have any clients set up
+//      yet").
+//
+// For any tool in NO_CLIENT_RESOLUTION_TOOLS (rutaTools.ts - help/mute/
+// unmute/alertSettings/explainLastInsight/switchClient), this never asks a
+// mention/auto-pick/ask question and never bails: those tools don't need a
+// resolved client to answer at all, so gating them behind a picker would be
+// pure friction. It still surfaces whatever client is ALREADY active
+// (revalidated) for those tools, though - e.g. helpTool wants
+// ctx.activeClientName to say "you're currently asking about X" - it's only
+// the "go find/ask for one" steps (mention parsing, auto-pick, the picker
+// prompt) that a skipped tool never triggers.
+// ---------------------------------------------------------------------------
+
+interface AgencyClientResolution {
+  /** The client to scope this turn's query to, or null when none was
+   * resolved (either not an agency tenant / a skipped tool, or resolution
+   * bailed - see `bail` below). */
+  client: AccessibleClient | null;
+  /** Set ONLY when the tool this turn asked for must NOT run - the
+   * pipeline sends this instead. */
+  bail?: RutaToolResult;
+}
+
+async function resolveAgencyClientForTurn(
+  tenantId: string,
+  userId: string,
+  conversationId: string,
+  existingActiveClientCompanyId: string | null,
+  toolName: string,
+  messageText: string,
+): Promise<AgencyClientResolution> {
+  const skip = NO_CLIENT_RESOLUTION_TOOLS.has(toolName);
+
+  if (!skip) {
+    const mention = extractClientMention(messageText);
+    if (mention) {
+      const accessible = await listAccessibleClientsForRutaUser(tenantId, userId);
+      const match = matchClientByName(accessible, mention);
+      if (match.kind === "one") {
+        await setActiveClientCompanyId(tenantId, userId, conversationId, match.client.clientCompanyId);
+        return { client: match.client };
+      }
+      if (match.kind === "ambiguous") {
+        const options: PendingOption[] = match.candidates.map((c) => ({ kind: "client" as const, id: c.clientCompanyId, label: c.clientName }));
+        return {
+          client: null,
+          bail: { kind: "disambiguate", text: formatClientPickerPrompt(match.candidates, `Multiple clients match "${mention}" — reply with a number:`), options },
+        };
+      }
+      // match.kind === "none" - an explicit mention that matched nothing.
+      // Deliberately falls through to the reuse/auto-pick logic below
+      // rather than hard-failing here, since extractClientMention's regex
+      // is a simple trailing-phrase heuristic (see its own comment) that
+      // can false-positive on ordinary phrasing that only LOOKS like a
+      // client mention ("leads today for real" would extract "real"); if
+      // there's genuinely no accessible client to fall back to either, that
+      // still surfaces below via the empty-list bail.
+    }
+  }
+
+  if (existingActiveClientCompanyId) {
+    const revalidated = await revalidateActiveClient(tenantId, userId, existingActiveClientCompanyId);
+    if (revalidated) return { client: revalidated };
+    // Previously active, no longer accessible (unassigned/removed) - drop
+    // it rather than continuing to silently query against it.
+    await setActiveClientCompanyId(tenantId, userId, conversationId, null);
+  }
+
+  if (skip) return { client: null };
+
+  const accessible = await listAccessibleClientsForRutaUser(tenantId, userId);
+  if (accessible.length === 0) {
+    return { client: null, bail: { kind: "text", text: "You don't have any clients set up yet — ask your agency admin to add one." } };
+  }
+  if (accessible.length === 1) {
+    const only = accessible[0]!;
+    await setActiveClientCompanyId(tenantId, userId, conversationId, only.clientCompanyId);
+    return { client: only };
+  }
+  const options: PendingOption[] = accessible.map((c) => ({ kind: "client" as const, id: c.clientCompanyId, label: c.clientName }));
+  return {
+    client: null,
+    bail: { kind: "disambiguate", text: formatClientPickerPrompt(accessible, "Which client would you like to ask about? Reply with a number:"), options },
+  };
 }
 
 function resolvePendingSelection(text: string, ctx: { options: PendingOption[] }): PendingOption | null {
@@ -634,6 +815,13 @@ interface SendContext {
   phoneNumberId: string;
   accessToken: string;
   timezone: string;
+  /** Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+   * scoping.md) - the asking user's OWN company's accountType, read once
+   * here (same query that already fetches timezone) rather than a second
+   * round-trip. "individual" for every tenant this feature doesn't touch -
+   * the client-resolution block below is a complete no-op whenever this
+   * isn't "agency". */
+  accountType: AccountType;
 }
 
 async function getSendContext(tenantId: string): Promise<SendContext | null> {
@@ -648,8 +836,8 @@ async function getSendContext(tenantId: string): Promise<SendContext | null> {
     return null;
   }
   const db = await getDb();
-  const [companyRow] = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, tenantId)).limit(1);
-  return { phoneNumberId, accessToken, timezone: companyRow?.timezone ?? "Asia/Kolkata" };
+  const [companyRow] = await db.select({ timezone: companies.timezone, accountType: companies.accountType }).from(companies).where(eq(companies.id, tenantId)).limit(1);
+  return { phoneNumberId, accessToken, timezone: companyRow?.timezone ?? "Asia/Kolkata", accountType: resolveAccountType(companyRow?.accountType) };
 }
 
 async function reply(ctx: SendContext, to: string, body: string, tenantId?: string): Promise<void> {

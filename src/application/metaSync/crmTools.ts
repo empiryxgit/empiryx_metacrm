@@ -55,6 +55,23 @@ import type { DateRange } from "./rutaDateRange";
 export interface CrmAuthContext {
   tenantId: string;
   userId: string;
+  /** Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+   * scoping.md) - set ONLY by rutaTools.ts's rutaAuth() helper, and only
+   * when the asking user's own company is an Agency with a resolved active
+   * client (in which case `tenantId` above is already that CLIENT's
+   * companyId, never the agency's own - see rutaAuth's own comment).
+   * Forces every "broad vs self" branch below straight to broad, bypassing
+   * hasBroadGrant entirely: an agency user is never a leads.ownerId inside
+   * a client's own tenant (see agencyClientAssignments.ts's header - access
+   * is via assignment, not membership), so there is no narrower "own" data
+   * to fall back to, and RUTA_AI_ASSISTANT_BROAD_QUERY - a grant on the
+   * ASKING user's role within their OWN company - has no meaning for a
+   * client tenant they hold no role/membership in at all. Absent
+   * (undefined) for every other caller, including every Individual-account
+   * query and every Agency query before a client is resolved - every
+   * `auth.isAgencyClientQuery === true ||` check below is then simply
+   * false, unchanged from before this field existed. */
+  isAgencyClientQuery?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +324,7 @@ export interface GetUserLeadsResult {
 export async function get_user_leads(auth: CrmAuthContext, args: { range: DateRange }): Promise<GetUserLeadsResult> {
   assertValid("get_user_leads", validateAuth(auth), validateDateRange(args.range));
   const db = await getDb();
-  const broad = await hasBroadGrant(auth.tenantId, auth.userId);
+  const broad = auth.isAgencyClientQuery === true || (await hasBroadGrant(auth.tenantId, auth.userId));
 
   if (!broad) {
     const [row] = await db
@@ -354,7 +371,7 @@ export interface GetPipelineSummaryResult {
 export async function get_pipeline_summary(auth: CrmAuthContext): Promise<GetPipelineSummaryResult> {
   assertValid("get_pipeline_summary", validateAuth(auth));
   const db = await getDb();
-  const broad = await hasBroadGrant(auth.tenantId, auth.userId);
+  const broad = auth.isAgencyClientQuery === true || (await hasBroadGrant(auth.tenantId, auth.userId));
   const scope = broad ? eq(leads.companyId, auth.tenantId) : and(eq(leads.companyId, auth.tenantId), eq(leads.ownerId, auth.userId));
 
   const [stageDefs, rows] = await Promise.all([
@@ -402,7 +419,7 @@ export interface GetFollowupSummaryResult {
 export async function get_followup_summary(auth: CrmAuthContext, args: { range: DateRange }): Promise<GetFollowupSummaryResult> {
   assertValid("get_followup_summary", validateAuth(auth), validateDateRange(args.range));
   const db = await getDb();
-  const broad = await hasBroadGrant(auth.tenantId, auth.userId);
+  const broad = auth.isAgencyClientQuery === true || (await hasBroadGrant(auth.tenantId, auth.userId));
   const pendingScope = broad ? eq(leads.companyId, auth.tenantId) : and(eq(leads.companyId, auth.tenantId), eq(leads.ownerId, auth.userId));
 
   const [loggedRows, pendingRows] = await Promise.all([

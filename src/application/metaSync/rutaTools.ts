@@ -38,6 +38,7 @@ import type { AiToolSchema } from "../../infrastructure/ai/provider";
 import { containsDateRangePhrase, type DateRange, parseDateRangePhrase, todayRange } from "./rutaDateRange";
 import { composeReply } from "./rutaReplyComposer";
 import {
+  type CrmAuthContext,
   companyStages,
   get_campaign_leads,
   get_campaign_performance,
@@ -48,6 +49,7 @@ import {
   get_user_leads,
   hasBroadGrant,
 } from "./crmTools";
+import { formatClientPickerPrompt, listAccessibleClientsForRutaUser } from "./rutaAgencyClientScoping";
 import {
   detect_anomalies,
   explain_change,
@@ -93,10 +95,62 @@ export interface RutaToolContext {
    * pendingQueryContext's 3-minute TTL. Consulted ONLY by explainLastInsightTool
    * below, for a bare "Why?" follow-up to a proactive alert. */
   lastInsightId?: string;
+  /** Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+   * scoping.md). Always set (true/false) by the orchestrator
+   * (rutaAiAssistant.ts) from the asking user's OWN company's accountType -
+   * a cheap, ctx-level convenience so a tool (helpTool) can vary its reply
+   * without re-querying companies itself. Never used for scoping decisions
+   * on its own - see activeClientCompanyId below for that. */
+  isAgencyTenant?: boolean;
+  /**
+   * Set ONLY when isAgencyTenant is true AND a client has been resolved for
+   * THIS turn (either named in the message, or already active on the
+   * conversation and re-validated) - see rutaAiAssistant.ts's resolution
+   * block, inserted right before tool.run() is called. `tenantId` above
+   * stays the Agency's OWN company throughout (identity/permission
+   * purposes only - see dataTenantId/rutaAuth below); this is the CLIENT's
+   * companyId every actual CRM/analytics query should run against instead.
+   * Undefined for every Individual-account conversation, and for every
+   * Agency conversation before a client is resolved. */
+  activeClientCompanyId?: string;
+  /** Display name of activeClientCompanyId above, for tools that mention it
+   * in their reply (myLeadsToday's agency-branch wording, whichClientTool).
+   * Always set together with activeClientCompanyId - never one without the
+   * other. */
+  activeClientName?: string;
+}
+
+/**
+ * The company whose DATA a query should actually run against - the
+ * resolved active CLIENT for an Agency conversation, or ctx.tenantId
+ * unchanged for everyone else (every Individual-account conversation, and
+ * every Agency conversation before a client is resolved - identical to
+ * ctx.tenantId in both cases, so nothing here changes behavior unless
+ * activeClientCompanyId has actually been set). ctx.tenantId itself is
+ * NEVER swapped - it stays the asking user's own identity company
+ * throughout, for permission/authorization purposes (see rutaAuth below
+ * and CrmAuthContext's own comment in crmTools.ts).
+ */
+export function dataTenantId(ctx: RutaToolContext): string {
+  return ctx.activeClientCompanyId ?? ctx.tenantId;
+}
+
+/** Builds the auth object every crmTools.ts/analyticsTools.ts call passes
+ * in: the DATA company (dataTenantId above) plus isAgencyClientQuery,
+ * forcing every "broad vs self" branch on the far side straight to broad
+ * whenever a client has actually been resolved - see CrmAuthContext's own
+ * comment (crmTools.ts) for why that's the only coherent behavior for an
+ * agency user pointed at a client tenant they hold no membership in. */
+export function rutaAuth(ctx: RutaToolContext): CrmAuthContext {
+  return { tenantId: dataTenantId(ctx), userId: ctx.userId, isAgencyClientQuery: !!ctx.activeClientCompanyId };
 }
 
 export interface PendingOption {
-  kind: "lead" | "teammate";
+  /** "client" - agency client-scoping (see claude/whatsapp-agency-vs-
+   * individual-query-scoping.md): `id` is a clientCompanyId, resolved by
+   * rutaAiAssistant.ts's resolveClientPick rather than resolveLeadPick/
+   * resolveTeammatePick below. */
+  kind: "lead" | "teammate" | "client";
   id: string;
   label: string;
 }
@@ -214,12 +268,21 @@ const helpTool: RutaTool = {
   name: "help",
   description: "The user is asking what RUTA AI Assistant can do.",
   parameters: { type: "object", properties: {} },
-  async run() {
-    return {
-      kind: "text",
-      text:
-        'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n• "what\'s the lead trend this week"\n• "compare campaigns" / "compare sources" this week vs last\n• "overall conversion rate this month"\n• "team performance this week"\n• "any unusual days this month"\n• "why did leads decrease this week"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.\n\nI\'ll also proactively message you about things worth knowing (uncontacted leads piling up, overdue follow-ups, a campaign underperforming, ...) - just reply "why?" on one of those to get the details. Send "mute alerts", "unmute alerts", or "alert settings" any time to control that.',
-    };
+  async run(ctx) {
+    const base =
+      'I can answer things like:\n• "how many leads did we get today" (or yesterday, this week, between 1 aug and 10 aug, ...)\n• "which campaign gave the most leads"\n• "campaign performance" / "conversion rate by campaign"\n• "leads by source"\n• "leads by teammate"\n• "follow-ups this week"\n• "pipeline summary"\n• "how many leads are qualified"\n• "update on <name or phone>"\n• "my leads today"\n• "pending follow-ups"\n• "what\'s the lead trend this week"\n• "compare campaigns" / "compare sources" this week vs last\n• "overall conversion rate this month"\n• "team performance this week"\n• "any unusual days this month"\n• "why did leads decrease this week"\n\nAsk a follow-up like "what about yesterday?" and I\'ll re-run your last question with the new date.\n\nI\'ll also proactively message you about things worth knowing (uncontacted leads piling up, overdue follow-ups, a campaign underperforming, ...) - just reply "why?" on one of those to get the details. Send "mute alerts", "unmute alerts", or "alert settings" any time to control that.';
+    // Agency-specific addendum (see claude/whatsapp-agency-vs-individual-
+    // query-scoping.md) - appended, never replacing, the Individual help
+    // text above, so an Individual account's help reply is byte-for-byte
+    // unchanged.
+    if (!ctx?.isAgencyTenant) return { kind: "text", text: base };
+    const clientLine = ctx.activeClientName
+      ? `\n\nYou're currently asking about *${ctx.activeClientName}*.`
+      : "\n\nAsk me \"which client\" any time to see who you're currently asking about.";
+    const agencyAddendum =
+      '\n\nSince your account manages multiple clients, you can:\n• name a client in your question, e.g. "leads today for Acme Corp"\n• say "switch client" to pick a different one\n• say "which client" to see who you\'re currently asking about' +
+      clientLine;
+    return { kind: "text", text: `${base}${agencyAddendum}` };
   },
 };
 
@@ -233,7 +296,7 @@ const followUpsTodayTool: RutaTool = {
     const rows = await db
       .select({ id: leadFollowUps.id })
       .from(leadFollowUps)
-      .where(and(eq(leadFollowUps.companyId, ctx.tenantId), eq(leadFollowUps.createdBy, ctx.userId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
+      .where(and(eq(leadFollowUps.companyId, dataTenantId(ctx)), eq(leadFollowUps.createdBy, ctx.userId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
     return { kind: "text", text: rows.length === 1 ? "You logged 1 follow-up today." : `You logged ${rows.length} follow-ups today.` };
   },
 };
@@ -245,15 +308,28 @@ const myLeadsTodayTool: RutaTool = {
   async run(ctx) {
     const { start, end } = todayRangeInTimezone(ctx.timezone);
     const db = await getDb();
+    // Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+    // scoping.md): once a client is active, "my leads" for an agency user
+    // has no coherent "owned by me" meaning inside a client tenant they
+    // hold no membership in at all (see rutaAuth's own comment) - this
+    // drops the ownerId filter entirely and reports the CLIENT'S leads
+    // today, company-wide, rather than silently returning zero rows.
+    // Individual-account behavior (activeClientCompanyId always undefined)
+    // is completely unchanged.
+    const scope = ctx.activeClientCompanyId
+      ? and(eq(leads.companyId, dataTenantId(ctx)), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end))
+      : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end));
     const rows = await db
       .select({ fullName: leads.fullName, phoneNumber: leads.phoneNumber })
       .from(leads)
-      .where(and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), gte(leads.metaCreatedAt, start), lt(leads.metaCreatedAt, end)))
+      .where(scope)
       .orderBy(desc(leads.metaCreatedAt))
       .limit(10);
-    if (rows.length === 0) return { kind: "text", text: "No leads assigned to you today." };
+    const noneText = ctx.activeClientCompanyId ? `No leads for ${ctx.activeClientName ?? "this client"} today.` : "No leads assigned to you today.";
+    if (rows.length === 0) return { kind: "text", text: noneText };
     const list = rows.map((r) => `• ${r.fullName ?? "Unnamed"}${r.phoneNumber ? ` — ${r.phoneNumber}` : ""}`).join("\n");
-    return { kind: "text", text: `${rows.length} lead${rows.length === 1 ? "" : "s"} today:\n${list}` };
+    const introText = ctx.activeClientCompanyId ? `${rows.length} lead${rows.length === 1 ? "" : "s"} today for ${ctx.activeClientName ?? "this client"}:\n${list}` : `${rows.length} lead${rows.length === 1 ? "" : "s"} today:\n${list}`;
+    return { kind: "text", text: introText };
   },
 };
 
@@ -283,7 +359,7 @@ const leadCountTool: RutaTool = {
   // own comment above).
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_lead_count({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_lead_count(rutaAuth(ctx), { range });
     const n = structured.count;
     const fallbackText = `You received ${n} lead${n === 1 ? "" : "s"} ${range.label}.`;
     return { kind: "text", text: fallbackText, dateRange: range, structured };
@@ -295,9 +371,13 @@ const pendingFollowUpsTool: RutaTool = {
   description: "Leads with a follow-up due today or overdue.",
   parameters: { type: "object", properties: {} },
   async run(ctx) {
-    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+    // Agency client-scoping: force broad (company-wide, over the CLIENT's
+    // data) whenever a client is active - see rutaAuth's own comment for
+    // why hasBroadGrant's own lookup would be meaningless (and always
+    // false) against a tenant the agency user holds no membership in.
+    const broad = ctx.activeClientCompanyId ? true : await hasBroadGrant(ctx.tenantId, ctx.userId);
     const db = await getDb();
-    const scope = broad ? eq(leads.companyId, ctx.tenantId) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
+    const scope = broad ? eq(leads.companyId, dataTenantId(ctx)) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
     const rows = await db
       .select({ fullName: leads.fullName, phoneNumber: leads.phoneNumber, nextFollowUpAt: leads.nextFollowUpAt })
       .from(leads)
@@ -328,9 +408,13 @@ const updateOnXTool: RutaTool = {
     if (!query) return { kind: "text", text: "Who would you like an update on?" };
 
     const db = await getDb();
-    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
+    // Agency client-scoping: force broad against the CLIENT's data once a
+    // client is active - see pendingFollowUpsTool's own comment above for
+    // why hasBroadGrant's lookup would be meaningless (always false) inside
+    // a tenant the agency user holds no membership in.
+    const broad = ctx.activeClientCompanyId ? true : await hasBroadGrant(ctx.tenantId, ctx.userId);
     const digitsOnly = query.replace(/[^\d]/g, "");
-    const leadScope = broad ? eq(leads.companyId, ctx.tenantId) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
+    const leadScope = broad ? eq(leads.companyId, dataTenantId(ctx)) : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId));
     const leadMatches = await db
       .select({ id: leads.id, fullName: leads.fullName, phoneNumber: leads.phoneNumber })
       .from(leads)
@@ -340,11 +424,13 @@ const updateOnXTool: RutaTool = {
     // Teammate name search is gated by the SAME broad-query grant as the
     // lead search above (audit Finding 2b) - without it, this always
     // searched every active teammate company-wide regardless of the grant.
+    // Note: an agency user searching a client's tenant is searching that
+    // CLIENT's own team roster (dataTenantId), not the agency's own staff.
     const teammateMatches = broad
       ? await db
           .select({ id: users.id, fullName: users.fullName })
           .from(users)
-          .where(and(eq(users.companyId, ctx.tenantId), eq(users.status, "active"), ilike(users.fullName, `%${query}%`)))
+          .where(and(eq(users.companyId, dataTenantId(ctx)), eq(users.status, "active"), ilike(users.fullName, `%${query}%`)))
           .limit(5)
       : [];
 
@@ -384,7 +470,7 @@ const followUpCountTool: RutaTool = {
   // Backed by the get_followup_summary CRM tool (crmTools.ts).
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_followup_summary({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_followup_summary(rutaAuth(ctx), { range });
     const loggedLine = `You logged ${structured.loggedCount} follow-up${structured.loggedCount === 1 ? "" : "s"} ${range.label}.`;
     const pendingLine =
       structured.pendingCount === 0
@@ -410,7 +496,7 @@ const campaignLeadCountsTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_campaign_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_campaign_leads(rutaAuth(ctx), { range });
     if (structured.totalCount === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign.`, dateRange: range, structured };
     const top = structured.campaigns[0]!;
     const list = structured.campaigns.slice(0, 5).map((r) => `• ${r.name} — ${r.count}`).join("\n");
@@ -433,7 +519,7 @@ const campaignPerformanceTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_campaign_performance({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_campaign_performance(rutaAuth(ctx), { range });
     if (structured.campaigns.length === 0) return { kind: "text", text: `No leads ${range.label} to break down by campaign performance.`, dateRange: range, structured };
     const best = [...structured.campaigns].sort((a, b) => b.conversionRatePct - a.conversionRatePct)[0]!;
     const list = structured.campaigns
@@ -461,7 +547,7 @@ const sourceLeadCountsTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_source_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_source_leads(rutaAuth(ctx), { range });
     if (structured.totalCount === 0) return { kind: "text", text: `No leads ${range.label} to break down by source.`, dateRange: range, structured };
     const top = structured.sources[0]!;
     const list = structured.sources.slice(0, 8).map((r) => `• ${r.label} — ${r.count}`).join("\n");
@@ -490,7 +576,7 @@ const userLeadCountsTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_user_leads({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_user_leads(rutaAuth(ctx), { range });
 
     if (structured.scope === "self") {
       const n = structured.totalCount;
@@ -525,7 +611,7 @@ const trendTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_trend({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    const structured = await get_trend(rutaAuth(ctx), { range, timezone: ctx.timezone });
     const s = structured.stats;
     const fallbackText =
       s.direction === "flat"
@@ -546,7 +632,7 @@ const campaignComparisonTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_campaign_comparison({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_campaign_comparison(rutaAuth(ctx), { range });
     if (structured.rows.length === 0) return { kind: "text", text: `No campaign data ${range.label} or the previous period to compare.`, dateRange: range, structured };
     const list = structured.rows
       .slice(0, 5)
@@ -569,7 +655,7 @@ const sourceComparisonTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_source_comparison({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_source_comparison(rutaAuth(ctx), { range });
     if (structured.rows.length === 0) return { kind: "text", text: `No source data ${range.label} or the previous period to compare.`, dateRange: range, structured };
     const list = structured.rows
       .slice(0, 5)
@@ -595,7 +681,7 @@ const conversionRateTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_conversion_rate({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_conversion_rate(rutaAuth(ctx), { range });
     const fallbackText =
       structured.totalCount === 0
         ? `No leads ${range.label} to calculate a conversion rate from.`
@@ -619,7 +705,7 @@ const teamPerformanceTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await get_team_performance({ tenantId: ctx.tenantId, userId: ctx.userId }, { range });
+    const structured = await get_team_performance(rutaAuth(ctx), { range });
 
     if (structured.scope === "self") {
       const r = structured.rows[0]!;
@@ -649,7 +735,7 @@ const anomaliesTool: RutaTool = {
   sessionRole: "drilldown",
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await detect_anomalies({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    const structured = await detect_anomalies(rutaAuth(ctx), { range, timezone: ctx.timezone });
     if (structured.anomalies.length === 0) return { kind: "text", text: `No unusual days ${range.label}.`, dateRange: range, structured };
     const list = structured.anomalies.map((a) => `• ${a.label} — ${a.count} lead${a.count === 1 ? "" : "s"} (${a.kind}, z=${a.zScore})`).join("\n");
     const fallbackText = `${structured.anomalies.length} unusual day${structured.anomalies.length === 1 ? "" : "s"} ${range.label}:\n${list}`;
@@ -667,7 +753,7 @@ const explainChangeTool: RutaTool = {
   },
   async run(ctx, args) {
     const range = resolveRange(ctx, args.query);
-    const structured = await explain_change({ tenantId: ctx.tenantId, userId: ctx.userId }, { range, timezone: ctx.timezone });
+    const structured = await explain_change(rutaAuth(ctx), { range, timezone: ctx.timezone });
     const s = structured.stats;
     const trendLine =
       s.direction === "flat"
@@ -708,7 +794,7 @@ const pipelineSummaryTool: RutaTool = {
   // Backed by the get_pipeline_summary CRM tool (crmTools.ts) - it decides
   // the broad-grant fallback (personal vs company-wide) itself.
   async run(ctx) {
-    const structured = await get_pipeline_summary({ tenantId: ctx.tenantId, userId: ctx.userId });
+    const structured = await get_pipeline_summary(rutaAuth(ctx));
     if (structured.totalCount === 0) {
       return { kind: "text", text: structured.scope === "company" ? "No leads in the pipeline yet." : "You have no leads in the pipeline yet.", structured };
     }
@@ -726,8 +812,11 @@ const leadStatusTool: RutaTool = {
     properties: { query: { type: "string", description: "The stage name asked about, if any (e.g. 'qualified', 'won', 'site visit')." } },
   },
   async run(ctx, args) {
-    const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
-    const stages = await companyStages(ctx.tenantId);
+    // Agency client-scoping: force broad against the CLIENT's data once a
+    // client is active - same rationale as pendingFollowUpsTool/updateOnX
+    // above.
+    const broad = ctx.activeClientCompanyId ? true : await hasBroadGrant(ctx.tenantId, ctx.userId);
+    const stages = await companyStages(dataTenantId(ctx));
     const text = (args.query ?? "").toLowerCase();
     const matchedStage = text ? stages.find((s) => text.includes(s.label.toLowerCase()) || text.includes(s.key.toLowerCase())) : undefined;
 
@@ -735,7 +824,7 @@ const leadStatusTool: RutaTool = {
 
     const db = await getDb();
     const scope = broad
-      ? and(eq(leads.companyId, ctx.tenantId), eq(leads.pipelineStage, matchedStage.key))
+      ? and(eq(leads.companyId, dataTenantId(ctx)), eq(leads.pipelineStage, matchedStage.key))
       : and(eq(leads.companyId, ctx.tenantId), eq(leads.ownerId, ctx.userId), eq(leads.pipelineStage, matchedStage.key));
     const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(leads).where(scope);
     const n = row?.n ?? 0;
@@ -819,6 +908,57 @@ const alertSettingsTool: RutaTool = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+// scoping.md) - "switch client" / "which client". Both are no-ops (never
+// referenced, never matched by matchPattern, never reachable) for an
+// Individual account - see NO_CLIENT_RESOLUTION_TOOLS below (rutaAiAssistant.ts's
+// own gate reads ctx.isAgencyTenant/sendCtx.accountType before either of
+// these can ever fire at all).
+// ---------------------------------------------------------------------------
+
+/** Tool names the orchestrator's client-resolution block (rutaAiAssistant.ts,
+ * inserted right before tool.run()) must NOT go looking for a NEW client
+ * for (no mention-parsing, no auto-pick, no "which client?" picker prompt)
+ * before running - switchClient explicitly wants to show the FULL picker
+ * regardless of whatever's currently active, and help/mute/unmute/
+ * alertSettings/explainLastInsight are tenant-level (preferences, the help
+ * text, a proactive alert already tied to a specific insight) rather than
+ * client-data queries, so gating them on "which client first" would be pure
+ * friction with no query to scope. Whatever client is ALREADY active for
+ * the conversation is still surfaced (revalidated) to these tools' ctx
+ * regardless - e.g. helpTool uses ctx.activeClientName - only the "go find
+ * one" steps are skipped. Every other tool in RUTA_TOOLS goes through the
+ * full resolution block. */
+export const NO_CLIENT_RESOLUTION_TOOLS = new Set<string>(["help", "switchClient", "muteAlerts", "unmuteAlerts", "alertSettings", "explainLastInsight"]);
+
+const switchClientTool: RutaTool = {
+  name: "switchClient",
+  description: "Agency accounts only: the user wants to switch which client company they're asking about (switch client / change client / different client).",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    if (!ctx.isAgencyTenant) return { kind: "text", text: "This account doesn't manage multiple clients." };
+    const accessible = await listAccessibleClientsForRutaUser(ctx.tenantId, ctx.userId);
+    if (accessible.length === 0) return { kind: "text", text: "You don't have any clients set up to switch to yet." };
+    const options: PendingOption[] = accessible.map((c) => ({ kind: "client" as const, id: c.clientCompanyId, label: c.clientName }));
+    return { kind: "disambiguate", text: formatClientPickerPrompt(accessible, "Which client would you like to ask about? Reply with a number:"), options };
+  },
+};
+
+const whichClientTool: RutaTool = {
+  name: "whichClient",
+  description: "Agency accounts only: the user is asking which client company they're currently asking about (which client / current client / who am I looking at).",
+  parameters: { type: "object", properties: {} },
+  async run(ctx) {
+    if (!ctx.isAgencyTenant) return { kind: "text", text: "This account doesn't manage multiple clients." };
+    // Guaranteed non-null here: whichClient is NOT in
+    // NO_CLIENT_RESOLUTION_TOOLS, so the orchestrator's resolution block
+    // already resolved (or prompted for, in which case this run() is never
+    // reached this turn) a client before calling this tool at all.
+    return { kind: "text", text: ctx.activeClientName ? `You're currently asking about *${ctx.activeClientName}*.` : "No client is currently active - ask me about a specific client, or say \"switch client\"." };
+  },
+};
+
 /**
  * Single source of truth for what RUTA can do - both the fast pattern
  * matcher (matchPattern below) and every AI provider's function-calling
@@ -853,6 +993,10 @@ export const RUTA_TOOLS: RutaTool[] = [
   muteAlertsTool,
   unmuteAlertsTool,
   alertSettingsTool,
+  // Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+  // scoping.md) - see that section's own header above.
+  switchClientTool,
+  whichClientTool,
 ];
 
 export function rutaToolSchemas(): AiToolSchema[] {
@@ -877,11 +1021,16 @@ export async function resolveLeadPick(ctx: RutaToolContext, leadId: string): Pro
   const [lead] = await db
     .select({ fullName: leads.fullName, pipelineStage: leads.pipelineStage, nextFollowUpAt: leads.nextFollowUpAt, id: leads.id, ownerId: leads.ownerId })
     .from(leads)
-    .where(and(eq(leads.id, leadId), eq(leads.companyId, ctx.tenantId)))
+    .where(and(eq(leads.id, leadId), eq(leads.companyId, dataTenantId(ctx))))
     .limit(1);
   if (!lead) return "That lead is no longer available.";
 
-  if (lead.ownerId !== ctx.userId) {
+  // Agency client-scoping: an agency user has no "ownership" concept inside
+  // a client's tenant at all (see rutaAuth's own comment) - once a client
+  // is active, any lead found within that client's own data is always
+  // allowed; the owner/broad-grant check below only applies to an
+  // Individual-account (or agency-own-tenant) lookup, unchanged.
+  if (!ctx.activeClientCompanyId && lead.ownerId !== ctx.userId) {
     const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
     if (!broad) return "You don't have access to that lead.";
   }
@@ -904,19 +1053,24 @@ export async function resolveLeadPick(ctx: RutaToolContext, leadId: string): Pro
 export async function resolveTeammatePick(ctx: RutaToolContext, teammateUserId: string): Promise<string> {
   // Self-lookup is always allowed; anyone else's activity requires the
   // broad-query grant - checked here (not just at search time) since a
-  // resolved numbered pick skips the search step entirely.
-  if (teammateUserId !== ctx.userId) {
+  // resolved numbered pick skips the search step entirely. Agency
+  // client-scoping: once a client is active, "teammateUserId !== ctx.userId"
+  // is true for every teammate (the asking agency user is never a member of
+  // the client's own roster at all), so this always forces broad rather
+  // than incorrectly falling to hasBroadGrant's own tenant-mismatched
+  // lookup - same rationale as resolveLeadPick above.
+  if (!ctx.activeClientCompanyId && teammateUserId !== ctx.userId) {
     const broad = await hasBroadGrant(ctx.tenantId, ctx.userId);
     if (!broad) return "You don't have access to other teammates' activity.";
   }
   const { start, end } = todayRangeInTimezone(ctx.timezone);
   const db = await getDb();
-  const [teammate] = await db.select({ fullName: users.fullName }).from(users).where(and(eq(users.id, teammateUserId), eq(users.companyId, ctx.tenantId))).limit(1);
+  const [teammate] = await db.select({ fullName: users.fullName }).from(users).where(and(eq(users.id, teammateUserId), eq(users.companyId, dataTenantId(ctx)))).limit(1);
   if (!teammate) return "That teammate is no longer available.";
   const rows = await db
     .select({ id: leadFollowUps.id })
     .from(leadFollowUps)
-    .where(and(eq(leadFollowUps.companyId, ctx.tenantId), eq(leadFollowUps.createdBy, teammateUserId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
+    .where(and(eq(leadFollowUps.companyId, dataTenantId(ctx)), eq(leadFollowUps.createdBy, teammateUserId), gte(leadFollowUps.createdAt, start), lt(leadFollowUps.createdAt, end)));
   return `${teammate.fullName} logged ${rows.length} follow-up${rows.length === 1 ? "" : "s"} today.`;
 }
 
@@ -940,6 +1094,16 @@ export function matchPattern(text: string): { name: string; arguments: Record<st
   if (/\b(mute|silence|stop|disable|turn off)\b/i.test(t) && /\b(alert|notification)/i.test(t)) return { name: "muteAlerts", arguments: {} };
   if (/\b(unmute|resume|enable|turn on)\b/i.test(t) && /\b(alert|notification)/i.test(t)) return { name: "unmuteAlerts", arguments: {} };
   if (/\b(alert|notification)/i.test(t) && /\b(setting|preference|status)/i.test(t)) return { name: "alertSettings", arguments: {} };
+
+  // Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+  // scoping.md) - checked early, same reasoning as the alert-preference
+  // rules above: "client" doesn't otherwise collide with any rule below,
+  // and both tools are no-ops for an Individual account anyway (see
+  // switchClientTool/whichClientTool's own run() - no accessible-client
+  // list or ctx.isAgencyTenant means this can never actually change
+  // behavior there).
+  if (/\b(switch|change|different)\b/i.test(t) && /\bclient/i.test(t)) return { name: "switchClient", arguments: {} };
+  if (/\b(which|what|current)\b/i.test(t) && /\bclient/i.test(t)) return { name: "whichClient", arguments: {} };
 
   const updateMatch = UPDATE_ON_RE.exec(t);
   if (updateMatch && updateMatch[1]) return { name: "updateOnX", arguments: { query: updateMatch[1].trim() } };

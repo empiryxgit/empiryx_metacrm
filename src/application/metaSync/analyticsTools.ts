@@ -375,7 +375,10 @@ export interface GetTeamPerformanceResult {
 export async function get_team_performance(auth: CrmAuthContext, args: { range: DateRange }): Promise<GetTeamPerformanceResult> {
   assertValid("get_team_performance", validateAuth(auth), validateDateRange(args.range));
   const db = await getDb();
-  const broad = await hasBroadGrant(auth.tenantId, auth.userId);
+  // isAgencyClientQuery: see CrmAuthContext's own comment (crmTools.ts) -
+  // same "force broad, RUTA_AI_ASSISTANT_BROAD_QUERY doesn't apply here"
+  // rule every crmTools.ts function already follows.
+  const broad = auth.isAgencyClientQuery === true || (await hasBroadGrant(auth.tenantId, auth.userId));
   const stageDefs = await companyStages(auth.tenantId);
   const wonKeys = new Set(stageDefs.filter((s) => s.isWon).map((s) => s.key));
 

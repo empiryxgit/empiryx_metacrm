@@ -51,6 +51,12 @@ export interface RutaConversation {
   userId: string;
   pendingContext: unknown;
   pendingContextExpiresAt: Date | null;
+  /** Agency client-scoping (see claude/whatsapp-agency-vs-individual-query-
+   * scoping.md and rutaAgencyClientScoping.ts, the only application code
+   * that reads/writes this) - null for every Individual-account
+   * conversation, and null for an Agency conversation until a client has
+   * been resolved. */
+  activeClientCompanyId: string | null;
 }
 
 /**
@@ -83,7 +89,14 @@ export async function getOrCreateActiveConversation(tenantId: string, userId: st
       .update(rutaConversations)
       .set({ lastActivityAt: now, idleExpiresAt, updatedAt: now })
       .where(and(eq(rutaConversations.id, existing.id), eq(rutaConversations.tenantId, tenantId), eq(rutaConversations.userId, userId)));
-    return { id: existing.id, tenantId, userId, pendingContext: existing.pendingContext, pendingContextExpiresAt: existing.pendingContextExpiresAt };
+    return {
+      id: existing.id,
+      tenantId,
+      userId,
+      pendingContext: existing.pendingContext,
+      pendingContextExpiresAt: existing.pendingContextExpiresAt,
+      activeClientCompanyId: existing.activeClientCompanyId,
+    };
   }
 
   const [created] = await db
@@ -91,7 +104,24 @@ export async function getOrCreateActiveConversation(tenantId: string, userId: st
     .values({ tenantId, userId, phoneNumber, startedAt: now, lastActivityAt: now, idleExpiresAt })
     .returning();
   if (!created) throw new Error("Failed to create RUTA conversation.");
-  return { id: created.id, tenantId, userId, pendingContext: null, pendingContextExpiresAt: null };
+  return { id: created.id, tenantId, userId, pendingContext: null, pendingContextExpiresAt: null, activeClientCompanyId: null };
+}
+
+/**
+ * Sets/clears the agency client-scoping pointer for this EXACT (tenantId,
+ * userId, conversationId) triple - same "scoped by all three together"
+ * isolation guarantee as setPendingContext above. Pass null to clear it
+ * (e.g. re-validation found the previously-resolved client is no longer
+ * accessible - see rutaAgencyClientScoping.ts's revalidateActiveClient).
+ * Deliberately does NOT touch pendingContext/pendingContextExpiresAt - the
+ * two pointers are independent state on the same row.
+ */
+export async function setActiveClientCompanyId(tenantId: string, userId: string, conversationId: string, clientCompanyId: string | null): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(rutaConversations)
+    .set({ activeClientCompanyId: clientCompanyId, updatedAt: new Date() })
+    .where(and(eq(rutaConversations.id, conversationId), eq(rutaConversations.tenantId, tenantId), eq(rutaConversations.userId, userId)));
 }
 
 /** The live pending disambiguation/anchor pointer for this EXACT
