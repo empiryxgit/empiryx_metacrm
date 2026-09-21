@@ -92,6 +92,22 @@ export async function updateCompanyProfile(
   await db.update(companies).set({ ...input, updatedAt: new Date() }).where(eq(companies.id, companyId));
 }
 
+export async function updateCompany(
+  companyId: string,
+  input: {
+    name?: string;
+    industry?: string;
+    industryTemplate?: string;
+    status?: string;
+    companySize?: string;
+    timezone?: string;
+  },
+) {
+  const db = await getDb();
+  await db.update(companies).set({ ...input, updatedAt: new Date() }).where(eq(companies.id, companyId));
+}
+
+
 /**
  * Persists the guided onboarding wizard's own new fields (PHASE 6/7/9) -
  * website, leadTerminology, selectedLeadSources - deliberately kept
