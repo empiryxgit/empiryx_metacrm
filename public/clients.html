@@ -318,6 +318,7 @@
 
 <script src="/assets/app.js"></script>
 <script>
+  let me = null;
   let allClients = [];
   let agencyEmployees = [];
   let clientsPage = 1;
@@ -349,6 +350,7 @@
   }
 
   function renderClients() {
+    const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
     const q = document.getElementById("searchInput").value.trim().toLowerCase();
     let filtered = allClients;
     if (statusFilter !== "all") {
@@ -399,7 +401,7 @@
               <strong>Client Users:</strong> ${fmt(c.users)}
             </span>
           </div>
-          <div class="assigned-employees-box">
+          <div class="assigned-employees-box"${isOwner ? "" : ' style="display:none"'}>
             <span style="font-size:12px; color:var(--text-muted)">Assigned Reps:</span>
             <button class="assign-btn-inline" type="button" data-assign="${c.id}" data-name="${App.escapeHtml(c.name)}">
               Select Employees to Start Work 👥
@@ -410,10 +412,10 @@
           <button class="btn" type="button" data-enter="${c.id}"${canOpen ? "" : " disabled title=\"Available once the client accepts\""}>
             Work on Client (Open LMS)
           </button>
-          <button class="btn secondary sm" type="button" data-assign="${c.id}" data-name="${App.escapeHtml(c.name)}">Assign Team</button>
-          <button class="btn secondary sm" type="button" data-edit="${c.id}" data-name="${App.escapeHtml(c.name)}" data-status="${c.status}">Edit</button>
+          ${isOwner ? `<button class="btn secondary sm" type="button" data-assign="${c.id}" data-name="${App.escapeHtml(c.name)}">Assign Team</button>` : ""}
+          ${isOwner ? `<button class="btn secondary sm" type="button" data-edit="${c.id}" data-name="${App.escapeHtml(c.name)}" data-status="${c.status}">Edit</button>` : ""}
           <button class="btn secondary sm" type="button" data-open="${c.id}">Details</button>
-          <button class="btn danger sm" type="button" data-remove="${c.id}" data-name="${App.escapeHtml(c.name)}">Remove</button>
+          ${isOwner ? `<button class="btn danger sm" type="button" data-remove="${c.id}" data-name="${App.escapeHtml(c.name)}">Remove</button>` : ""}
         </div>
       </div>`;
     }).join("");
@@ -697,14 +699,16 @@
   // ---- Load all data -------------------------------------------------------
   async function load() {
     document.getElementById("banner").innerHTML = "";
-    const me = await App.requireAuth();
+    me = await App.requireAuth();
     if (!me) return;
 
     document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/clients.html");
-    document.getElementById("headActions").style.display = "flex";
 
-    await loadAgencyEmployees();
+    const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
+    document.getElementById("headActions").style.display = isOwner ? "flex" : "none";
+
+    if (isOwner) await loadAgencyEmployees();
 
     try {
       const summary = await App.apiJson("/api/agency/dashboard");
@@ -715,9 +719,13 @@
       document.getElementById("clientCards").innerHTML = "";
     }
 
-    await loadOnboardingLinks();
+    if (isOwner) {
+      await loadOnboardingLinks();
+    } else {
+      document.getElementById("onboardingLinksSection").style.display = "none";
+    }
 
-    if (new URLSearchParams(window.location.search).get("tab") === "invitations") {
+    if (new URLSearchParams(window.location.search).get("tab") === "invitations" && isOwner) {
       openGenerateLinkModal();
     }
   }

@@ -161,6 +161,11 @@ export interface AgencyDashboardSummary {
     // dashboard's own "Leads" KPI tile shows this, not totalLeads, since an
     // all-time figure never moves day to day for an established agency.
     leadsInRange: number;
+    wonLeads: number;
+    wonLeadsInRange: number;
+    lostLeads: number;
+    lostLeadsInRange: number;
+    todaysFollowups: number;
     activeCampaigns: number;
     // Agency-wide: total won leads / total leads across every authorized
     // client, 0-100 (0 when there are no leads at all, never NaN) - NOT an
@@ -171,6 +176,7 @@ export interface AgencyDashboardSummary {
     // AgencyDashboardClientRow.users below, surfaced as its own KPI ("Team
     // Members") rather than making the caller re-sum the roster itself.
     teamMembers: number;
+    isAgencyOwner: boolean;
   };
   // Which 7d/30d window kpis.leadsInRange actually used - echoed back so
   // the UI's range tabs can reflect what was actually applied if the query
@@ -224,15 +230,29 @@ function wonLeadsForClient(
   return template.stages.filter((s) => s.isWon).reduce((sum, s) => sum + (stageCounts.get(s.key) ?? 0), 0);
 }
 
+function lostLeadsForClient(
+  client: { clientIndustryTemplate: string; clientCustomTemplateConfig?: unknown },
+  stageCounts: Map<string, number>,
+): number {
+  const template = resolveEffectiveIndustryTemplate(client.clientIndustryTemplate, client.clientCustomTemplateConfig);
+  return template.stages
+    .filter((s) => (s.isClosed && !s.isWon) || s.key === "lost")
+    .reduce((sum, s) => sum + (stageCounts.get(s.key) ?? 0), 0);
+}
+
 function conversionRate(wonLeads: number, totalLeads: number): number {
   return totalLeads === 0 ? 0 : Math.round((wonLeads / totalLeads) * 1000) / 10; // one decimal place
 }
 
-async function buildAgencyClientRoster(agencyCompanyId: string, access: AgencyClientAccess) {
+async function buildAgencyClientRoster(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+  range?: { from?: Date; to?: Date },
+) {
   const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
   const claimed = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
   const clientIds = claimed.map((c) => c.clientCompanyId);
-  const [metrics, userRows] = await Promise.all([getClientMetrics(clientIds), listUsersForCompanies(clientIds)]);
+  const [metrics, userRows] = await Promise.all([getClientMetrics(clientIds, range), listUsersForCompanies(clientIds)]);
 
   const userCountByClient = new Map<string, number>();
   for (const u of userRows) {
@@ -288,11 +308,11 @@ export async function getAgencyDashboardSummary(
   access: AgencyClientAccess,
   rangeParam?: string,
 ): Promise<AgencyDashboardSummary> {
-  const { claimed, metrics, clients } = await buildAgencyClientRoster(agencyCompanyId, access);
-  const clientIds = claimed.map((c) => c.clientCompanyId);
-
   const { from: rangeFrom, to: rangeTo, key: rangeKey } = resolveDashboardRange(rangeParam);
   const { from: chartFrom, to: chartTo, days: chartDays } = resolveChartWindow();
+
+  const { claimed, metrics, clients } = await buildAgencyClientRoster(agencyCompanyId, access, { from: rangeFrom, to: rangeTo });
+  const clientIds = claimed.map((c) => c.clientCompanyId);
 
   // Onboarding-link invitations are NOT scoped by `access` - see this
   // function's own AgencyDashboardSummary.kpis.pendingInvitations doc
@@ -317,6 +337,12 @@ export async function getAgencyDashboardSummary(
   // (not averaged from clients[].conversionRate) - an average-of-averages
   // would weight a 1-lead client the same as a 10,000-lead one.
   const totalWonLeads = claimed.reduce((sum, c) => sum + wonLeadsForClient(c, metrics.get(c.clientCompanyId)!.stageCounts), 0);
+  const totalWonLeadsInRange = claimed.reduce((sum, c) => sum + wonLeadsForClient(c, metrics.get(c.clientCompanyId)!.stageCountsInRange), 0);
+  const totalLostLeads = claimed.reduce((sum, c) => sum + lostLeadsForClient(c, metrics.get(c.clientCompanyId)!.stageCounts), 0);
+  const totalLostLeadsInRange = claimed.reduce((sum, c) => sum + lostLeadsForClient(c, metrics.get(c.clientCompanyId)!.stageCountsInRange), 0);
+  const todaysFollowups = [...metrics.values()].reduce((sum, m) => sum + m.todaysFollowups, 0);
+
+  const isAgencyOwner = access.scope === "all";
 
   const kpis = {
     clients: claimed.length,
@@ -326,9 +352,15 @@ export async function getAgencyDashboardSummary(
     leadsToday: [...metrics.values()].reduce((sum, m) => sum + m.leadsToday, 0),
     leadsThisMonth: [...metrics.values()].reduce((sum, m) => sum + m.leadsThisMonth, 0),
     leadsInRange: leadsInRangeResult.totalLeads,
+    wonLeads: totalWonLeads,
+    wonLeadsInRange: totalWonLeadsInRange,
+    lostLeads: totalLostLeads,
+    lostLeadsInRange: totalLostLeadsInRange,
+    todaysFollowups,
     activeCampaigns: clients.reduce((sum, c) => sum + c.activeCampaigns, 0),
     conversionRate: conversionRate(totalWonLeads, totalLeads),
     teamMembers: clients.reduce((sum, c) => sum + c.users, 0),
+    isAgencyOwner,
   };
 
   // Top Rep per client - highest won-count owner on THAT client's own team

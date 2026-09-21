@@ -133,7 +133,7 @@
           </div>
         </div>
         <div class="donut-row" id="donutBody"></div>
-        <a href="#employeeSection" class="dash-card-link" style="display:inline-block; margin-top:14px;">View full team performance ›</a>
+        <a href="#employeeSection" class="dash-card-link" id="teamLink" style="display:inline-block; margin-top:14px;">View full team performance ›</a>
       </div>
     </div>
 
@@ -154,9 +154,9 @@
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Client</th><th>Status</th><th>Leads</th><th>Conversion</th><th>Reps</th><th>Top Rep</th><th>Last Activity</th></tr>
+              <tr><th>Client</th><th>Status</th><th>Leads</th><th>Conversion</th><th>Reps</th><th>Top Rep</th><th>Last Activity</th><th style="text-align:right">Actions</th></tr>
             </thead>
-            <tbody id="clientBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+            <tbody id="clientBody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
           </table>
         </div>
         <div class="pagination-bar" id="clientPaginationBar" style="display:none"></div>
@@ -250,28 +250,47 @@
   function renderKpis() {
     const k = dashboardData.kpis;
     const rangeLabel = dashboardData.range === "30d" ? "30D" : "7D";
+    const rangeFullLabel = dashboardData.range === "30d" ? "Last 30 Days" : "Last 7 Days";
+
     const cards = [
       {
-        label: "Total Clients", value: fmt(k.clients),
+        label: "Total Clients",
+        value: fmt(k.clients),
         note: `${fmt(k.activeClients)} active${k.pendingInvitations ? ` · ${fmt(k.pendingInvitations)} pending` : ""}`,
       },
-      { label: `Leads (${rangeLabel})`, value: fmt(k.leadsInRange), note: dashboardData.range === "30d" ? "Last 30 days" : "Last 7 days" },
-      { label: "Blended Conversion", value: fmtPct(k.conversionRate), note: "Across all clients" },
-      { label: "Active Campaigns", value: fmt(k.activeCampaigns), note: "Across all clients" },
-      { label: "Team Members", value: fmt(k.teamMembers), note: `Across ${fmt(k.clients)} client${k.clients === 1 ? "" : "s"}` },
+      {
+        label: `Total Leads (${rangeFullLabel})`,
+        value: fmt(k.leadsInRange),
+        note: `${fmt(k.totalLeads)} all-time leads`,
+      },
+      {
+        label: "Won Leads",
+        value: fmt(k.wonLeads ?? 0),
+        note: `${k.wonLeadsInRange ? `${fmt(k.wonLeadsInRange)} in ${rangeLabel}` : "Across assigned clients"}`,
+      },
+      {
+        label: `Lost Leads (${rangeFullLabel})`,
+        value: fmt(k.lostLeadsInRange ?? 0),
+        note: `${fmt(k.lostLeads ?? 0)} all-time lost`,
+      },
+      {
+        label: "Total Todays Followup",
+        value: fmt(k.todaysFollowups ?? 0),
+        note: "Scheduled for today",
+      },
+      {
+        label: "Active Campaigns",
+        value: fmt(k.activeCampaigns),
+        note: "Across assigned clients",
+      },
     ];
-    const planCard = `
-      <a class="kpi-card kpi-card-link" href="/subscription.html">
-        <div class="kpi-label">Subscription Plan</div>
-        <div class="kpi-value"><span class="plan-pill">${App.escapeHtml(planLabel(billingStatus?.entitlement))}</span></div>
-        <div class="kpi-note">${App.escapeHtml(planNote(billingStatus?.entitlement, billingStatus?.clients))}</div>
-      </a>`;
+
     document.getElementById("kpiGrid").innerHTML = cards.map(c => `
       <div class="kpi-card">
         <div class="kpi-label">${App.escapeHtml(c.label)}</div>
         <div class="kpi-value">${c.value}</div>
         <div class="kpi-note">${App.escapeHtml(c.note)}</div>
-      </div>`).join("") + planCard;
+      </div>`).join("");
   }
 
   // ---- Lead Volume chart: pin up to 5 clients, search to compare --------
@@ -570,7 +589,11 @@
         <td>${fmt(c.users)}</td>
         <td>${c.topRep ? App.escapeHtml(c.topRep) : "—"}</td>
         <td>${fmtLastActivity(c.lastActivityAt)}</td>
-      </tr>`).join("") : `<tr><td colspan="7" class="empty">No clients match "${App.escapeHtml(clientSearch)}"</td></tr>`;
+        <td style="text-align:right; white-space:nowrap">
+          <a href="/client-detail.html?clientId=${encodeURIComponent(c.id)}" class="btn btn-secondary btn-sm" style="margin-right:6px; font-size:11.5px; padding:3px 8px;">View</a>
+          <button type="button" class="btn btn-sm" style="font-size:11.5px; padding:3px 9px;" onclick="App.enterClient('${c.id}')">Work on Client</button>
+        </td>
+      </tr>`).join("") : `<tr><td colspan="8" class="empty">No clients match "${App.escapeHtml(clientSearch)}"</td></tr>`;
 
     App.renderPagination(document.getElementById("clientPaginationBar"), { page: clientsPage, pageSize: clientsPageSize, total: filtered.length, totalPages }, {
       onPageChange: (p) => { clientsPage = p; renderClientTable(); },
@@ -597,6 +620,11 @@
   let empPageSize = 25;
 
   async function loadEmployeeTable() {
+    const isOwner = Boolean(dashboardData?.kpis?.isAgencyOwner || App.hasPermission(me, "company.manage"));
+    if (!isOwner) {
+      document.getElementById("employeeSection").style.display = "none";
+      return;
+    }
     const body = document.getElementById("employeeBody");
     const params = new URLSearchParams({ page: empPage, pageSize: empPageSize, sortBy: empSort.field, sortDir: empSort.dir });
     if (empSearch) params.set("search", empSearch);
@@ -642,12 +670,10 @@
   // ---- Bootstrap ----------------------------------------------------
   async function loadDashboard() {
     try {
+      const isOwner = Boolean(App.hasPermission(me, "company.manage"));
       const [summary, billing] = await Promise.all([
         App.apiJson(`/api/agency/dashboard?range=${encodeURIComponent(rangeKey)}`),
-        // Best-effort - the Subscription Plan tile degrades gracefully
-        // (shows "—") rather than blocking the whole dashboard if billing
-        // status fails to load.
-        App.apiJson("/api/billing/status").catch(() => null),
+        isOwner ? App.apiJson("/api/billing/status").catch(() => null) : Promise.resolve(null),
       ]);
       dashboardData = summary;
       billingStatus = billing;
@@ -662,6 +688,16 @@
       renderRankList();
       renderDonut();
       clientsPage = 1; renderClientTable();
+
+      const canViewEmployees = Boolean(dashboardData?.kpis?.isAgencyOwner || isOwner);
+      if (canViewEmployees) {
+        document.getElementById("employeeSection").style.display = "";
+        document.getElementById("teamLink")?.style.removeProperty("display");
+        loadEmployeeTable();
+      } else {
+        document.getElementById("employeeSection").style.display = "none";
+        document.getElementById("teamLink")?.style.setProperty("display", "none");
+      }
     } catch (err) {
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     }
@@ -682,13 +718,10 @@
 
     document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/agency-dashboard.html");
-    document.getElementById("pageSub").textContent = `Welcome, ${me.company.name}`;
+    document.getElementById("pageSub").textContent = `Welcome, ${me.user?.fullName || me.company.name}`;
     document.getElementById("headActions").style.display = "flex";
 
     await loadDashboard();
-    if (dashboardData) {
-      loadEmployeeTable();
-    }
   }
 
   load();
