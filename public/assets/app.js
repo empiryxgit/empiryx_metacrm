@@ -275,7 +275,7 @@ const App = (() => {
   // themselves are untouched on disk, just unlinked from the nav.
   const AGENCY_LINKS = [
     { href: "/agency-dashboard.html", label: "Dashboard", icon: NAV_ICONS.dashboard },
-    { href: "/clients.html", label: "Clients", icon: NAV_ICONS.branches },
+    { href: "/clients.html", label: "Client", icon: NAV_ICONS.branches },
   ];
 
   // Flat, top-level admin nav items - kept separate from the "Settings"

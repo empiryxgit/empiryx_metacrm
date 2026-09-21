@@ -14,6 +14,17 @@
   .client-kpis{ display:grid; grid-template-columns:repeat(2, 1fr); gap:14px; max-width:420px; }
   .integration-row{ display:flex; align-items:center; gap:10px; }
   .relationship-actions{ display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; }
+  
+  .employee-select-list{ max-height:280px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-md); padding:6px; display:flex; flex-direction:column; gap:4px; margin:10px 0 14px; }
+  .employee-select-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:var(--radius-sm); cursor:pointer; transition:background .1s; }
+  .employee-select-row:hover{ background:var(--surface-sunken); }
+  .employee-select-row.selected{ background:var(--brand-primary-soft); }
+  .employee-select-left{ display:flex; align-items:center; gap:10px; min-width:0; }
+  .employee-select-info{ display:flex; flex-direction:column; min-width:0; }
+  .employee-select-name{ font-size:13px; font-weight:600; color:var(--text-primary); }
+  .employee-select-email{ font-size:11.5px; color:var(--text-muted); }
+  .employee-select-role{ font-size:11px; font-weight:600; color:var(--text-secondary); background:var(--surface-sunken); padding:2px 6px; border-radius:4px; }
+  .chip-assigned{ display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; background:var(--surface-sunken); border:1px solid var(--border); font-size:12px; font-weight:600; }
 </style>
 </head>
 <body>
@@ -26,21 +37,9 @@
         <h1 class="page-title" id="clientName">Client</h1>
         <p class="page-sub"><span class="pill" id="statusPill"></span></p>
       </div>
-      <!-- THE way an agency opens a client - see src/application/
-           agencyClientContext.ts's header comment for the full design.
-           Clicking this is what "when an agency opens a client, they
-           should see the client's normal CRM interface" actually means:
-           it lands on the exact same, completely unchanged
-           dashboard.html/pipeline.html/campaigns.html/forms.html a real
-           user of this client would see - never a second, agency-specific
-           rebuild of any of those pages. Everything below on THIS page
-           (Users/Campaigns/Integration/Settings, Suspend/Remove) stays a
-           separate, read-only AGENCY-side relationship-management view -
-           deliberately not routed through client context (see that same
-           header comment for why admin/settings never is) - so it's
-           unaffected by this change. -->
       <div class="page-head-actions" id="headActions" style="display:none">
-        <button class="btn" type="button" id="openCrmBtn">Open LMS Dashboard</button>
+        <button class="btn secondary" type="button" id="assignEmployeesHeadBtn">Assign Employees</button>
+        <button class="btn" type="button" id="openCrmBtn">Work on Client (Open LMS)</button>
       </div>
     </div>
 
@@ -52,12 +51,28 @@
           <div class="dash-card-head">
             <div>
               <p class="dash-card-title">Client Leads</p>
-              <p class="dash-card-sub">Aggregate counts only - see this page's own notes on why a full lead list isn't shown here yet.</p>
+              <p class="dash-card-sub">Aggregate counts for this client organization.</p>
             </div>
           </div>
           <div class="client-kpis">
             <div class="kpi-card"><div class="kpi-label">Total Leads</div><div class="kpi-value" id="kpiTotalLeads">0</div></div>
             <div class="kpi-card"><div class="kpi-label">Leads Today</div><div class="kpi-value" id="kpiLeadsToday">0</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assigned Agency Team -->
+      <div class="dash-section">
+        <div class="dash-card">
+          <div class="dash-card-head">
+            <div>
+              <p class="dash-card-title">Assigned Agency Team</p>
+              <p class="dash-card-sub" id="assignedSub">Agency employees designated to work on this client organization.</p>
+            </div>
+            <button class="btn secondary sm" type="button" id="manageAssignedBtn">Manage Team</button>
+          </div>
+          <div id="assignedList" style="display:flex; gap:8px; flex-wrap:wrap; padding-top:6px;">
+            <span class="hint">Loading assigned team…</span>
           </div>
         </div>
       </div>
@@ -101,7 +116,7 @@
           <div class="dash-card-head">
             <div>
               <p class="dash-card-title">Client Integrations</p>
-              <p class="dash-card-sub">Connection status only - RUTA never shows or shares a client's Meta access tokens.</p>
+              <p class="dash-card-sub">Connection status only - RUTA never exposes client access tokens.</p>
             </div>
           </div>
           <div class="integration-row">
@@ -116,8 +131,9 @@
           <div class="dash-card-head">
             <div>
               <p class="dash-card-title">Client Settings</p>
-              <p class="dash-card-sub">Read-only profile, plus your agency's relationship controls.</p>
+              <p class="dash-card-sub">Relationship controls and profile management.</p>
             </div>
+            <button class="btn secondary sm" type="button" id="editClientSettingsBtn">Edit Name</button>
           </div>
           <div class="detail-row"><span class="detail-label">Company Name</span><span class="detail-value" id="settingsName"></span></div>
           <div class="detail-row"><span class="detail-label">LMS Template</span><span class="detail-value" id="settingsTemplate"></span></div>
@@ -129,10 +145,61 @@
     </div>
   </div>
 
-  <!-- Remove-client confirmation - the one destructive action here, so it
-       gets its own confirm step (this codebase's modal-overlay convention,
-       not a native confirm()). Suspend/Reactivate are reversible and act
-       immediately on click. -->
+  <!-- Assign Employees modal -->
+  <div class="modal-overlay" id="assignModalOverlay" style="display:none">
+    <div class="modal modal-md">
+      <div class="modal-header">
+        <div>
+          <h2>Assign Employees to Client</h2>
+          <p id="assignModalSub">Select team members to work on this client.</p>
+        </div>
+        <button class="modal-close" type="button" id="assignModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="assignModalError"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:12.5px; font-weight:600; color:var(--text-secondary)">Agency Employees</span>
+          <div>
+            <button type="button" class="btn secondary sm" id="assignSelectAllBtn" style="padding:2px 8px; font-size:11.5px">Select All</button>
+            <button type="button" class="btn secondary sm" id="assignDeselectAllBtn" style="padding:2px 8px; font-size:11.5px">Clear</button>
+          </div>
+        </div>
+        <div class="employee-select-list" id="assignEmployeeList">
+          <p class="hint" style="padding:8px">Loading agency employees…</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="assignModalCancel">Cancel</button>
+        <button class="btn" type="button" id="assignModalSave">Save Assignments</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Name modal -->
+  <div class="modal-overlay" id="editModalOverlay" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h2>Edit Client Company Name</h2>
+          <p>Update the organization name for this client.</p>
+        </div>
+        <button class="modal-close" type="button" id="editModalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="editModalError"></div>
+        <form id="editForm">
+          <label for="edit_companyName">Company Name</label>
+          <input id="edit_companyName" required autocomplete="off" />
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" type="button" id="editModalCancel">Cancel</button>
+        <button class="btn" type="button" id="editModalSave">Save Name</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Remove-client confirmation modal -->
   <div class="modal-overlay" id="removeModalOverlay" style="display:none">
     <div class="modal modal-sm">
       <div class="modal-header">
@@ -162,26 +229,29 @@
   }
   function statusLabel(status) { return status.charAt(0).toUpperCase() + status.slice(1); }
 
-  const params = new URLSearchParams(window.location.search);
-  const clientId = params.get("id");
+  const clientId = new URLSearchParams(window.location.search).get("id");
+  let currentDetail = null;
+  let allAgencyEmployees = [];
 
   function renderRelationshipActions(status) {
     const wrap = document.getElementById("relationshipActions");
-    const buttons = [];
     if (status === "active") {
-      buttons.push(`<button class="btn secondary" type="button" id="suspendBtn">Suspend Client</button>`);
+      wrap.innerHTML = `
+        <button class="btn secondary sm" type="button" id="suspendBtn">Suspend Client</button>
+        <button class="btn danger sm" type="button" id="removeBtn">Remove Client</button>
+      `;
+      document.getElementById("suspendBtn").addEventListener("click", () => setStatus("suspended"));
+      document.getElementById("removeBtn").addEventListener("click", () => { document.getElementById("removeModalOverlay").style.display = "flex"; });
     } else if (status === "suspended") {
-      buttons.push(`<button class="btn secondary" type="button" id="reactivateBtn">Reactivate Client</button>`);
+      wrap.innerHTML = `
+        <button class="btn sm" type="button" id="reactivateBtn">Reactivate Client</button>
+        <button class="btn danger sm" type="button" id="removeBtn">Remove Client</button>
+      `;
+      document.getElementById("reactivateBtn").addEventListener("click", () => setStatus("active"));
+      document.getElementById("removeBtn").addEventListener("click", () => { document.getElementById("removeModalOverlay").style.display = "flex"; });
+    } else {
+      wrap.innerHTML = `<span class="hint">Relationship is ${App.escapeHtml(status)} - no actions available.</span>`;
     }
-    buttons.push(`<button class="btn danger" type="button" id="removeBtn">Remove Client</button>`);
-    wrap.innerHTML = buttons.join("");
-
-    document.getElementById("suspendBtn")?.addEventListener("click", () => setStatus("suspended"));
-    document.getElementById("reactivateBtn")?.addEventListener("click", () => setStatus("active"));
-    document.getElementById("removeBtn")?.addEventListener("click", () => {
-      document.getElementById("removeError").innerHTML = "";
-      document.getElementById("removeModalOverlay").style.display = "flex";
-    });
   }
 
   async function setStatus(status) {
@@ -197,7 +267,32 @@
     }
   }
 
+  async function loadAssignedEmployees() {
+    const listWrap = document.getElementById("assignedList");
+    try {
+      const res = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/assignments`);
+      allAgencyEmployees = res.agencyUsers || [];
+      const assignedIds = new Set(res.assignedUserIds || []);
+      const assignedUsers = allAgencyEmployees.filter((u) => assignedIds.has(u.id));
+
+      document.getElementById("assignedSub").textContent = `${assignedUsers.length} employee${assignedUsers.length === 1 ? "" : "s"} assigned to work on this client.`;
+
+      if (!assignedUsers.length) {
+        listWrap.innerHTML = `<p class="hint">No employees assigned yet. Click "Manage Team" to assign employees to start work.</p>`;
+        return;
+      }
+      listWrap.innerHTML = assignedUsers.map((u) => `
+        <span class="chip-assigned">
+          <span class="avatar sm" style="width:20px; height:20px; font-size:10px">${App.escapeHtml(App.initials(u.fullName))}</span>
+          ${App.escapeHtml(u.fullName || u.email)}
+        </span>`).join("");
+    } catch (err) {
+      listWrap.innerHTML = `<p class="hint">Could not load assigned employees.</p>`;
+    }
+  }
+
   function render(detail) {
+    currentDetail = detail;
     document.getElementById("clientName").textContent = detail.company.name;
     const pill = document.getElementById("statusPill");
     pill.className = `pill ${statusPillClass(detail.relationshipStatus)}`;
@@ -248,12 +343,6 @@
 
     renderRelationshipActions(detail.relationshipStatus);
     document.getElementById("content").style.display = "";
-    // "Open CRM Dashboard" only ever appears once this page's own load
-    // already succeeded - getClientDetail (the endpoint this page calls)
-    // grants access under exactly the same rules checkAgencyCanManageClient
-    // enforces for entering context (active/suspended relationship,
-    // resolveAgencyClientAccess), so reaching this render() at all already
-    // means the button below is expected to work.
     document.getElementById("headActions").style.display = "flex";
   }
 
@@ -267,7 +356,7 @@
     } catch (err) {
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
       btn.disabled = false;
-      btn.textContent = "Open LMS Dashboard";
+      btn.textContent = "Work on Client (Open LMS)";
     }
   }
   document.getElementById("openCrmBtn").addEventListener("click", openCrmDashboard);
@@ -288,10 +377,131 @@
     try {
       const detail = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}`);
       render(detail);
+      await loadAssignedEmployees();
     } catch (err) {
       document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
     }
   }
+
+  // ---- Assign Employees Modal ----------------------------------------------
+  const assignModal = document.getElementById("assignModalOverlay");
+  const assignError = document.getElementById("assignModalError");
+  const assignSaveBtn = document.getElementById("assignModalSave");
+
+  async function openAssignModal() {
+    assignError.innerHTML = "";
+    document.getElementById("assignModalSub").textContent = `Select team members to work on "${currentDetail?.company?.name || "this client"}".`;
+    assignModal.style.display = "flex";
+
+    const list = document.getElementById("assignEmployeeList");
+    list.innerHTML = `<p class="hint" style="padding:8px">Loading agency employees…</p>`;
+
+    try {
+      const res = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/assignments`);
+      allAgencyEmployees = res.agencyUsers || [];
+      const set = new Set(res.assignedUserIds || []);
+
+      list.innerHTML = allAgencyEmployees.map((u) => {
+        const isChecked = set.has(u.id);
+        return `
+          <label class="employee-select-row${isChecked ? " selected" : ""}">
+            <div class="employee-select-left">
+              <input type="checkbox" value="${App.escapeHtml(u.id)}"${isChecked ? " checked" : ""} />
+              <div class="employee-select-info">
+                <span class="employee-select-name">${App.escapeHtml(u.fullName || u.email)}</span>
+                <span class="employee-select-email">${App.escapeHtml(u.email)}</span>
+              </div>
+            </div>
+            <span class="employee-select-role">${App.escapeHtml(u.roleName || "Employee")}</span>
+          </label>`;
+      }).join("");
+
+      list.querySelectorAll(".employee-select-row input").forEach((chk) => {
+        chk.addEventListener("change", () => {
+          chk.closest(".employee-select-row").classList.toggle("selected", chk.checked);
+        });
+      });
+    } catch (err) {
+      list.innerHTML = `<p class="hint">Could not load employees.</p>`;
+    }
+  }
+
+  document.getElementById("assignModalClose").addEventListener("click", () => { assignModal.style.display = "none"; });
+  document.getElementById("assignModalCancel").addEventListener("click", () => { assignModal.style.display = "none"; });
+  document.getElementById("manageAssignedBtn").addEventListener("click", openAssignModal);
+  document.getElementById("assignEmployeesHeadBtn").addEventListener("click", openAssignModal);
+
+  document.getElementById("assignSelectAllBtn").addEventListener("click", () => {
+    document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
+      chk.checked = true;
+      chk.closest(".employee-select-row")?.classList.add("selected");
+    });
+  });
+  document.getElementById("assignDeselectAllBtn").addEventListener("click", () => {
+    document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
+      chk.checked = false;
+      chk.closest(".employee-select-row")?.classList.remove("selected");
+    });
+  });
+
+  assignSaveBtn.addEventListener("click", async () => {
+    assignError.innerHTML = "";
+    const selected = Array.from(document.querySelectorAll("#assignEmployeeList input[type='checkbox']:checked")).map((chk) => chk.value);
+    assignSaveBtn.disabled = true;
+    assignSaveBtn.textContent = "Saving…";
+    try {
+      await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/assignments`, {
+        method: "POST",
+        body: { userIds: selected },
+      });
+      assignModal.style.display = "none";
+      document.getElementById("banner").innerHTML = `<div class="banner success">Assigned employees updated successfully.</div>`;
+      await loadAssignedEmployees();
+    } catch (err) {
+      assignError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      assignSaveBtn.disabled = false;
+      assignSaveBtn.textContent = "Save Assignments";
+    }
+  });
+
+  // ---- Edit Name Modal -----------------------------------------------------
+  const editModal = document.getElementById("editModalOverlay");
+  const editError = document.getElementById("editModalError");
+  const editSaveBtn = document.getElementById("editModalSave");
+
+  document.getElementById("editClientSettingsBtn").addEventListener("click", () => {
+    editError.innerHTML = "";
+    document.getElementById("edit_companyName").value = currentDetail?.company?.name || "";
+    editModal.style.display = "flex";
+  });
+  document.getElementById("editModalClose").addEventListener("click", () => { editModal.style.display = "none"; });
+  document.getElementById("editModalCancel").addEventListener("click", () => { editModal.style.display = "none"; });
+
+  editSaveBtn.addEventListener("click", async () => {
+    editError.innerHTML = "";
+    const companyName = document.getElementById("edit_companyName").value.trim();
+    if (!companyName) {
+      editError.innerHTML = `<div class="banner error">Company name is required.</div>`;
+      return;
+    }
+    editSaveBtn.disabled = true;
+    editSaveBtn.textContent = "Saving…";
+    try {
+      await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/update`, {
+        method: "POST",
+        body: { companyName },
+      });
+      editModal.style.display = "none";
+      document.getElementById("banner").innerHTML = `<div class="banner success">Company name updated.</div>`;
+      await load();
+    } catch (err) {
+      editError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    } finally {
+      editSaveBtn.disabled = false;
+      editSaveBtn.textContent = "Save Name";
+    }
+  });
 
   // ---- Remove confirmation modal -------------------------------------------
   const removeModal = document.getElementById("removeModalOverlay");

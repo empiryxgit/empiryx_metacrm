@@ -174,7 +174,6 @@
         <div class="table-toolbar">
           <div class="table-toolbar-left">
             <input type="search" class="field-search" id="employeeSearch" placeholder="Search employees…" />
-            <select class="field-select" id="employeeClientFilter"><option value="">All Clients</option></select>
           </div>
           <span class="result-count" id="employeeResultCount"></span>
         </div>
@@ -593,20 +592,13 @@
   // hitting the new action=employee-performance endpoint (see
   // getAgencyEmployeePerformance in src/application/agency.ts). ---------
   let empSearch = "";
-  let empClientFilter = "";
   let empSort = { field: "leads", dir: "desc" };
   let empPage = 1;
   let empPageSize = 25;
 
-  function renderEmployeeFilterOptions() {
-    const sel = document.getElementById("employeeClientFilter");
-    sel.innerHTML = `<option value="">All Clients</option>` + dashboardData.clients.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
-  }
-
   async function loadEmployeeTable() {
     const body = document.getElementById("employeeBody");
     const params = new URLSearchParams({ page: empPage, pageSize: empPageSize, sortBy: empSort.field, sortDir: empSort.dir });
-    if (empClientFilter) params.set("clientId", empClientFilter);
     if (empSearch) params.set("search", empSearch);
     let data;
     try {
@@ -625,7 +617,7 @@
         <td>${fmt(r.wonCount)}</td>
         <td>${fmtPct(r.conversionRate)}</td>
         <td>${fmt(r.followUpsLogged)}</td>
-      </tr>`).join("") : `<tr><td colspan="6" class="empty">No employees match your filters.</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="6" class="empty">No employees match your search.</td></tr>`;
 
     document.querySelectorAll("#employeeSection th.sortable").forEach(th => {
       th.classList.toggle("active", th.dataset.sort === empSort.field);
@@ -646,7 +638,6 @@
     });
   });
   document.getElementById("employeeSearch").addEventListener("input", debounce((e) => { empSearch = e.target.value; empPage = 1; loadEmployeeTable(); }, 300));
-  document.getElementById("employeeClientFilter").addEventListener("change", (e) => { empClientFilter = e.target.value; empPage = 1; loadEmployeeTable(); });
 
   // ---- Bootstrap ----------------------------------------------------
   async function loadDashboard() {
@@ -696,7 +687,6 @@
 
     await loadDashboard();
     if (dashboardData) {
-      renderEmployeeFilterOptions();
       loadEmployeeTable();
     }
   }

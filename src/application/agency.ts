@@ -41,6 +41,7 @@ import {
   listUsersForCompanies,
   setCompanyCreatedBy,
   completeOnboarding,
+  updateCompany,
 } from "../infrastructure/db/repositories/tenancy";
 import { listOnboardingLinks } from "./agencyOnboarding";
 import {
@@ -54,7 +55,12 @@ import {
   setAgencyClientStatus,
   type AgencyEmployeeMetricRow,
 } from "../infrastructure/db/repositories/organizations";
-import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
+import {
+  assignClientToUser,
+  listAssignedUserIdsForClient,
+  setAssignedUsersForClient,
+} from "../infrastructure/db/repositories/agencyClientAssignments";
+
 import { listCampaigns, listCampaignsForCompanies } from "../infrastructure/db/repositories/campaigns";
 import { getRelevantMetaConnectionView } from "../infrastructure/db/repositories/metaIntegration";
 import { provisionDefaultForms } from "../infrastructure/db/repositories/forms";
@@ -805,41 +811,19 @@ export async function getAgencyEmployeePerformance(
 
 export interface AddClientOrganizationInput {
   agencyCompanyId: string;
-  // The agency user clicking "+ Add Client" - recorded as both the new
-  // company's createdBy and the agency_clients link's createdBy. NOT the
-  // new client company's owner user, who is created fresh below and (per
-  // companies.createdBy's own comment in schema.ts) doesn't predate the
-  // company the way a self-registering owner normally would.
   actingUserId: string;
   companyName: string;
   ownerName: string;
   ownerEmail: string;
+  assignedUserIds?: string[];
 }
 
 export interface AddClientOrganizationResult {
   company: { id: string; name: string };
   owner: { id: string; email: string; fullName: string };
-  // Shown exactly once - same contract as api/admin/users/handler.ts's
-  // "create user" temporaryPassword: the caller must display this to the
-  // agency admin immediately (so they can relay it to the client) and
-  // cannot retrieve it again. Never stored in plaintext, never emailed -
-  // no transactional-email dependency needed to stay free-tier-only, same
-  // reasoning as that other flow.
   temporaryPassword: string;
 }
 
-/**
- * Creates a brand-new client company this agency owns outright and links
- * it as an "active" client immediately - no invite/accept step, since the
- * agency is the one originating the whole thing (see the AskUserQuestion
- * decision this was built from: "Create a brand-new client company").
- * Mirrors registerCompanyAndOwner's steps (company, Owner role, owner user,
- * onboarding skipped, best-effort createdBy + default forms) but does NOT
- * reuse that function directly - this flow has no phoneNumber to collect
- * (nothing in the Add Client form asks for one) and the password is
- * system-generated, not user-supplied, so registerCompanyAndOwner's
- * phoneNumber-required and password-length validations don't apply here.
- */
 export async function addClientOrganization(input: AddClientOrganizationInput): Promise<AddClientOrganizationResult> {
   const companyName = input.companyName.trim();
   const ownerName = input.ownerName.trim();
@@ -856,19 +840,8 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
   const tempPassword = generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
-  // Every new company defaults to "general" - plain Core CRM, no industry
-  // specialization - same as any other registration path (see
-  // RegisterInput.industry's own comment in ./auth.ts for why nothing here
-  // collects one). The client can pick a real template any time afterward
-  // from Settings -> Business Configuration -> Industry/Template.
   const industryTemplate = "general" as const;
   const company = await createCompany({ name: companyName, slug, industryTemplate, accountType: "individual" });
-  // The four fixed CLIENT_OWNER/ADMIN/MANAGER/USER roles (see
-  // src/domain/fixedRoles.ts), not the single generic Owner role - this
-  // client company is being originated BY the agency, so it starts on the
-  // same fixed catalog every agency-originated client gets (see
-  // createClientFixedRoles' own doc comment for why inviteExistingClient's
-  // pre-existing companies deliberately do NOT go through this).
   const ownerRole = (await createClientFixedRoles(company.id)).get("CLIENT_OWNER")!;
   const owner = await createUser({
     companyId: company.id,
@@ -879,8 +852,6 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
     mustChangePassword: true,
   });
 
-  // Links immediately as "active" - see this function's own doc comment on
-  // why no invite/accept step applies here.
   await linkOrReactivateClientOrganization({
     agencyCompanyId: input.agencyCompanyId,
     clientCompanyId: company.id,
@@ -888,38 +859,28 @@ export async function addClientOrganization(input: AddClientOrganizationInput): 
     status: "active",
   });
 
-  // Auto-assign the acting agency user to the client they just created -
-  // see agencyClientAssignments' own doc comment on assignClientToUser for
-  // why: an assignment-scoped agency teammate (Admin/Manager/User tier -
-  // only AGENCY_OWNER has unconditional "All clients" access, see
-  // src/domain/fixedRoles.ts's explicit access rules) must never be
-  // immediately locked out of a client they themselves just brought onto
-  // the roster. Best-effort, same posture as the steps below - a failure
-  // here never blocks the client itself from being created, and is
-  // harmless for an AGENCY_OWNER acting user too, since
-  // AGENCY_CLIENTS_VIEW_ALL bypasses this table regardless of what's in it.
-  try {
-    await assignClientToUser({
-      agencyCompanyId: input.agencyCompanyId,
-      clientCompanyId: company.id,
-      userId: input.actingUserId,
-      createdBy: input.actingUserId,
-    });
-    // CLIENT_ACCESS_GRANTED - see agencyAuditLog.ts's header comment: the
-    // acting agency user is both the grant's actor and its subject here
-    // (auto-assigning themselves), so agencyUserId = input.actingUserId.
-    // Only logged once the grant itself actually succeeded, in the same
-    // try block, so this never claims access was granted when it wasn't.
-    await recordAgencyAuditEvent({
-      agencyCompanyId: input.agencyCompanyId,
-      action: "CLIENT_ACCESS_GRANTED",
-      agencyUserId: input.actingUserId,
-      clientCompanyId: company.id,
-      detail: "Auto-assigned to acting user on client creation",
-    });
-  } catch (err) {
-    console.error("[agency/add-client] Failed to auto-assign acting user to new client:", err);
+  // Auto-assign the acting agency user + any selected employee IDs
+  const userIdsToAssign = new Set<string>([input.actingUserId, ...(input.assignedUserIds || [])]);
+  for (const uid of userIdsToAssign) {
+    try {
+      await assignClientToUser({
+        agencyCompanyId: input.agencyCompanyId,
+        clientCompanyId: company.id,
+        userId: uid,
+        createdBy: input.actingUserId,
+      });
+      await recordAgencyAuditEvent({
+        agencyCompanyId: input.agencyCompanyId,
+        action: "CLIENT_ACCESS_GRANTED",
+        agencyUserId: input.actingUserId,
+        clientCompanyId: company.id,
+        detail: uid === input.actingUserId ? "Auto-assigned to acting user on client creation" : `Assigned employee ${uid} on client creation`,
+      });
+    } catch (err) {
+      console.error(`[agency/add-client] Failed to assign user ${uid} to new client:`, err);
+    }
   }
+
 
   // CLIENT_CREATED - fires once the client company + owner user + agency
   // link above have all actually succeeded (a throw anywhere before this
@@ -1245,3 +1206,114 @@ export async function setClientRelationshipStatus(
     });
   }
 }
+
+/**
+ * Lists all agency employees and marks which ones are currently assigned to work
+ * on the given client.
+ */
+export async function getClientAssignedEmployees(
+  agencyCompanyId: string,
+  clientCompanyId: string,
+  access: AgencyClientAccess,
+): Promise<{
+  assignedUserIds: string[];
+  agencyUsers: Array<{ id: string; fullName: string; email: string; roleName?: string; status: string }>;
+}> {
+  if (!canAccessClient(access, clientCompanyId)) {
+    throw new AuthError("You don't have access to that client.", 403);
+  }
+  const [assignedUserIds, allAgencyUsers] = await Promise.all([
+    listAssignedUserIdsForClient(agencyCompanyId, clientCompanyId),
+    listUsers(agencyCompanyId),
+  ]);
+  return {
+    assignedUserIds,
+    agencyUsers: allAgencyUsers.map((u) => ({
+      id: u.id,
+      fullName: u.fullName,
+      email: u.email,
+      roleName: u.roleName,
+      status: u.status,
+    })),
+  };
+}
+
+/**
+ * Sets which agency employees are assigned to work on this client organization.
+ */
+export async function setClientAssignedEmployees(input: {
+  agencyCompanyId: string;
+  clientCompanyId: string;
+  userIds: string[];
+  actingUserId: string;
+  access: AgencyClientAccess;
+}): Promise<{ ok: true; assignedUserIds: string[] }> {
+  if (!canAccessClient(input.access, input.clientCompanyId)) {
+    throw new AuthError("You don't have access to that client.", 403);
+  }
+
+  const allAgencyUsers = await listUsers(input.agencyCompanyId);
+  const agencyUserIds = new Set(allAgencyUsers.map((u) => u.id));
+  const validUserIds = input.userIds.filter((id) => agencyUserIds.has(id));
+
+  const beforeUserIds = new Set(await listAssignedUserIdsForClient(input.agencyCompanyId, input.clientCompanyId));
+
+  await setAssignedUsersForClient({
+    agencyCompanyId: input.agencyCompanyId,
+    clientCompanyId: input.clientCompanyId,
+    userIds: validUserIds,
+    createdBy: input.actingUserId,
+  });
+
+  const afterUserIds = new Set(validUserIds);
+  for (const userId of validUserIds) {
+    if (!beforeUserIds.has(userId)) {
+      await recordAgencyAuditEvent({
+        agencyCompanyId: input.agencyCompanyId,
+        action: "CLIENT_ACCESS_GRANTED",
+        agencyUserId: input.actingUserId,
+        clientCompanyId: input.clientCompanyId,
+        detail: `Granted to employee ${userId} via Client Assignment`,
+      });
+    }
+  }
+  for (const userId of beforeUserIds) {
+    if (!afterUserIds.has(userId)) {
+      await recordAgencyAuditEvent({
+        agencyCompanyId: input.agencyCompanyId,
+        action: "CLIENT_ACCESS_REVOKED",
+        agencyUserId: input.actingUserId,
+        clientCompanyId: input.clientCompanyId,
+        detail: `Revoked from employee ${userId} via Client Assignment`,
+      });
+    }
+  }
+
+  return { ok: true, assignedUserIds: validUserIds };
+}
+
+/**
+ * Updates client organization details (company name, status).
+ */
+export async function updateClientOrganization(input: {
+  agencyCompanyId: string;
+  clientCompanyId: string;
+  companyName?: string;
+  status?: "active" | "suspended" | "removed";
+  actingUserId: string;
+  access: AgencyClientAccess;
+}): Promise<void> {
+  const claim = await getClaimingAgencyForClient(input.clientCompanyId);
+  if (!claim || claim.agencyCompanyId !== input.agencyCompanyId || !canAccessClient(input.access, input.clientCompanyId)) {
+    throw new AuthError("Client not found.", 404);
+  }
+
+  if (input.companyName && input.companyName.trim()) {
+    await updateCompany(input.clientCompanyId, { name: input.companyName.trim() });
+  }
+
+  if (input.status) {
+    await setClientRelationshipStatus(input.agencyCompanyId, input.clientCompanyId, input.status, input.actingUserId);
+  }
+}
+

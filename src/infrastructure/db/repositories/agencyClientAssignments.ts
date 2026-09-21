@@ -133,3 +133,37 @@ export async function assignedClientIdsAmong(userId: string, clientCompanyIds: s
     .where(and(eq(agencyClientAssignments.userId, userId), inArray(agencyClientAssignments.clientCompanyId, clientCompanyIds)));
   return new Set(rows.map((r) => r.clientCompanyId));
 }
+
+/**
+ * Replace-all for a specific client: assign a list of agency employees to work on
+ * this client organization.
+ */
+export async function setAssignedUsersForClient(input: {
+  agencyCompanyId: string;
+  clientCompanyId: string;
+  userIds: string[];
+  createdBy?: string;
+}): Promise<void> {
+  const db = await getDb();
+
+  await db
+    .delete(agencyClientAssignments)
+    .where(
+      and(
+        eq(agencyClientAssignments.clientCompanyId, input.clientCompanyId),
+        eq(agencyClientAssignments.agencyCompanyId, input.agencyCompanyId),
+      ),
+    );
+
+  if (input.userIds.length === 0) return;
+
+  await db.insert(agencyClientAssignments).values(
+    input.userIds.map((userId) => ({
+      agencyCompanyId: input.agencyCompanyId,
+      clientCompanyId: input.clientCompanyId,
+      userId,
+      createdBy: input.createdBy,
+    })),
+  );
+}
+

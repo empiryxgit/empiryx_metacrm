@@ -89,6 +89,8 @@
     { "source": "/api/agency/employee-performance", "destination": "/api/admin/users/handler?resource=agency&action=employee-performance" },
     { "source": "/api/agency/clients/invite", "destination": "/api/admin/users/handler?resource=agency&action=invite-client" },
     { "source": "/api/agency/clients/:clientId/status", "destination": "/api/admin/users/handler?resource=agency&action=set-client-status&clientId=:clientId" },
+    { "source": "/api/agency/clients/:clientId/assignments", "destination": "/api/admin/users/handler?resource=agency&action=client-assignments&clientId=:clientId" },
+    { "source": "/api/agency/clients/:clientId/update", "destination": "/api/admin/users/handler?resource=agency&action=update-client&clientId=:clientId" },
     { "source": "/api/agency/clients/:clientId", "destination": "/api/admin/users/handler?resource=agency&action=client-detail&clientId=:clientId" },
     { "source": "/api/agency/clients", "destination": "/api/admin/users/handler?resource=agency&action=clients" },
     { "source": "/api/agency/invites/pending", "destination": "/api/admin/users/handler?resource=agencyInvite&action=pending" },

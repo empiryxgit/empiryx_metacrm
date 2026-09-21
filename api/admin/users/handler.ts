@@ -47,12 +47,15 @@ import {
   getAgencyDashboardSummary,
   getAgencyEmployeePerformance,
   getAgencyLeadsReport,
+  getClientAssignedEmployees,
   getClientDetail,
   getPendingInviteForCompany,
   inviteExistingClient,
   listAgencyClients,
   respondToAgencyInvite,
+  setClientAssignedEmployees,
   setClientRelationshipStatus,
+  updateClientOrganization,
 } from "../../../src/application/agency";
 import {
   completeAgencyOnboarding,
@@ -62,6 +65,7 @@ import {
   revokeOnboardingLink,
 } from "../../../src/application/agencyOnboarding";
 import { assertClientLimitNotReached, LimitExceededError } from "../../../src/application/billing";
+
 
 function getQueryString(req: VercelRequest, key: string): string | undefined {
   const value = req.query[key];
@@ -522,7 +526,7 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   // src/infrastructure/auth/context.ts. "clients" is GET (list) or POST
   // (add) - only the POST branch is a write, so it's narrowed by method
   // here rather than excluded outright.
-  const AGENCY_WRITE_ACTIONS = new Set(["invite-client", "set-client-status", "generate-onboarding-link", "revoke-onboarding-link"]);
+  const AGENCY_WRITE_ACTIONS = new Set(["invite-client", "set-client-status", "generate-onboarding-link", "revoke-onboarding-link", "update-client", "client-assignments"]);
   if (action && (AGENCY_WRITE_ACTIONS.has(action) || (action === "clients" && req.method !== "GET"))) {
     if (!(await assertNotLockedOut(req, res, auth.companyId))) return;
   }
@@ -534,6 +538,8 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   if (action === "clients") return handleAgencyClientsCollection(req, res, auth);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
+  if (action === "client-assignments") return handleAgencyClientAssignments(req, res, auth);
+  if (action === "update-client") return handleAgencyUpdateClient(req, res, auth.companyId, auth.userId, auth);
   if (action === "set-client-status") return handleAgencySetClientStatus(req, res, auth.companyId, auth.userId);
   if (action === "generate-onboarding-link") return handleAgencyGenerateOnboardingLink(req, res, auth.companyId, auth.userId);
   if (action === "list-onboarding-links") return handleAgencyListOnboardingLinks(req, res, auth.companyId);
@@ -728,26 +734,26 @@ async function handleAgencyClientsCollection(req: VercelRequest, res: VercelResp
   }
 
   if (req.method === "POST") {
-    const { companyName, ownerName, ownerEmail } = (req.body ?? {}) as {
+    const { companyName, ownerName, ownerEmail, assignedUserIds } = (req.body ?? {}) as {
       companyName?: string;
       ownerName?: string;
       ownerEmail?: string;
+      assignedUserIds?: string[];
     };
     if (!companyName || !ownerName || !ownerEmail) {
       res.status(400).json({ error: "companyName, ownerName and ownerEmail are all required." });
       return;
     }
     try {
-      // Hard block, not a warning - same posture as the campaign limit
-      // (see api/campaigns/handler.ts's own comment) - an agency at its
-      // plan's client limit is refused here, server-side, before a new
-      // client company is ever created. Always checked against the
-      // agency's own real companyId (never swapped by client context -
-      // this handler never runs through withEffectiveCompanyContext, see
-      // agencyClientContext.ts's own documented rule for administration
-      // endpoints).
       await assertClientLimitNotReached(auth.companyId);
-      const result = await addClientOrganization({ agencyCompanyId: auth.companyId, actingUserId: auth.userId, companyName, ownerName, ownerEmail });
+      const result = await addClientOrganization({
+        agencyCompanyId: auth.companyId,
+        actingUserId: auth.userId,
+        companyName,
+        ownerName,
+        ownerEmail,
+        assignedUserIds,
+      });
       res.status(201).json(result);
     } catch (err) {
       if (err instanceof LimitExceededError) {
@@ -766,6 +772,95 @@ async function handleAgencyClientsCollection(req: VercelRequest, res: VercelResp
 
   res.status(405).json({ error: "Method not allowed" });
 }
+
+async function handleAgencyClientAssignments(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  const clientId = getQueryString(req, "clientId");
+  if (!clientId) {
+    res.status(400).json({ error: "clientId is required." });
+    return;
+  }
+
+  if (req.method === "GET") {
+    try {
+      const result = await getClientAssignedEmployees(auth.companyId, clientId, resolveAgencyClientAccess(auth));
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[agency/client-assignments] GET Failed:", err);
+      res.status(500).json({ error: "Failed to load client assignments." });
+    }
+    return;
+  }
+
+  if (req.method === "POST" || req.method === "PUT") {
+    const { userIds } = (req.body ?? {}) as { userIds?: string[] };
+    if (!Array.isArray(userIds)) {
+      res.status(400).json({ error: "userIds array is required." });
+      return;
+    }
+    try {
+      const result = await setClientAssignedEmployees({
+        agencyCompanyId: auth.companyId,
+        clientCompanyId: clientId,
+        userIds,
+        actingUserId: auth.userId,
+        access: resolveAgencyClientAccess(auth),
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof AuthError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      console.error("[agency/client-assignments] POST Failed:", err);
+      res.status(500).json({ error: "Failed to update client assignments." });
+    }
+    return;
+  }
+
+  res.status(405).json({ error: "Method not allowed" });
+}
+
+async function handleAgencyUpdateClient(
+  req: VercelRequest,
+  res: VercelResponse,
+  agencyCompanyId: string,
+  actingUserId: string,
+  auth: AuthContext,
+) {
+  if (req.method !== "POST" && req.method !== "PATCH") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const clientId = getQueryString(req, "clientId");
+  if (!clientId) {
+    res.status(400).json({ error: "clientId is required." });
+    return;
+  }
+  const { companyName, status } = (req.body ?? {}) as { companyName?: string; status?: "active" | "suspended" | "removed" };
+  try {
+    await updateClientOrganization({
+      agencyCompanyId,
+      clientCompanyId: clientId,
+      companyName,
+      status,
+      actingUserId,
+      access: resolveAgencyClientAccess(auth),
+    });
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/update-client] Failed:", err);
+    res.status(500).json({ error: "Failed to update client." });
+  }
+}
+
 
 async function handleAgencyInviteClient(req: VercelRequest, res: VercelResponse, agencyCompanyId: string, actingUserId: string) {
   if (req.method !== "POST") {
