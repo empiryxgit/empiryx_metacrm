@@ -21,7 +21,7 @@
 // Both follow the exact same billing-cycle discount structure as the base
 // plans (10% quarterly, 20% half-yearly, 25% yearly).
 
-import type { AccountType } from "./accountType";
+import { resolveAccountType, type AccountType } from "./accountType";
 
 export type BillingCycle = "monthly" | "quarterly" | "halfyearly" | "yearly";
 
@@ -43,6 +43,44 @@ export const CYCLE_LABELS: Record<BillingCycle, string> = {
 // own PICKERS table uses for the base plans.
 export const CYCLE_MONTHS: Record<BillingCycle, number> = { monthly: 1, quarterly: 3, halfyearly: 6, yearly: 12 };
 export const CYCLE_DISCOUNT: Record<BillingCycle, number> = { monthly: 0, quarterly: 0.1, halfyearly: 0.2, yearly: 0.25 };
+
+// ---------------------------------------------------------------------------
+// Plan tier resolution (agency's own base plan choice)
+// ---------------------------------------------------------------------------
+
+/** The exact company columns resolveEffectivePlanAccountType reads - same
+ * narrow structural-subset convention as EntitlementCompanyRow in
+ * src/domain/trial.ts, so this stays usable from both a real repository
+ * row and a plain test fixture. */
+export interface PlanAccountTypeCompanyRow {
+  accountType: string | null | undefined;
+  subscriptionPlanType: string | null | undefined;
+}
+
+/**
+ * The pricing TIER ("individual" | "agency") a company's campaign/client
+ * limits and base-plan price should actually be checked against - distinct
+ * from companies.accountType itself, which only says whether this company
+ * IS an agency (has the Agency nav/Clients page, can ever claim a client)
+ * at all, never which plan it pays for. See companies.subscriptionPlanType's
+ * own doc comment in schema.ts for the full feature this resolves.
+ *
+ * An Individual company (accountType "individual") only ever has one tier
+ * - its own - regardless of subscriptionPlanType, which is never even set
+ * for one. An Agency company resolves to whichever tier it explicitly
+ * chose at subscribe time (subscriptionPlanType), or falls back to
+ * "agency" - the ONLY tier that existed before this feature shipped - when
+ * no choice is on file yet (mid-trial, or a subscription that predates
+ * this column). That fallback is what makes this feature purely additive:
+ * every agency subscribed before this shipped keeps exactly the limits/
+ * pricing it already had, without a backfill migration ever needing to
+ * write "agency" onto its row.
+ */
+export function resolveEffectivePlanAccountType(company: PlanAccountTypeCompanyRow): AccountType {
+  const accountType = resolveAccountType(company.accountType ?? undefined);
+  if (accountType !== "agency") return "individual";
+  return company.subscriptionPlanType === "individual" ? "individual" : "agency";
+}
 
 // ---------------------------------------------------------------------------
 // Base plan allowances

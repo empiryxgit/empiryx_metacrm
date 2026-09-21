@@ -19,6 +19,17 @@
   .usage-bar-fill{ height:100%; background:var(--brand-primary); border-radius:999px; transition:width .2s ease; }
   .usage-bar-fill.limit-hit{ background:var(--danger); }
 
+  .plan-picker{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:0 0 18px; }
+  @media (max-width:560px){ .plan-picker{ grid-template-columns:1fr; } }
+  .plan-card{ text-align:left; border:1.5px solid var(--border); border-radius:12px; background:var(--surface); padding:14px 16px; cursor:pointer; font:inherit; color:inherit; display:flex; flex-direction:column; gap:8px; }
+  .plan-card:hover{ border-color:var(--brand-primary); }
+  .plan-card.selected{ border-color:var(--brand-primary); background:var(--brand-primary-soft); box-shadow:0 0 0 1px var(--brand-primary); }
+  .plan-card-title{ font-size:14px; font-weight:700; color:var(--text-primary); }
+  .plan-card-desc{ font-size:12px; color:var(--text-muted); line-height:1.4; }
+  .plan-card-list{ list-style:none; margin:2px 0 0; padding:0; display:flex; flex-direction:column; gap:3px; }
+  .plan-card-list li{ font-size:12px; color:var(--text-secondary); font-weight:600; }
+  .plan-note{ font-size:12px; color:var(--text-muted); margin:0 0 14px; }
+
   .cycle-tabs{ display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 16px; }
   .cycle-tab{ padding:8px 14px; border:1px solid var(--border); border-radius:999px; background:var(--surface); font-size:12.5px; font-weight:600; cursor:pointer; color:var(--text-secondary); }
   .cycle-tab.active{ border-color:var(--brand-primary); background:var(--brand-primary-soft); color:var(--brand-primary-hover); }
@@ -61,6 +72,7 @@
     <div id="overviewView">
     <div class="card" id="usageCard">
       <h2 class="section-title">Current usage</h2>
+      <p class="plan-note" id="planNote" style="display:none"></p>
       <div id="usageRows"><div class="meta-loading"><span class="meta-spinner" aria-hidden="true"></span>Loading…</div></div>
     </div>
 
@@ -73,16 +85,24 @@
       <h2 class="section-title">Subscribe to your plan</h2>
       <p class="hint" id="subscribeHint" style="margin:0 0 14px"></p>
 
-      <div class="cycle-tabs" id="subscribeCycleTabs"></div>
+      <!-- Plan picker - only rendered (two cards) for an Agency account;
+           an Individual account has exactly one plan choice, so this stays
+           empty/hidden and selectedPlanType is auto-set instead. See
+           renderPlanPicker(). -->
+      <div class="plan-picker" id="planPicker" style="display:none"></div>
 
-      <div class="price-summary">
-        <div>
-          <div class="amount" id="subscribePriceAmount">₹0</div>
-          <div class="amount-sub" id="subscribePriceSub"></div>
+      <div id="subscribeBody" style="display:none">
+        <div class="cycle-tabs" id="subscribeCycleTabs"></div>
+
+        <div class="price-summary">
+          <div>
+            <div class="amount" id="subscribePriceAmount">₹0</div>
+            <div class="amount-sub" id="subscribePriceSub"></div>
+          </div>
+          <button class="btn" type="button" id="subscribeBtn">Subscribe &amp; Pay</button>
         </div>
-        <button class="btn" type="button" id="subscribeBtn">Subscribe &amp; Pay</button>
+        <p class="hint" style="margin:0; font-size:11.5px">Payments are processed securely by Razorpay - RUTA never sees or stores your card, UPI, or bank details.</p>
       </div>
-      <p class="hint" style="margin:0; font-size:11.5px">Payments are processed securely by Razorpay - RUTA never sees or stores your card, UPI, or bank details.</p>
     </div>
 
     <div class="card" id="purchaseCard" style="display:none">
@@ -121,6 +141,11 @@
   let status;
   let selectedCycle = "monthly";
   let selectedSubscribeCycle = "monthly";
+  // Which plan tier ("individual" | "agency") the Subscribe card is
+  // currently priced for - null until an Agency owner picks a card (see
+  // renderPlanPicker); auto-set to the one available choice for an
+  // Individual account (see renderSubscribeUi).
+  let selectedPlanType = null;
   let historyLoaded = false;
 
   const fmtRupees = (paise) => "₹" + (paise / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -199,9 +224,29 @@
       status.campaigns.limit,
     ));
     if (status.clients) {
-      rows.push(usageRowHtml("Clients", "Client organizations linked to your agency", status.clients.used, status.clients.limit));
+      rows.push(usageRowHtml(
+        "Clients",
+        status.accountType === "agency" && status.activePlan === "individual"
+          ? "Your plan doesn't include client management - subscribe to the Agency plan below to add clients"
+          : "Client organizations linked to your agency",
+        status.clients.used,
+        status.clients.limit,
+      ));
     }
     document.getElementById("usageRows").innerHTML = rows.join("");
+
+    // Only shown once genuinely subscribed (or lapsed from a real
+    // subscription) - during a trial nothing has been chosen/paid for yet,
+    // so labeling it here would claim a decision that hasn't happened (see
+    // BillingStatus.activePlan's own doc comment - it's a documented
+    // fallback during trial, not a real choice).
+    const planNote = document.getElementById("planNote");
+    if (status.accountType === "agency" && (status.entitlement.kind === "subscribed" || status.entitlement.kind === "subscription_expired")) {
+      planNote.style.display = "block";
+      planNote.textContent = `Current plan: ${status.activePlan === "agency" ? "Agency (includes client management)" : "Individual (your own leads only)"}`;
+    } else {
+      planNote.style.display = "none";
+    }
 
     if (status.currentCycle && status.currentCycle.expiresAt) {
       const when = new Date(status.currentCycle.expiresAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
@@ -216,13 +261,73 @@
     }
     document.getElementById("subscribeCard").style.display = "block";
 
+    const plans = status.subscribe.plans;
     const isAgency = status.accountType === "agency";
+
+    // An Individual account has exactly one plan choice - auto-select it,
+    // no picker needed. An Agency sees two cards (below) and makes an
+    // explicit choice; nothing is pre-selected for them, so a first-time
+    // subscriber can never accidentally pay for the wrong tier.
+    if (plans.length === 1) selectedPlanType = plans[0].planType;
+
     document.getElementById("subscribeHint").textContent = status.entitlement.kind === "trialing"
-      ? `Your ${isAgency ? "Agency " : ""}free trial is active - subscribe any time to unlock your full plan limit (${isAgency ? "5 clients, 10 campaigns" : "5 campaigns"}) before it ends.`
-      : `Your trial has ended. Subscribe to the ${isAgency ? "Agency" : "Individual"} plan to keep managing your ${isAgency ? "clients and campaigns" : "leads"}.`;
+      ? (isAgency
+          ? "Your Agency free trial is active - choose a plan below any time before it ends. Just using RUTA yourself? Pick Individual. Managing clients? Pick Agency."
+          : "Your free trial is active - subscribe any time to unlock your full plan limit (5 campaigns) before it ends.")
+      : (isAgency
+          ? "Your trial has ended. Choose a plan below to keep managing your leads."
+          : "Your trial has ended. Subscribe to the Individual plan to keep managing your leads.");
+
+    renderPlanPicker(plans);
+    renderSubscribeBody();
+  }
+
+  function planCardHtml(p) {
+    const items = [`${p.campaignLimit} campaign${p.campaignLimit === 1 ? "" : "s"}${p.planType === "agency" ? " total (yours + every client)" : ""}`];
+    items.push(p.clientLimit ? `${p.clientLimit} clients` : "No client management");
+    return `
+      <button type="button" class="plan-card ${p.planType === selectedPlanType ? "selected" : ""}" data-plan="${p.planType}">
+        <div class="plan-card-title">${App.escapeHtml(p.label)}</div>
+        <div class="plan-card-desc">${p.planType === "agency"
+          ? "Manage your own leads AND your clients' leads - includes client capacity."
+          : "Just your own leads - the exact same plan an Individual account gets."}</div>
+        <ul class="plan-card-list">${items.map((i) => `<li>${App.escapeHtml(i)}</li>`).join("")}</ul>
+      </button>
+    `;
+  }
+
+  function renderPlanPicker(plans) {
+    const picker = document.getElementById("planPicker");
+    if (plans.length < 2) {
+      picker.style.display = "none";
+      picker.innerHTML = "";
+      return;
+    }
+    picker.style.display = "grid";
+    picker.innerHTML = plans.map(planCardHtml).join("");
+    picker.querySelectorAll(".plan-card").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedPlanType = btn.dataset.plan;
+        renderPlanPicker(plans);
+        renderSubscribeBody();
+      });
+    });
+  }
+
+  function renderSubscribeBody() {
+    const body = document.getElementById("subscribeBody");
+    if (!selectedPlanType) {
+      // Agency hasn't picked a card yet - nothing to price, keep the
+      // cycle/price/pay section hidden rather than showing a stale or
+      // arbitrary default plan's price.
+      body.style.display = "none";
+      return;
+    }
+    body.style.display = "block";
+    const plan = status.subscribe.plans.find((p) => p.planType === selectedPlanType);
 
     const tabs = document.getElementById("subscribeCycleTabs");
-    tabs.innerHTML = status.subscribe.pricing.map((p) => `
+    tabs.innerHTML = plan.pricing.map((p) => `
       <button type="button" class="cycle-tab ${p.cycle === selectedSubscribeCycle ? "active" : ""}" data-cycle="${p.cycle}">
         ${App.escapeHtml(p.label)}${p.discountPct ? `<span class="save-badge">Save ${p.discountPct}%</span>` : ""}
       </button>
@@ -230,7 +335,7 @@
     tabs.querySelectorAll(".cycle-tab").forEach((btn) => {
       btn.addEventListener("click", () => {
         selectedSubscribeCycle = btn.dataset.cycle;
-        renderSubscribeUi();
+        renderSubscribeBody();
       });
     });
 
@@ -238,20 +343,27 @@
   }
 
   function updateSubscribePriceSummary() {
-    const pricing = status.subscribe.pricing.find((p) => p.cycle === selectedSubscribeCycle);
+    const plan = status.subscribe.plans.find((p) => p.planType === selectedPlanType);
+    const pricing = plan.pricing.find((p) => p.cycle === selectedSubscribeCycle);
     document.getElementById("subscribePriceAmount").textContent = fmtRupees(pricing.amountInPaise);
-    document.getElementById("subscribePriceSub").textContent = `${pricing.label.toLowerCase()} billing`;
+    document.getElementById("subscribePriceSub").textContent = `${plan.label} · ${pricing.label.toLowerCase()} billing`;
   }
 
   document.getElementById("subscribeBtn").addEventListener("click", async () => {
     const banner = document.getElementById("banner");
     const btn = document.getElementById("subscribeBtn");
     banner.innerHTML = "";
+    if (!selectedPlanType) {
+      // Defensive only - the button sits inside #subscribeBody, which
+      // stays hidden until a plan is selected (see renderSubscribeBody).
+      banner.innerHTML = `<div class="banner error">Choose a plan above first.</div>`;
+      return;
+    }
     btn.disabled = true;
     btn.textContent = "Starting payment…";
     try {
       await loadRazorpayScript();
-      const order = await App.apiJson("/api/billing/order", { method: "POST", body: { kind: "subscribe", cycle: selectedSubscribeCycle } });
+      const order = await App.apiJson("/api/billing/order", { method: "POST", body: { kind: "subscribe", cycle: selectedSubscribeCycle, planType: selectedPlanType } });
 
       const rzp = new window.Razorpay({
         key: order.keyId,
@@ -259,7 +371,7 @@
         currency: order.currency,
         order_id: order.razorpayOrderId,
         name: "RUTA",
-        description: status.accountType === "agency" ? "Agency plan subscription" : "Individual plan subscription",
+        description: selectedPlanType === "agency" ? "Agency plan subscription" : "Individual plan subscription",
         prefill: { email: me.user.email, name: me.user.fullName },
         theme: { color: "#F47B32" },
         handler: async (response) => {

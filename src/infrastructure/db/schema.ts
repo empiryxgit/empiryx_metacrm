@@ -257,6 +257,27 @@ export const companies = crm.table("companies", {
   // tenancy.ts) the same way applyOverageCapacityPurchase already sets
   // extraCapacityExpiresAt.
   subscriptionExpiresAt: timestamp("subscription_expires_at", { withTimezone: true }),
+  // Which pricing TIER ("individual" | "agency") this company's base plan
+  // is actually on - distinct from accountType above, which only says
+  // whether this company IS an agency (has the Agency nav/Clients page at
+  // all), not which plan it pays for. An agency chooses this explicitly at
+  // subscribe time (see createBaseSubscriptionOrder in src/application/
+  // billing.ts) - "individual" buys the exact same price/limits an
+  // Individual account gets (no client concept at all), "agency" buys the
+  // existing bundled campaigns+clients tier. Only ever meaningful for
+  // accountType "agency" - an Individual company's plan is always its own
+  // "individual" tier regardless of this column. Null for every company
+  // that predates this feature (including every already-paying Agency
+  // subscriber) and for an agency mid-trial that hasn't subscribed yet -
+  // resolveEffectivePlanAccountType() in src/domain/billing.ts is the one
+  // place that ever reads this column, and its documented fallback (null
+  // resolves to "agency" for an agency company) is exactly what every
+  // pre-existing row already behaved as, so this column changes no
+  // existing account's limits or pricing just by existing. Set by
+  // markBillingOrderPaidAndApply (src/infrastructure/db/repositories/
+  // billing.ts) from the paid order's own plan_type the same way
+  // subscriptionCycle above is set from that order's cycle.
+  subscriptionPlanType: text("subscription_plan_type"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 }, (t) => ({
@@ -2314,6 +2335,14 @@ export const billingOrders = crm.table(
     // paid for; drives both the price charged (computeOverageAmountInPaise)
     // and how far out extraCapacityExpiresAt is pushed once paid.
     cycle: text("cycle").notNull(),
+    // Which plan tier ("individual" | "agency") this order was for - only
+    // ever set when kind = "base_subscription" (see companies.
+    // subscriptionPlanType's own doc comment above); null for every
+    // overage order (individual_campaigns/agency_bundles), which has no
+    // separate plan choice of its own. Read back by
+    // markBillingOrderPaidAndApply to know what to write onto companies.
+    // subscription_plan_type once this order is paid.
+    planType: text("plan_type"),
     // Razorpay's own smallest-unit convention (paise, not rupees) - the
     // exact amount the Razorpay Order was created for, snapshotted here so
     // this row is a true historical receipt even if the pricing catalog in

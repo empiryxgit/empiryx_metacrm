@@ -25,6 +25,7 @@ import {
   BASE_SUBSCRIPTION_KIND,
   cycleEndDate,
   overageKindForAccountType,
+  resolveEffectivePlanAccountType,
   CYCLE_LABELS,
   BILLING_CYCLE_KEYS,
   type BillingCycle,
@@ -245,7 +246,16 @@ export async function getCampaignLimitStatus(companyId: string): Promise<Campaig
 
   const { extraCampaigns } = activeExtraSlots(rootCompany);
   const pricingConfig = await resolvePricingConfig();
-  const baseLimit = effectiveBaseCampaignLimit(pricingConfig, accountType);
+  // Priced/limited against the EFFECTIVE plan tier, not raw accountType -
+  // an agency that chose the Individual-priced plan for itself (see
+  // resolveEffectivePlanAccountType's own doc comment) gets that plan's
+  // campaign allowance, same as a genuine Individual account. `accountType`
+  // itself (used above for pooling and returned below) stays the
+  // company's real, structural identity - pooling across clients is still
+  // correct even for a plan="individual" agency, since assertClientLimitNotReached
+  // already keeps that agency's claimed-client count at zero.
+  const planAccountType = resolveEffectivePlanAccountType(rootCompany);
+  const baseLimit = effectiveBaseCampaignLimit(pricingConfig, planAccountType);
   // Trial-aware: during an active trial this overrides baseLimit+extra down
   // to TRIAL_CAMPAIGN_LIMIT (1); once trial_expired/subscription_expired it
   // is pinned to `used` (blocking new creation while leaving existing
@@ -300,7 +310,17 @@ export async function getClientLimitStatus(agencyCompanyId: string): Promise<Cli
   // effectiveClientLimit's own doc comment in src/domain/trial.ts.
   const entitlement = resolveEntitlementState(company);
   const pricingConfig = await resolvePricingConfig();
-  const baseClientLimit = effectiveBaseClientLimitAgency(pricingConfig);
+  // An agency that chose the Individual-priced plan for itself has NO
+  // client capacity at all, once genuinely subscribed - the whole point of
+  // that plan choice (see resolveEffectivePlanAccountType's own doc
+  // comment) is that it buys exactly what an Individual account gets, and
+  // Individual has no client concept. Only an agency that's on (or
+  // defaulting to, pre-choice) the "agency" tier gets the plan's real base
+  // client allowance. Trial-time behavior below is unaffected either way -
+  // effectiveClientLimit only reads baseClientLimit once entitlement is
+  // genuinely "subscribed".
+  const planAccountType = resolveEffectivePlanAccountType(company);
+  const baseClientLimit = planAccountType === "agency" ? effectiveBaseClientLimitAgency(pricingConfig) : 0;
   const limit = effectiveClientLimit(entitlement, baseClientLimit + extraClients, used);
 
   return { used, baseLimit: baseClientLimit, extra: extraClients, limit, remaining: Math.max(0, limit - used) };
@@ -365,6 +385,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
   if (!rootCompany) return { campaignsPaused: 0, clientsSuspended: 0 };
 
   const accountType = resolveAccountType(rootCompany.accountType);
+  const planAccountType = resolveEffectivePlanAccountType(rootCompany);
   const entitlement = resolveEntitlementState(rootCompany);
   const { extraCampaigns, extraClients } = activeExtraSlots(rootCompany);
   const pricingConfig = await resolvePricingConfig();
@@ -380,7 +401,7 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
     campaignRows = await listCampaigns(rootCompanyId);
   }
 
-  const campaignLimit = effectiveCampaignLimit(entitlement, effectiveBaseCampaignLimit(pricingConfig, accountType) + extraCampaigns, campaignRows.length);
+  const campaignLimit = effectiveCampaignLimit(entitlement, effectiveBaseCampaignLimit(pricingConfig, planAccountType) + extraCampaigns, campaignRows.length);
   const campaignCandidates: DowngradeCandidate[] = campaignRows.map((c) => ({
     id: c.id,
     createdAt: c.createdAt,
@@ -396,7 +417,10 @@ export async function reconcileCapacityDowngrade(rootCompanyId: string): Promise
   // own campaigns, which the pooled count above already covers) ---
   let clientsSuspended = 0;
   if (accountType === "agency") {
-    const clientLimit = effectiveClientLimit(entitlement, effectiveBaseClientLimitAgency(pricingConfig) + extraClients, claimed.length);
+    // Same "individual-tier agency has zero client capacity" rule as
+    // getClientLimitStatus above - see its own comment.
+    const baseClientLimit = planAccountType === "agency" ? effectiveBaseClientLimitAgency(pricingConfig) : 0;
+    const clientLimit = effectiveClientLimit(entitlement, baseClientLimit + extraClients, claimed.length);
     const clientCandidates: DowngradeCandidate[] = claimed.map((c) => ({
       id: c.clientCompanyId,
       createdAt: c.linkedAt,
@@ -446,6 +470,15 @@ export interface BillingStatus {
   // "subscribed" in its own right (it never has a plan of its own), the
   // AGENCY's trial/subscription is what actually governs.
   entitlement: SerializedEntitlementState;
+  // The pricing tier actually governing campaigns/clients/overage below -
+  // see resolveEffectivePlanAccountType's own doc comment. For an
+  // Individual company this always equals `accountType`; for an Agency
+  // it's whichever tier they chose at subscribe time (or "agency", the
+  // tier that existed before this feature shipped, if they haven't chosen
+  // yet - see companies.subscriptionPlanType's own doc comment). Lets
+  // /subscription.html and the Agency Dashboard show "you're on the
+  // Individual plan" even though accountType itself still says "agency".
+  activePlan: AccountType;
   campaigns: CampaignLimitStatus;
   clients: ClientLimitStatus | null;
   currentCycle: { cycle: BillingCycle | null; expiresAt: string | null } | null;
@@ -460,8 +493,21 @@ export interface BillingStatus {
   // subscription) into an active paid plan. Null once already subscribed -
   // /subscription.html shows the ordinary "Add extra capacity" purchase
   // card instead in that case.
+  //
+  // `plans` is always one entry for an Individual company (its own tier,
+  // nothing to choose) and always TWO for an Agency - "individual" and
+  // "agency" - so /subscription.html can present an explicit plan picker
+  // rather than assuming every agency wants the bundled client-capacity
+  // tier. See createBaseSubscriptionOrder's own doc comment for how the
+  // caller's chosen planType is validated and applied.
   subscribe: {
-    pricing: Array<{ cycle: BillingCycle; label: string; amountInPaise: number; discountPct: number }>;
+    plans: Array<{
+      planType: AccountType;
+      label: string;
+      campaignLimit: number;
+      clientLimit: number | null;
+      pricing: Array<{ cycle: BillingCycle; label: string; amountInPaise: number; discountPct: number }>;
+    }>;
   } | null;
 }
 
@@ -482,13 +528,16 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
 
   const entitlementState = rootCompany ? resolveEntitlementState(rootCompany) : { kind: "subscribed" as const, expiresAt: null };
   const entitlement = serializeEntitlementState(entitlementState);
+  const activePlan = rootCompany ? resolveEffectivePlanAccountType(rootCompany) : accountType;
 
-  const kind = overageKindForAccountType(accountType);
+  const kind = overageKindForAccountType(activePlan);
   const pricingConfig = await resolvePricingConfig();
+  const planChoices: AccountType[] = accountType === "agency" ? ["individual", "agency"] : ["individual"];
   return {
     accountType,
     managedExternally,
     entitlement,
+    activePlan,
     campaigns,
     clients,
     currentCycle,
@@ -506,11 +555,17 @@ export async function getBillingStatus(companyId: string): Promise<BillingStatus
       entitlementState.kind === "subscribed"
         ? null
         : {
-            pricing: BILLING_CYCLE_KEYS.map((cycle) => ({
-              cycle,
-              label: CYCLE_LABELS[cycle],
-              amountInPaise: effectiveBaseSubscriptionAmountInPaise(pricingConfig, accountType, cycle),
-              discountPct: effectiveCycleDiscountPct(pricingConfig, cycle),
+            plans: planChoices.map((planType) => ({
+              planType,
+              label: planType === "agency" ? "Agency Plan" : "Individual Plan",
+              campaignLimit: effectiveBaseCampaignLimit(pricingConfig, planType),
+              clientLimit: planType === "agency" ? effectiveBaseClientLimitAgency(pricingConfig) : null,
+              pricing: BILLING_CYCLE_KEYS.map((cycle) => ({
+                cycle,
+                label: CYCLE_LABELS[cycle],
+                amountInPaise: effectiveBaseSubscriptionAmountInPaise(pricingConfig, planType, cycle),
+                discountPct: effectiveCycleDiscountPct(pricingConfig, cycle),
+              })),
             })),
           },
   };
@@ -570,12 +625,22 @@ export async function createOverageOrder(input: {
   quantity: number;
   cycle: BillingCycle;
 }): Promise<{ orderId: string; razorpayOrderId: string; amountInPaise: number; currency: string; keyId: string }> {
-  const { rootCompanyId, accountType } = await resolvePoolRootCompanyId(input.companyId);
+  const { rootCompanyId } = await resolvePoolRootCompanyId(input.companyId);
   if (rootCompanyId !== input.companyId) {
     throw new AuthError("Extra capacity for your account is managed by your agency - ask them to purchase it.", 403);
   }
 
-  const kind = overageKindForAccountType(accountType);
+  const rootCompany = await getCompanyById(rootCompanyId);
+  if (!rootCompany) throw new AuthError("Company not found.", 404);
+  // Overage extends whatever plan TIER is actually active, not raw
+  // accountType - an agency on the Individual-priced plan buying extra
+  // capacity gets individual_campaigns (raw campaign slots), same as a
+  // genuine Individual account, never agency_bundles - see
+  // resolveEffectivePlanAccountType's own doc comment. To ever buy client
+  // capacity, that agency has to subscribe to the Agency plan instead
+  // (createBaseSubscriptionOrder below), not just buy overage on top of
+  // the Individual plan.
+  const kind = overageKindForAccountType(resolveEffectivePlanAccountType(rootCompany));
   const pricingConfig = await resolvePricingConfig();
   const amountInPaise = effectiveOverageAmountInPaise(pricingConfig, kind, input.quantity, input.cycle);
   const localId = randomUUID();
@@ -614,26 +679,45 @@ export async function createOverageOrder(input: {
  * (a company has exactly one base plan). Same root-company-only guard as
  * createOverageOrder: a claimed client can never subscribe on its own
  * behalf, only the agency (or a self-standing Individual) can.
+ *
+ * `input.planType` is the plan TIER being subscribed to - required for an
+ * Agency (must be explicitly "individual" or "agency", see
+ * getBillingStatus's own `subscribe.plans` for the two choices the
+ * frontend offers), ignored for an Individual (which only ever has its own
+ * one tier - passing anything else for one is simply overridden, never an
+ * error, since there's nothing ambiguous to reject). This is what
+ * companies.subscriptionPlanType ends up set to once paid - see
+ * markBillingOrderPaidAndApply.
  */
 export async function createBaseSubscriptionOrder(input: {
   companyId: string;
   createdBy: string;
   cycle: BillingCycle;
+  planType?: AccountType;
 }): Promise<{ orderId: string; razorpayOrderId: string; amountInPaise: number; currency: string; keyId: string }> {
   const { rootCompanyId, accountType } = await resolvePoolRootCompanyId(input.companyId);
   if (rootCompanyId !== input.companyId) {
     throw new AuthError("Your plan is managed by your agency - ask them to subscribe.", 403);
   }
 
+  let planType: AccountType;
+  if (accountType === "individual") {
+    planType = "individual";
+  } else if (input.planType === "individual" || input.planType === "agency") {
+    planType = input.planType;
+  } else {
+    throw new AuthError("Choose a plan - Individual or Agency - before subscribing.", 400);
+  }
+
   const pricingConfig = await resolvePricingConfig();
-  const amountInPaise = effectiveBaseSubscriptionAmountInPaise(pricingConfig, accountType, input.cycle);
+  const amountInPaise = effectiveBaseSubscriptionAmountInPaise(pricingConfig, planType, input.cycle);
   const localId = randomUUID();
 
   const razorpayOrder = await createRazorpayOrder({
     amountInPaise,
     currency: "INR",
     receipt: localId,
-    notes: { companyId: rootCompanyId, kind: BASE_SUBSCRIPTION_KIND, quantity: "1", cycle: input.cycle },
+    notes: { companyId: rootCompanyId, kind: BASE_SUBSCRIPTION_KIND, quantity: "1", cycle: input.cycle, planType },
   });
 
   await insertBillingOrder({
@@ -646,6 +730,7 @@ export async function createBaseSubscriptionOrder(input: {
     amountInPaise,
     currency: "INR",
     razorpayOrderId: razorpayOrder.id,
+    planType,
   });
 
   return {

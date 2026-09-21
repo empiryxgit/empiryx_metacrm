@@ -17,6 +17,10 @@ export async function insertBillingOrder(input: {
   amountInPaise: number;
   currency: string;
   razorpayOrderId: string;
+  // Only ever set for a base_subscription order (see billingOrders.planType's
+  // own doc comment in schema.ts) - undefined/omitted for every overage
+  // order, which Drizzle stores as the column's null default.
+  planType?: string;
 }) {
   const db = await getDb();
   const rows = await db.insert(billingOrders).values({ ...input, status: "created" }).returning();
@@ -92,6 +96,12 @@ export async function markBillingOrderPaidAndApply(input: {
       SET
         subscription_status = CASE WHEN paid.kind = 'base_subscription' THEN 'active' ELSE company.subscription_status END,
         subscription_cycle = CASE WHEN paid.kind = 'base_subscription' THEN paid.cycle ELSE company.subscription_cycle END,
+        -- Only ever changes on a base_subscription order (an overage order
+        -- has no plan_type of its own - see billingOrders.planType's own
+        -- doc comment) - this is what lets an Agency's chosen tier
+        -- (resolveEffectivePlanAccountType in src/domain/billing.ts) take
+        -- effect the moment their subscribe payment is confirmed.
+        subscription_plan_type = CASE WHEN paid.kind = 'base_subscription' THEN paid.plan_type ELSE company.subscription_plan_type END,
         subscription_expires_at = CASE
           WHEN paid.kind <> 'base_subscription' THEN company.subscription_expires_at
           WHEN company.subscription_status = 'active'

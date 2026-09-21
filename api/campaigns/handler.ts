@@ -24,6 +24,7 @@ import {
   upsertWebhookConfig,
 } from "../../src/infrastructure/db/repositories/campaigns";
 import { parsePagination, buildPaginationMeta } from "../../src/infrastructure/http/pagination";
+import { isAccountType } from "../../src/domain/accountType";
 import { getLeadCountsByMetaCampaignId, getLeadCountsForCampaigns } from "../../src/infrastructure/db/repositories";
 import {
   countMetaCampaignsForAdAccount,
@@ -755,7 +756,14 @@ async function handleBillingCreateOrder(req: VercelRequest, res: VercelResponse)
   // caller that predates this) is the ordinary extra-capacity purchase
   // this endpoint has always supported. Subscribing takes no `quantity`
   // (a company has exactly one base plan); overage still requires one.
-  const { quantity, cycle, kind } = (req.body ?? {}) as { quantity?: number; cycle?: string; kind?: string };
+  // `planType` is only meaningful alongside kind === "subscribe" - which
+  // pricing tier ("individual" | "agency") to subscribe to, required for
+  // an Agency account (see createBaseSubscriptionOrder's own doc comment
+  // for why), ignored for an Individual account (which only ever has one
+  // tier). Validated here (not left to createBaseSubscriptionOrder alone)
+  // so a garbage value gets a plain 400 rather than surfacing as a generic
+  // AuthError.
+  const { quantity, cycle, kind, planType } = (req.body ?? {}) as { quantity?: number; cycle?: string; kind?: string; planType?: string };
   if (!isBillingCycle(cycle)) {
     res.status(400).json({ error: "Unknown billing cycle." });
     return;
@@ -764,11 +772,15 @@ async function handleBillingCreateOrder(req: VercelRequest, res: VercelResponse)
     res.status(400).json({ error: "quantity must be a positive whole number." });
     return;
   }
+  if (kind === "subscribe" && planType !== undefined && !isAccountType(planType)) {
+    res.status(400).json({ error: "Unknown plan type." });
+    return;
+  }
 
   try {
     const order =
       kind === "subscribe"
-        ? await createBaseSubscriptionOrder({ companyId: auth.companyId, createdBy: auth.userId, cycle })
+        ? await createBaseSubscriptionOrder({ companyId: auth.companyId, createdBy: auth.userId, cycle, planType: isAccountType(planType) ? planType : undefined })
         : await createOverageOrder({ companyId: auth.companyId, createdBy: auth.userId, quantity: quantity as number, cycle });
     res.status(201).json(order);
   } catch (err) {
