@@ -77,80 +77,15 @@ const App = (() => {
    * inside a page-specific #banner div (several pages already use that id
    * for their own transient success/error messages; this is a persistent,
    * page-independent notice). */
-  function renderTrialBanner(me) {
+  function removeTrialBanner() {
     const existing = document.getElementById("trialBanner");
-    const entitlement = me?.entitlement;
-    const nav = document.getElementById("topnav");
-    if (!entitlement || !nav) {
-      existing?.remove();
-      return;
-    }
-
-    const state = entitlement.entitlement;
-    const isAgency = entitlement.accountType === "agency";
-    const isAgencyOwner = isAgency && hasPermission(me, "company.manage");
-    const isAgencyDashboard = typeof window !== "undefined" && window.location.pathname.includes("agency-dashboard");
-
-    // Suppress top trial banner on agency dashboard (it's shown in dedicated section for owner)
-    // and for non-owner agency users
-    if (isAgencyDashboard || (isAgency && !isAgencyOwner)) {
-      existing?.remove();
-      return;
-    }
-
-    let cls = "info";
-    let title = "";
-    let detail = "";
-    let ctaLabel = null;
-
-    if (state.kind === "trialing") {
-      cls = state.daysRemaining <= 3 ? "warning" : "info";
-      title = isAgency ? "Agency Trial Active" : "Free Trial Active";
-      const detailParts = [`${state.daysRemaining} day${state.daysRemaining === 1 ? "" : "s"} remaining`];
-      if (isAgency && entitlement.clients) detailParts.push(`Clients: ${entitlement.clients.used} of ${entitlement.clients.limit}`);
-      detailParts.push(`Campaigns: ${entitlement.campaigns.used} of ${entitlement.campaigns.limit}`);
-      detail = detailParts.join(" · ");
-      ctaLabel = isAgency ? "Upgrade Agency Plan" : "Upgrade Plan";
-    } else if (state.kind === "trial_expired") {
-      cls = "error";
-      title = isAgency ? "Your Agency free trial has ended" : "Your 15-day free trial has ended";
-      detail = isAgency
-        ? "Subscribe to continue managing your clients and campaigns."
-        : "Subscribe to a plan to continue managing your leads.";
-      ctaLabel = isAgency ? "View Agency Plans & Subscribe" : "View Plans & Subscribe";
-    } else if (state.kind === "subscription_expired") {
-      cls = "error";
-      title = isAgency ? "Your Agency subscription has ended" : "Your subscription has ended";
-      detail = isAgency
-        ? "Renew to continue managing your clients and campaigns."
-        : "Renew to continue managing your leads.";
-      ctaLabel = "Renew Plan";
-    } else {
-      // "subscribed" - nothing to show.
-      existing?.remove();
-      return;
-    }
-
-    const banner = existing || document.createElement("div");
-    banner.id = "trialBanner";
-    banner.className = `banner ${cls}`;
-    banner.style.margin = "14px 0 0";
-    banner.innerHTML = `
-      <span class="banner-icon">${BANNER_ICONS[cls] || BANNER_ICONS.info}</span>
-      <span class="banner-body">
-        <span class="banner-title">${escapeHtml(title)}</span>
-        ${detail ? `<span class="banner-detail">${escapeHtml(detail)}</span>` : ""}
-      </span>
-      ${ctaLabel ? `<button type="button" class="btn sm" id="trialBannerCta">${escapeHtml(ctaLabel)}</button>` : ""}
-    `;
-    if (!existing) {
-      const wrap = document.querySelector(".wrap");
-      if (wrap) wrap.insertAdjacentElement("beforebegin", banner);
-      else nav.insertAdjacentElement("afterend", banner);
-    }
-    const cta = document.getElementById("trialBannerCta");
-    if (cta) cta.onclick = () => { window.location.href = "/subscription.html"; };
+    existing?.remove();
   }
+
+  function renderTrialBanner() {
+    removeTrialBanner();
+  }
+
   /** Called at the top of every protected page. Redirects to /login.html if not
    * authenticated, or to /onboarding.html if the company hasn't finished
    * onboarding yet (unless the page itself IS the onboarding page). */
@@ -161,7 +96,7 @@ const App = (() => {
         window.location.href = "/onboarding.html";
         return null;
       }
-      renderTrialBanner(me);
+      removeTrialBanner();
       return me;
     } catch {
       // Bug fix: this used to send just window.location.pathname, dropping
@@ -363,6 +298,85 @@ const App = (() => {
     return dropdownNavMenuHtml({ id: "settingsNav", label: "Settings", icon: NAV_ICONS.settings, links: settingsLinks, activeHref });
   }
 
+  function trialPillHtml(me) {
+    const entitlement = me?.entitlement;
+    if (!entitlement) return "";
+    const state = entitlement.entitlement;
+    if (!state || state.kind === "subscribed") return "";
+
+    const isAgency = entitlement.accountType === "agency";
+    let pillDesktop = "";
+    let pillTablet = "";
+    let pillMobile = "";
+    let popoverTitle = isAgency ? "Agency Trial" : "Free Trial";
+    let popoverSub = "";
+    let ctaLabel = isAgency ? "Upgrade Agency Plan" : "Upgrade Plan";
+    let pillClass = "trial-pill";
+
+    if (state.kind === "trialing") {
+      const d = state.daysRemaining;
+      pillDesktop = `Trial · ${d} day${d === 1 ? "" : "s"} left`;
+      pillTablet = `Trial · ${d} day${d === 1 ? "" : "s"}`;
+      pillMobile = `Trial · ${d}d`;
+      popoverSub = `${d} day${d === 1 ? "" : "s"} remaining`;
+      if (d <= 3) pillClass += " warning";
+    } else if (state.kind === "trial_expired") {
+      pillDesktop = "Trial Expired";
+      pillTablet = "Expired";
+      pillMobile = "Expired";
+      popoverTitle = isAgency ? "Agency Trial" : "Free Trial";
+      popoverSub = "Trial period ended";
+      ctaLabel = isAgency ? "View Agency Plans & Subscribe" : "View Plans & Subscribe";
+      pillClass += " expired";
+    } else if (state.kind === "subscription_expired") {
+      pillDesktop = "Subscription Expired";
+      pillTablet = "Expired";
+      pillMobile = "Expired";
+      popoverTitle = "Subscription Expired";
+      popoverSub = "Renew to continue";
+      ctaLabel = "Renew Plan";
+      pillClass += " expired";
+    } else {
+      return "";
+    }
+
+    const clientStat = isAgency && entitlement.clients ? `
+      <div class="trial-popover-stat">
+        <span class="trial-popover-stat-label">Clients</span>
+        <span class="trial-popover-stat-val">${entitlement.clients.used} of ${entitlement.clients.limit}</span>
+      </div>` : "";
+
+    const campaignStat = entitlement.campaigns ? `
+      <div class="trial-popover-stat">
+        <span class="trial-popover-stat-label">Campaigns</span>
+        <span class="trial-popover-stat-val">${entitlement.campaigns.used} of ${entitlement.campaigns.limit}</span>
+      </div>` : "";
+
+    return `
+      <div class="menu-wrap trial-menu-wrap">
+        <button class="${pillClass}" id="trialPillBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="trialPopover" aria-label="${escapeHtml(pillDesktop)}">
+          <span class="trial-pill-dot" aria-hidden="true"></span>
+          <span class="trial-pill-text-desktop">${escapeHtml(pillDesktop)}</span>
+          <span class="trial-pill-text-tablet">${escapeHtml(pillTablet)}</span>
+          <span class="trial-pill-text-mobile">${escapeHtml(pillMobile)}</span>
+        </button>
+        <div class="dropdown trial-popover" id="trialPopover" hidden>
+          <div class="trial-popover-head">
+            <div class="trial-popover-title">${escapeHtml(popoverTitle)}</div>
+            <div class="trial-popover-sub">${escapeHtml(popoverSub)}</div>
+          </div>
+          <div class="trial-popover-body">
+            ${clientStat}
+            ${campaignStat}
+          </div>
+          <div class="trial-popover-footer">
+            <a href="/subscription.html" class="btn trial-popover-cta">${escapeHtml(ctaLabel)}</a>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderNav(me, activeHref) {
     const nav = document.getElementById("topnav");
     if (!nav) return;
@@ -468,10 +482,6 @@ const App = (() => {
           <span class="brand-by">by Empiryx</span>
         </div>
 
-        <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="mobileDrawer">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        </button>
-
         <div class="shell-center">${centerHtml}</div>
 
         <div class="shell-right">
@@ -486,6 +496,8 @@ const App = (() => {
               <div class="dropdown-empty">You're all caught up</div>
             </div>
           </div>
+
+          ${trialPillHtml(me)}
 
           <div class="menu-wrap">
             <button class="user-trigger" id="userTrigger" type="button" aria-haspopup="true" aria-expanded="false">
@@ -509,6 +521,10 @@ const App = (() => {
               <button class="dropdown-item dropdown-item-danger" id="logoutBtn" type="button">Sign out</button>
             </div>
           </div>
+
+          <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="mobileDrawer">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
         </div>
       </div>
     `;
@@ -567,6 +583,8 @@ const App = (() => {
     }
     const displayName = me?.user?.fullName ?? "";
     const roleName = me?.role?.name ?? "";
+    const isAgency = me?.entitlement?.accountType === "agency";
+    const state = me?.entitlement?.entitlement;
 
     const groupHtml = (links, groupClass) =>
       links.map((l) => navLinkHtml(l, activeHref, `mobile-nav-link${groupClass ? " " + groupClass : ""}`)).join("");
@@ -582,6 +600,16 @@ const App = (() => {
           <div><div class="user-name">${escapeHtml(displayName)}</div>${roleName ? `<div class="user-role">${escapeHtml(roleName)}</div>` : ""}</div>
         </div>
         <div class="agency-context-switch agency-context-switch-mobile" id="agencyContextSlotMobile" style="display:none"></div>
+        ${state && state.kind !== "subscribed" ? `
+        <div class="mobile-drawer-trial">
+          <div class="mobile-drawer-trial-top">
+            <span class="trial-pill-dot"></span>
+            <strong>${isAgency ? "Agency Trial" : "Free Trial"}</strong>
+            <span style="color:var(--text-muted); font-size:12px">· ${state.daysRemaining ? `${state.daysRemaining}d left` : "Expired"}</span>
+          </div>
+          <a href="/subscription.html" class="btn sm" style="margin-top:8px; width:100%">${isAgency ? "Upgrade Agency Plan" : "Upgrade Plan"}</a>
+        </div>
+        <div class="mobile-nav-divider"></div>` : ""}
         ${primaryLinks.length ? `<div class="mobile-nav-group">${groupHtml(primaryLinks)}</div>` : ""}
         ${admin.length ? `<div class="mobile-nav-divider"></div><div class="mobile-nav-group">${groupHtml(admin)}</div>` : ""}
         ${labeledSection("Agency", agencyLinks)}
@@ -600,6 +628,8 @@ const App = (() => {
   function closeAllMenus() {
     document.getElementById("notifMenu")?.setAttribute("hidden", "");
     document.getElementById("notifBtn")?.setAttribute("aria-expanded", "false");
+    document.getElementById("trialPopover")?.setAttribute("hidden", "");
+    document.getElementById("trialPillBtn")?.setAttribute("aria-expanded", "false");
     document.getElementById("userMenu")?.setAttribute("hidden", "");
     document.getElementById("userTrigger")?.setAttribute("aria-expanded", "false");
     document.getElementById("settingsNavMenu")?.setAttribute("hidden", "");
@@ -626,6 +656,14 @@ const App = (() => {
     document.getElementById("notifBtn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleMenu("notifBtn", "notifMenu");
+    });
+    document.getElementById("trialPillBtn")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleMenu("trialPillBtn", "trialPopover");
+    });
+    document.getElementById("trialPopover")?.addEventListener("click", (e) => {
+      if (e.target.closest("a, button")) return;
+      e.stopPropagation();
     });
     document.getElementById("userTrigger")?.addEventListener("click", (e) => {
       e.stopPropagation();
