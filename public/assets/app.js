@@ -88,6 +88,16 @@ const App = (() => {
 
     const state = entitlement.entitlement;
     const isAgency = entitlement.accountType === "agency";
+    const isAgencyOwner = isAgency && hasPermission(me, "company.manage");
+    const isAgencyDashboard = typeof window !== "undefined" && window.location.pathname.includes("agency-dashboard");
+
+    // Suppress top trial banner on agency dashboard (it's shown in dedicated section for owner)
+    // and for non-owner agency users
+    if (isAgencyDashboard || (isAgency && !isAgencyOwner)) {
+      existing?.remove();
+      return;
+    }
+
     let cls = "info";
     let title = "";
     let detail = "";

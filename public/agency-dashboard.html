@@ -68,6 +68,24 @@
 
   .plan-pill{ display:inline-flex; align-items:center; padding:2px 10px; border-radius:999px; background:var(--brand-primary-soft); color:var(--brand-primary-hover); font-size:15px; font-weight:700; letter-spacing:-0.01em; }
 
+  .sub-grid{ display:grid; grid-template-columns:1.2fr 1fr 1fr auto; gap:20px; align-items:center; background:var(--surface-alt); border:1px solid var(--border); border-radius:var(--radius-md); padding:18px 20px; margin-top:4px; }
+  .sub-item{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .sub-item-label{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); }
+  .sub-item-val{ font-size:15px; font-weight:700; color:var(--text-primary); display:flex; align-items:center; gap:8px; }
+  .sub-item-val .val-sub{ font-size:12.5px; font-weight:500; color:var(--text-muted); }
+  .sub-item-note{ font-size:12px; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sub-progress-bar{ height:6px; background:var(--surface-sunken); border-radius:999px; overflow:hidden; margin-top:3px; width:100%; max-width:200px; }
+  .sub-progress-fill{ height:100%; background:var(--brand-primary); border-radius:999px; }
+  .sub-progress-fill.limit-hit{ background:var(--danger); }
+  .sub-actions{ display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:6px; flex-shrink:0; }
+  @media (max-width:900px){
+    .sub-grid{ grid-template-columns:1fr 1fr; }
+    .sub-actions{ grid-column:1 / -1; align-items:flex-start; margin-top:6px; }
+  }
+  @media (max-width:600px){
+    .sub-grid{ grid-template-columns:1fr; }
+  }
+
   @media (max-width:600px){ .field-search{ width:100%; } }
 </style>
 </head>
@@ -99,6 +117,19 @@
          (add/invite/manage) lives on clients.html now that Clients is its
          own top-level nav item - this page only ever shows numbers. -->
     <div class="kpi-grid" id="kpiGrid"></div>
+
+    <div class="dash-section" id="subscriptionDetailsSection" style="display:none">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Subscription Details</p>
+            <p class="dash-card-sub" id="subCardSub">Current plan, status, and capacity usage</p>
+          </div>
+          <div id="subCardBadge"></div>
+        </div>
+        <div class="sub-grid" id="subGrid"></div>
+      </div>
+    </div>
 
     <div class="dash-section">
       <div class="dash-card">
@@ -291,6 +322,100 @@
         <div class="kpi-value">${c.value}</div>
         <div class="kpi-note">${App.escapeHtml(c.note)}</div>
       </div>`).join("");
+  }
+
+  function renderSubscriptionDetails(billing, me) {
+    const section = document.getElementById("subscriptionDetailsSection");
+    if (!section) return;
+
+    const isOwner = Boolean(dashboardData?.kpis?.isAgencyOwner || App.hasPermission(me, "company.manage"));
+    if (!isOwner) {
+      section.style.display = "none";
+      return;
+    }
+
+    const ent = billing?.entitlement || me?.entitlement?.entitlement;
+    if (!ent) {
+      section.style.display = "none";
+      return;
+    }
+
+    section.style.display = "";
+
+    const kind = ent.kind;
+    const isTrial = kind === "trialing";
+    const isTrialExpired = kind === "trial_expired";
+    const isSubExpired = kind === "subscription_expired";
+    const isSubscribed = kind === "subscribed";
+
+    let badgeHtml = "";
+    let planTitle = "Agency Plan";
+    let statusText = "";
+    let ctaLabel = "Manage Subscription";
+
+    if (isTrial) {
+      badgeHtml = `<span class="pill info" style="font-weight:700">Agency Trial Active</span>`;
+      planTitle = "Agency Free Trial";
+      statusText = `${ent.daysRemaining} day${ent.daysRemaining === 1 ? "" : "s"} remaining`;
+      ctaLabel = "Upgrade Agency Plan";
+    } else if (isTrialExpired) {
+      badgeHtml = `<span class="pill danger" style="font-weight:700">Trial Expired</span>`;
+      planTitle = "Agency Free Trial";
+      statusText = "Trial period has ended";
+      ctaLabel = "View Agency Plans & Subscribe";
+    } else if (isSubExpired) {
+      badgeHtml = `<span class="pill danger" style="font-weight:700">Subscription Expired</span>`;
+      planTitle = billing?.activePlan === "agency" ? "Agency Plan" : "Individual Plan";
+      statusText = "Subscription expired";
+      ctaLabel = "Renew Plan";
+    } else if (isSubscribed) {
+      badgeHtml = `<span class="pill active" style="font-weight:700">Active Subscription</span>`;
+      planTitle = billing?.activePlan === "agency" ? "Agency Plan" : "Individual Plan";
+      statusText = ent.expiresAt ? `Active · Renews ${new Date(ent.expiresAt).toLocaleDateString()}` : "Active";
+      ctaLabel = "Add Extra Capacity";
+    }
+
+    const clientUsed = billing?.clients?.used ?? me?.entitlement?.clients?.used ?? 0;
+    const clientLimit = billing?.clients?.limit ?? me?.entitlement?.clients?.limit ?? 1;
+    const clientPct = clientLimit > 0 ? Math.min(100, Math.round((clientUsed / clientLimit) * 100)) : 0;
+    const clientHit = clientUsed >= clientLimit;
+
+    const campaignUsed = billing?.campaigns?.used ?? me?.entitlement?.campaigns?.used ?? 0;
+    const campaignLimit = billing?.campaigns?.limit ?? me?.entitlement?.campaigns?.limit ?? 1;
+    const campaignPct = campaignLimit > 0 ? Math.min(100, Math.round((campaignUsed / campaignLimit) * 100)) : 0;
+    const campaignHit = campaignUsed >= campaignLimit;
+
+    const clientRemaining = Math.max(0, clientLimit - clientUsed);
+    const campaignRemaining = Math.max(0, campaignLimit - campaignUsed);
+
+    document.getElementById("subCardBadge").innerHTML = badgeHtml;
+
+    document.getElementById("subGrid").innerHTML = `
+      <div class="sub-item">
+        <div class="sub-item-label">Current Plan & Status</div>
+        <div class="sub-item-val">${App.escapeHtml(planTitle)}</div>
+        <div class="sub-item-note">${App.escapeHtml(statusText)}</div>
+      </div>
+
+      <div class="sub-item">
+        <div class="sub-item-label">Client Capacity</div>
+        <div class="sub-item-val">${clientUsed} <span class="val-sub">/ ${clientLimit} clients</span></div>
+        <div class="sub-progress-bar"><div class="sub-progress-fill ${clientHit ? "limit-hit" : ""}" style="width:${clientPct}%"></div></div>
+        <div class="sub-item-note">${clientRemaining > 0 ? `${clientRemaining} client slot${clientRemaining === 1 ? "" : "s"} available` : "Limit reached"}</div>
+      </div>
+
+      <div class="sub-item">
+        <div class="sub-item-label">Campaign Capacity</div>
+        <div class="sub-item-val">${campaignUsed} <span class="val-sub">/ ${campaignLimit} campaigns</span></div>
+        <div class="sub-progress-bar"><div class="sub-progress-fill ${campaignHit ? "limit-hit" : ""}" style="width:${campaignPct}%"></div></div>
+        <div class="sub-item-note">${campaignRemaining > 0 ? `${campaignRemaining} campaign slot${campaignRemaining === 1 ? "" : "s"} available` : "Limit reached"}</div>
+      </div>
+
+      <div class="sub-actions">
+        <a href="/subscription.html" class="btn">${App.escapeHtml(ctaLabel)}</a>
+        <a href="/subscription.html" style="font-size:11.5px; color:var(--text-muted); text-decoration:none;">View subscription details ›</a>
+      </div>
+    `;
   }
 
   // ---- Lead Volume chart: pin up to 5 clients, search to compare --------
@@ -683,6 +808,7 @@
       compareOpen = false; compareQuery = "";
 
       renderKpis();
+      renderSubscriptionDetails(billingStatus, me);
       renderChartControls();
       renderChart();
       renderRankList();

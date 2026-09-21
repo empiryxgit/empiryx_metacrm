@@ -310,23 +310,23 @@ h2.section-title:first-of-type{ margin-top:0; }
 /* =============================================================================
    Buttons
 ============================================================================= */
-button.btn{
+button.btn, a.btn{
   display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer;
   background:var(--brand-primary); color:#fff; border:none; border-radius:var(--radius-sm);
   padding:9px 16px; font-size:13.5px; font-weight:600; font-family:inherit; white-space:nowrap;
-  transition:background-color .12s ease;
+  transition:background-color .12s ease; text-decoration:none;
 }
-button.btn:hover{ background:var(--brand-primary-hover); }
-button.btn:active{ background:var(--brand-primary-active); }
-button.btn:disabled{ opacity:.5; cursor:not-allowed; }
-button.btn.secondary{ background:var(--surface); color:var(--text-primary); border:1px solid var(--border-strong); }
-button.btn.secondary:hover{ background:var(--surface-sunken); }
-button.btn.tertiary{ background:none; color:var(--text-secondary); padding:9px 8px; }
-button.btn.tertiary:hover{ background:var(--surface-sunken); color:var(--text-primary); }
-button.btn.danger{ background:var(--danger); }
-button.btn.danger:hover{ background:#9A3333; }
-button.btn.full{ width:100%; justify-content:center; margin-top:18px; }
-button.btn.sm{ padding:6px 11px; font-size:12.5px; }
+button.btn:hover, a.btn:hover{ background:var(--brand-primary-hover); text-decoration:none; }
+button.btn:active, a.btn:active{ background:var(--brand-primary-active); }
+button.btn:disabled, a.btn:disabled{ opacity:.5; cursor:not-allowed; }
+button.btn.secondary, a.btn.secondary{ background:var(--surface); color:var(--text-primary); border:1px solid var(--border-strong); }
+button.btn.secondary:hover, a.btn.secondary:hover{ background:var(--surface-sunken); }
+button.btn.tertiary, a.btn.tertiary{ background:none; color:var(--text-secondary); padding:9px 8px; }
+button.btn.tertiary:hover, a.btn.tertiary:hover{ background:var(--surface-sunken); color:var(--text-primary); }
+button.btn.danger, a.btn.danger{ background:var(--danger); }
+button.btn.danger:hover, a.btn.danger:hover{ background:#9A3333; }
+button.btn.full, a.btn.full{ width:100%; justify-content:center; margin-top:18px; }
+button.btn.sm, a.btn.sm{ padding:6px 11px; font-size:12.5px; }
 
 /* -- Button row — a "Back" (or other secondary) button beside a primary
    full-width action, e.g. register.html step 2. Without this, a bare
