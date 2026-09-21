@@ -1,52 +1,221 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Clients — RUTA Lead Management System</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/assets/app.css" />
-<style>
-  .client-toolbar{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
-  .client-search{ max-width:360px; min-width:240px; margin:0; flex:1; }
-  .client-cards{ display:flex; flex-direction:column; gap:12px; }
-  .client-card{
-    display:flex; align-items:center; justify-content:space-between; gap:16px;
-    padding:18px 20px; border:1px solid var(--border); border-radius:12px;
-    background:var(--surface); transition:box-shadow .15s ease, border-color .15s ease;
-  }
-  .client-card:hover{ border-color:var(--border-strong); box-shadow:var(--shadow-sm); }
-  .client-card-main{ display:flex; flex-direction:column; gap:6px; min-width:0; flex:1; }
-  .client-card-top{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .client-card-name{ font-weight:700; font-size:16px; color:var(--text-primary); }
-  .client-card-meta{ display:flex; gap:16px; font-size:13px; color:var(--text-muted); flex-wrap:wrap; align-items:center; }
-  .client-card-meta-item{ display:inline-flex; align-items:center; gap:5px; }
-  .client-card-actions{ flex-shrink:0; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .assigned-employees-box{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px; }
-  .assigned-chip{ display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:999px; background:var(--surface-sunken); border:1px solid var(--border); font-size:11.5px; font-weight:600; color:var(--text-secondary); }
-  .assigned-chip .chip-dot{ width:6px; height:6px; border-radius:50%; background:var(--brand-primary); }
-  .assign-btn-inline{ font-size:11.5px; font-weight:600; color:var(--brand-primary); background:none; border:none; cursor:pointer; text-decoration:underline; padding:0; }
-  .assign-btn-inline:hover{ color:var(--brand-primary-hover); }
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clients — RUTA Lead Management System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/app.css" />
+  <style>
+    .client-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
 
-  /* Employee selection list in modal */
-  .employee-select-list{ max-height:280px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-md); padding:6px; display:flex; flex-direction:column; gap:4px; margin:10px 0 14px; }
-  .employee-select-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border-radius:var(--radius-sm); cursor:pointer; transition:background .1s; }
-  .employee-select-row:hover{ background:var(--surface-sunken); }
-  .employee-select-row.selected{ background:var(--brand-primary-soft); }
-  .employee-select-left{ display:flex; align-items:center; gap:10px; min-width:0; }
-  .employee-select-info{ display:flex; flex-direction:column; min-width:0; }
-  .employee-select-name{ font-size:13px; font-weight:600; color:var(--text-primary); }
-  .employee-select-email{ font-size:11.5px; color:var(--text-muted); }
-  .employee-select-role{ font-size:11px; font-weight:600; color:var(--text-secondary); background:var(--surface-sunken); padding:2px 6px; border-radius:4px; }
+    .client-search {
+      max-width: 360px;
+      min-width: 240px;
+      margin: 0;
+      flex: 1;
+    }
 
-  @media (max-width:768px){
-    .client-card{ flex-direction:column; align-items:flex-start; }
-    .client-card-actions{ width:100%; justify-content:flex-start; margin-top:6px; }
-  }
-</style>
+    .client-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .client-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      transition: box-shadow .15s ease, border-color .15s ease;
+    }
+
+    .client-card:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .client-card-main {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .client-card-top {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .client-card-name {
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--text-primary);
+    }
+
+    .client-card-meta {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .client-card-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .client-card-actions {
+      flex-shrink: 0;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .assigned-employees-box {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
+    .assigned-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--surface-sunken);
+      border: 1px solid var(--border);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .assigned-chip .chip-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--brand-primary);
+    }
+
+    .assign-btn-inline {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--brand-primary);
+      background: none;
+      border: none;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 0;
+    }
+
+    .assign-btn-inline:hover {
+      color: var(--brand-primary-hover);
+    }
+
+    /* Employee selection list in modal */
+    .employee-select-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 10px 0 14px;
+    }
+
+    .employee-select-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background .1s;
+    }
+
+    .employee-select-row:hover {
+      background: var(--surface-sunken);
+    }
+
+    .employee-select-row.selected {
+      background: var(--brand-primary-soft);
+    }
+
+    .employee-select-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .employee-select-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .employee-select-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .employee-select-email {
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+
+    .employee-select-role {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: var(--surface-sunken);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    @media (max-width:768px) {
+      .client-card {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .client-card-actions {
+        width: 100%;
+        justify-content: flex-start;
+        margin-top: 6px;
+      }
+    }
+  </style>
 </head>
+
 <body>
   <nav class="topnav" id="topnav" style="display:none"></nav>
   <div class="wrap">
@@ -74,7 +243,9 @@
       </div>
     </div>
 
-    <div class="client-cards" id="clientCards"><p class="empty">Loading clients…</p></div>
+    <div class="client-cards" id="clientCards">
+      <p class="empty">Loading clients…</p>
+    </div>
     <div class="pagination-bar" id="clientsPaginationBar" style="display:none"></div>
 
     <div class="dash-section" id="onboardingLinksSection" style="display:none; margin-top:32px;">
@@ -87,7 +258,15 @@
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Client Name</th><th>Contact Email</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+            <thead>
+              <tr>
+                <th>Client Name</th>
+                <th>Contact Email</th>
+                <th>Status</th>
+                <th>Expires</th>
+                <th></th>
+              </tr>
+            </thead>
             <tbody id="onboardingLinksBody"></tbody>
           </table>
         </div>
@@ -116,7 +295,8 @@
           <input id="ac_ownerEmail" type="email" required autocomplete="off" placeholder="e.g. owner@abcrealty.com" />
 
           <label style="margin-top:14px;">Select Employees to Start Work on this Client (Optional)</label>
-          <p class="hint" style="margin-top:-4px">Assigned employees will be able to access and manage this client's CRM.</p>
+          <p class="hint" style="margin-top:-4px">Assigned employees will be able to access and manage this client's
+            CRM.</p>
           <div class="employee-select-list" id="addClientEmployeeList">
             <p class="hint" style="padding:8px">Loading agency employees…</p>
           </div>
@@ -146,8 +326,10 @@
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <span style="font-size:12.5px; font-weight:600; color:var(--text-secondary)">Agency Employees</span>
           <div>
-            <button type="button" class="btn secondary sm" id="assignSelectAllBtn" style="padding:2px 8px; font-size:11.5px">Select All</button>
-            <button type="button" class="btn secondary sm" id="assignDeselectAllBtn" style="padding:2px 8px; font-size:11.5px">Clear</button>
+            <button type="button" class="btn secondary sm" id="assignSelectAllBtn"
+              style="padding:2px 8px; font-size:11.5px">Select All</button>
+            <button type="button" class="btn secondary sm" id="assignDeselectAllBtn"
+              style="padding:2px 8px; font-size:11.5px">Clear</button>
           </div>
         </div>
         <div class="employee-select-list" id="assignEmployeeList">
@@ -207,7 +389,8 @@
       <div class="modal-body">
         <div id="removeModalError"></div>
         <p style="font-size:13.5px; line-height:1.5; color:var(--text-secondary)" id="removeModalText">
-          Are you sure you want to remove this client? They will be unlinked from your agency. You can re-invite them later if needed.
+          Are you sure you want to remove this client? They will be unlinked from your agency. You can re-invite them
+          later if needed.
         </p>
       </div>
       <div class="modal-footer">
@@ -228,9 +411,12 @@
         <button class="modal-close" type="button" id="credentialModalClose" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p class="hint" style="margin:0 0 10px">Share these sign-in details with the client - this password won't be shown again.</p>
-        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value" id="credentialEmail"></span></div>
-        <div class="detail-row"><span class="detail-label">Temporary password</span><span class="detail-value" id="credentialPassword"></span></div>
+        <p class="hint" style="margin:0 0 10px">Share these sign-in details with the client - this password won't be
+          shown again.</p>
+        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value"
+            id="credentialEmail"></span></div>
+        <div class="detail-row"><span class="detail-label">Temporary password</span><span class="detail-value"
+            id="credentialPassword"></span></div>
       </div>
       <div class="modal-footer">
         <button class="btn" type="button" id="credentialDone">Done</button>
@@ -308,7 +494,9 @@
         </div>
         <button class="modal-close" type="button" id="revokeLinkModalClose" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body"><div id="revokeLinkError"></div></div>
+      <div class="modal-body">
+        <div id="revokeLinkError"></div>
+      </div>
       <div class="modal-footer">
         <button class="btn secondary" type="button" id="revokeLinkCancel">Cancel</button>
         <button class="btn danger" type="button" id="revokeLinkConfirm">Revoke Link</button>
@@ -316,74 +504,74 @@
     </div>
   </div>
 
-<script src="/assets/app.js"></script>
-<script>
-  let me = null;
-  let allClients = [];
-  let agencyEmployees = [];
-  let clientsPage = 1;
-  let clientsPageSize = 25;
-  let statusFilter = "all";
-  let activeAssignClientId = null;
-  let activeEditClientId = null;
-  let activeRemoveClientId = null;
+  <script src="/assets/app.js"></script>
+  <script>
+    let me = null;
+    let allClients = [];
+    let agencyEmployees = [];
+    let clientsPage = 1;
+    let clientsPageSize = 25;
+    let statusFilter = "all";
+    let activeAssignClientId = null;
+    let activeEditClientId = null;
+    let activeRemoveClientId = null;
 
-  function fmt(n) { return (n ?? 0).toLocaleString(); }
+    function fmt(n) { return (n ?? 0).toLocaleString(); }
 
-  function statusPillClass(status) {
-    if (status === "active") return "active";
-    if (status === "suspended") return "paused";
-    return "pending"; // invited | pending
-  }
-  function statusLabel(status) {
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
-
-  async function loadAgencyEmployees() {
-    try {
-      const res = await App.apiJson("/api/admin/users");
-      agencyEmployees = res.users || [];
-    } catch (err) {
-      console.warn("Could not load agency employees:", err);
-      agencyEmployees = [];
+    function statusPillClass(status) {
+      if (status === "active") return "active";
+      if (status === "suspended") return "paused";
+      return "pending"; // invited | pending
     }
-  }
-
-  function renderClients() {
-    const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
-    const q = document.getElementById("searchInput").value.trim().toLowerCase();
-    let filtered = allClients;
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((c) => {
-        if (statusFilter === "pending") return c.status === "invited" || c.status === "pending";
-        return c.status === statusFilter;
-      });
-    }
-    if (q) {
-      filtered = filtered.filter((c) => c.name.toLowerCase().includes(q));
+    function statusLabel(status) {
+      return status.charAt(0).toUpperCase() + status.slice(1);
     }
 
-    const wrap = document.getElementById("clientCards");
-    const paginationBar = document.getElementById("clientsPaginationBar");
-
-    if (allClients.length === 0) {
-      paginationBar.style.display = "none";
-      wrap.innerHTML = `<p class="empty">No clients yet. Use “+ Add Client” or “Invite Client” to get started.</p>`;
-      return;
-    }
-    if (filtered.length === 0) {
-      paginationBar.style.display = "none";
-      wrap.innerHTML = `<p class="empty">No clients match your filter criteria.</p>`;
-      return;
+    async function loadAgencyEmployees() {
+      try {
+        const res = await App.apiJson("/api/admin/users");
+        agencyEmployees = res.users || [];
+      } catch (err) {
+        console.warn("Could not load agency employees:", err);
+        agencyEmployees = [];
+      }
     }
 
-    const totalPages = Math.max(1, Math.ceil(filtered.length / clientsPageSize));
-    clientsPage = Math.min(Math.max(1, clientsPage), totalPages);
-    const pageItems = filtered.slice((clientsPage - 1) * clientsPageSize, clientsPage * clientsPageSize);
+    function renderClients() {
+      const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
+      const q = document.getElementById("searchInput").value.trim().toLowerCase();
+      let filtered = allClients;
+      if (statusFilter !== "all") {
+        filtered = filtered.filter((c) => {
+          if (statusFilter === "pending") return c.status === "invited" || c.status === "pending";
+          return c.status === statusFilter;
+        });
+      }
+      if (q) {
+        filtered = filtered.filter((c) => c.name.toLowerCase().includes(q));
+      }
 
-    wrap.innerHTML = pageItems.map((c) => {
-      const canOpen = c.status === "active" || c.status === "suspended";
-      return `
+      const wrap = document.getElementById("clientCards");
+      const paginationBar = document.getElementById("clientsPaginationBar");
+
+      if (allClients.length === 0) {
+        paginationBar.style.display = "none";
+        wrap.innerHTML = `<p class="empty">No clients yet. Use “+ Add Client” or “Invite Client” to get started.</p>`;
+        return;
+      }
+      if (filtered.length === 0) {
+        paginationBar.style.display = "none";
+        wrap.innerHTML = `<p class="empty">No clients match your filter criteria.</p>`;
+        return;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(filtered.length / clientsPageSize));
+      clientsPage = Math.min(Math.max(1, clientsPage), totalPages);
+      const pageItems = filtered.slice((clientsPage - 1) * clientsPageSize, clientsPage * clientsPageSize);
+
+      wrap.innerHTML = pageItems.map((c) => {
+        const canOpen = c.status === "active" || c.status === "suspended";
+        return `
       <div class="client-card" id="clientCard-${c.id}">
         <div class="client-card-main">
           <div class="client-card-top">
@@ -409,71 +597,98 @@
           </div>
         </div>
         <div class="client-card-actions">
-          <button class="btn" type="button" data-enter="${c.id}"${canOpen ? "" : " disabled title=\"Available once the client accepts\""}>
-            Work on Client (Open LMS)
+          <button class="icon-btn primary has-tooltip" type="button" data-enter="${c.id}" data-tooltip="Work On Client (Open LMS)" aria-label="Work On Client (Open LMS)" title="Work On Client (Open LMS)"${canOpen ? "" : " disabled"}>
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M12.5 3.5H16.5V7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M8.5 11.5L16.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              <path d="M14.5 10.5V15.5C14.5 16.0523 14.0523 16.5 13.5 16.5H4.5C3.94772 16.5 3.5 16.0523 3.5 15.5V6.5C3.5 5.94772 3.94772 5.5 4.5 5.5H9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
           </button>
-          ${isOwner ? `<button class="btn secondary sm" type="button" data-assign="${c.id}" data-name="${App.escapeHtml(c.name)}">Assign Team</button>` : ""}
-          ${isOwner ? `<button class="btn secondary sm" type="button" data-edit="${c.id}" data-name="${App.escapeHtml(c.name)}" data-status="${c.status}">Edit</button>` : ""}
-          <button class="btn secondary sm" type="button" data-open="${c.id}">Details</button>
-          ${isOwner ? `<button class="btn danger sm" type="button" data-remove="${c.id}" data-name="${App.escapeHtml(c.name)}">Remove</button>` : ""}
+          ${isOwner ? `
+          <button class="icon-btn has-tooltip" type="button" data-assign="${c.id}" data-name="${App.escapeHtml(c.name)}" data-tooltip="Assign Team" aria-label="Assign Team" title="Assign Team">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M14 17C14 14.8 12 13 9.5 13C7 13 5 14.8 5 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <circle cx="9.5" cy="7.5" r="3" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M15.5 7.5V11.5M13.5 9.5H17.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>` : ""}
+          ${isOwner ? `
+          <button class="icon-btn has-tooltip" type="button" data-edit="${c.id}" data-name="${App.escapeHtml(c.name)}" data-status="${c.status}" data-tooltip="Edit" aria-label="Edit" title="Edit">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M13.8 3.2a2.12 2.12 0 0 1 3 3L6.2 16.8l-4.2 1 1-4.2L13.8 3.2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M12.5 4.5l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>` : ""}
+          <button class="icon-btn has-tooltip" type="button" data-open="${c.id}" data-tooltip="Details" aria-label="Details" title="Details">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="2.8" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M2.5 10C4 6 6.8 3.5 10 3.5C13.2 3.5 16 6 17.5 10C16 14 13.2 16.5 10 16.5C6.8 16.5 4 14 2.5 10Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          ${isOwner ? `
+          <button class="icon-btn danger has-tooltip" type="button" data-remove="${c.id}" data-name="${App.escapeHtml(c.name)}" data-tooltip="Remove" aria-label="Remove" title="Remove">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M4.5 5.5H15.5M7.5 5.5V3.5C7.5 2.95 7.95 2.5 8.5 2.5H11.5C12.05 2.5 12.5 2.95 12.5 3.5V5.5M14.5 5.5V16C14.5 16.55 14.05 17 13.5 17H6.5C5.95 17 5.5 16.55 5.5 16V5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M8.5 9V13.5M11.5 9V13.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+          </button>` : ""}
         </div>
       </div>`;
-    }).join("");
+      }).join("");
 
-    // Wire "Open LMS" / "Work on Client"
-    wrap.querySelectorAll("[data-enter]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        document.getElementById("banner").innerHTML = "";
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Opening…";
-        try {
-          await App.enterClient(btn.dataset.enter);
-        } catch (err) {
-          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's LMS.")}</div>`;
-          btn.disabled = false;
-          btn.textContent = original;
-        }
+      // Wire "Open LMS" / "Work on Client"
+      wrap.querySelectorAll("[data-enter]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          document.getElementById("banner").innerHTML = "";
+          btn.disabled = true;
+          btn.setAttribute("data-tooltip", "Opening…");
+          try {
+            await App.enterClient(btn.dataset.enter);
+          } catch (err) {
+            document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's LMS.")}</div>`;
+            btn.disabled = false;
+            btn.setAttribute("data-tooltip", "Work On Client (Open LMS)");
+          }
+        });
       });
-    });
 
-    // Wire "Assign Team"
-    wrap.querySelectorAll("[data-assign]").forEach((btn) => {
-      btn.addEventListener("click", () => openAssignModal(btn.dataset.assign, btn.dataset.name));
-    });
-
-    // Wire "Edit"
-    wrap.querySelectorAll("[data-edit]").forEach((btn) => {
-      btn.addEventListener("click", () => openEditModal(btn.dataset.edit, btn.dataset.name, btn.dataset.status));
-    });
-
-    // Wire "Details"
-    wrap.querySelectorAll("[data-open]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        window.location.href = `/client-detail.html?id=${encodeURIComponent(btn.dataset.open)}`;
+      // Wire "Assign Team"
+      wrap.querySelectorAll("[data-assign]").forEach((btn) => {
+        btn.addEventListener("click", () => openAssignModal(btn.dataset.assign, btn.dataset.name));
       });
-    });
 
-    // Wire "Remove"
-    wrap.querySelectorAll("[data-remove]").forEach((btn) => {
-      btn.addEventListener("click", () => openRemoveModal(btn.dataset.remove, btn.dataset.name));
-    });
+      // Wire "Edit"
+      wrap.querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.addEventListener("click", () => openEditModal(btn.dataset.edit, btn.dataset.name, btn.dataset.status));
+      });
 
-    App.renderPagination(paginationBar, { page: clientsPage, pageSize: clientsPageSize, total: filtered.length, totalPages }, {
-      onPageChange: (p) => { clientsPage = p; renderClients(); },
-      onPageSizeChange: (s) => { clientsPageSize = s; clientsPage = 1; renderClients(); },
-    });
-  }
+      // Wire "Details"
+      wrap.querySelectorAll("[data-open]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          window.location.href = `/client-detail.html?id=${encodeURIComponent(btn.dataset.open)}`;
+        });
+      });
 
-  function renderEmployeeCheckboxes(container, selectedIds = []) {
-    if (!agencyEmployees.length) {
-      container.innerHTML = `<p class="hint" style="padding:8px">No active agency employees found.</p>`;
-      return;
+      // Wire "Remove"
+      wrap.querySelectorAll("[data-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => openRemoveModal(btn.dataset.remove, btn.dataset.name));
+      });
+
+      App.renderPagination(paginationBar, { page: clientsPage, pageSize: clientsPageSize, total: filtered.length, totalPages }, {
+        onPageChange: (p) => { clientsPage = p; renderClients(); },
+        onPageSizeChange: (s) => { clientsPageSize = s; clientsPage = 1; renderClients(); },
+      });
     }
-    const set = new Set(selectedIds);
-    container.innerHTML = agencyEmployees.map((u) => {
-      const isChecked = set.has(u.id);
-      return `
+
+    function renderEmployeeCheckboxes(container, selectedIds = []) {
+      if (!agencyEmployees.length) {
+        container.innerHTML = `<p class="hint" style="padding:8px">No active agency employees found.</p>`;
+        return;
+      }
+      const set = new Set(selectedIds);
+      container.innerHTML = agencyEmployees.map((u) => {
+        const isChecked = set.has(u.id);
+        return `
         <label class="employee-select-row${isChecked ? " selected" : ""}">
           <div class="employee-select-left">
             <input type="checkbox" value="${App.escapeHtml(u.id)}"${isChecked ? " checked" : ""} />
@@ -484,198 +699,198 @@
           </div>
           <span class="employee-select-role">${App.escapeHtml(u.roleName || "Employee")}</span>
         </label>`;
-    }).join("");
+      }).join("");
 
-    container.querySelectorAll(".employee-select-row input").forEach((chk) => {
-      chk.addEventListener("change", (e) => {
-        chk.closest(".employee-select-row").classList.toggle("selected", chk.checked);
+      container.querySelectorAll(".employee-select-row input").forEach((chk) => {
+        chk.addEventListener("change", (e) => {
+          chk.closest(".employee-select-row").classList.toggle("selected", chk.checked);
+        });
       });
-    });
-  }
-
-  // ---- Assign Employees Modal ----------------------------------------------
-  const assignModal = document.getElementById("assignModalOverlay");
-  const assignError = document.getElementById("assignModalError");
-  const assignSaveBtn = document.getElementById("assignModalSave");
-
-  async function openAssignModal(clientId, clientName) {
-    activeAssignClientId = clientId;
-    assignError.innerHTML = "";
-    document.getElementById("assignModalSub").textContent = `Select team members to work on "${clientName}".`;
-    document.getElementById("assignEnterContext").checked = false;
-    assignModal.style.display = "flex";
-
-    const list = document.getElementById("assignEmployeeList");
-    list.innerHTML = `<p class="hint" style="padding:8px">Loading current assignments…</p>`;
-
-    try {
-      if (!agencyEmployees.length) await loadAgencyEmployees();
-      const res = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/assignments`);
-      renderEmployeeCheckboxes(list, res.assignedUserIds || []);
-    } catch (err) {
-      renderEmployeeCheckboxes(list, []);
     }
-  }
-  function closeAssignModal() { assignModal.style.display = "none"; activeAssignClientId = null; }
 
-  document.getElementById("assignModalClose").addEventListener("click", closeAssignModal);
-  document.getElementById("assignModalCancel").addEventListener("click", closeAssignModal);
-  assignModal.addEventListener("click", (e) => { if (e.target === assignModal) closeAssignModal(); });
+    // ---- Assign Employees Modal ----------------------------------------------
+    const assignModal = document.getElementById("assignModalOverlay");
+    const assignError = document.getElementById("assignModalError");
+    const assignSaveBtn = document.getElementById("assignModalSave");
 
-  document.getElementById("assignSelectAllBtn").addEventListener("click", () => {
-    document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
-      chk.checked = true;
-      chk.closest(".employee-select-row")?.classList.add("selected");
-    });
-  });
-  document.getElementById("assignDeselectAllBtn").addEventListener("click", () => {
-    document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
-      chk.checked = false;
-      chk.closest(".employee-select-row")?.classList.remove("selected");
-    });
-  });
+    async function openAssignModal(clientId, clientName) {
+      activeAssignClientId = clientId;
+      assignError.innerHTML = "";
+      document.getElementById("assignModalSub").textContent = `Select team members to work on "${clientName}".`;
+      document.getElementById("assignEnterContext").checked = false;
+      assignModal.style.display = "flex";
 
-  assignSaveBtn.addEventListener("click", async () => {
-    if (!activeAssignClientId) return;
-    assignError.innerHTML = "";
-    const selected = Array.from(document.querySelectorAll("#assignEmployeeList input[type='checkbox']:checked")).map((chk) => chk.value);
-    const shouldEnter = document.getElementById("assignEnterContext").checked;
+      const list = document.getElementById("assignEmployeeList");
+      list.innerHTML = `<p class="hint" style="padding:8px">Loading current assignments…</p>`;
 
-    assignSaveBtn.disabled = true;
-    assignSaveBtn.textContent = "Saving…";
-    try {
-      await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeAssignClientId)}/assignments`, {
-        method: "POST",
-        body: { userIds: selected },
-      });
-      const targetId = activeAssignClientId;
-      closeAssignModal();
-      document.getElementById("banner").innerHTML = `<div class="banner success">Assigned ${selected.length} employee${selected.length === 1 ? "" : "s"} to start work.</div>`;
-
-      if (shouldEnter) {
-        await App.enterClient(targetId);
-      } else {
-        await load();
+      try {
+        if (!agencyEmployees.length) await loadAgencyEmployees();
+        const res = await App.apiJson(`/api/agency/clients/${encodeURIComponent(clientId)}/assignments`);
+        renderEmployeeCheckboxes(list, res.assignedUserIds || []);
+      } catch (err) {
+        renderEmployeeCheckboxes(list, []);
       }
-    } catch (err) {
-      assignError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      assignSaveBtn.disabled = false;
-      assignSaveBtn.textContent = "Save Assignments";
     }
-  });
+    function closeAssignModal() { assignModal.style.display = "none"; activeAssignClientId = null; }
 
-  // ---- Edit Client Modal ---------------------------------------------------
-  const editModal = document.getElementById("editClientModalOverlay");
-  const editError = document.getElementById("editClientError");
-  const editSaveBtn = document.getElementById("editClientSave");
+    document.getElementById("assignModalClose").addEventListener("click", closeAssignModal);
+    document.getElementById("assignModalCancel").addEventListener("click", closeAssignModal);
+    assignModal.addEventListener("click", (e) => { if (e.target === assignModal) closeAssignModal(); });
 
-  function openEditModal(clientId, clientName, clientStatus) {
-    activeEditClientId = clientId;
-    editError.innerHTML = "";
-    document.getElementById("ec_companyName").value = clientName;
-    document.getElementById("ec_status").value = clientStatus === "suspended" ? "suspended" : "active";
-    editModal.style.display = "flex";
-    document.getElementById("ec_companyName").focus();
-  }
-  function closeEditModal() { editModal.style.display = "none"; activeEditClientId = null; }
-
-  document.getElementById("editClientModalClose").addEventListener("click", closeEditModal);
-  document.getElementById("editClientCancel").addEventListener("click", closeEditModal);
-  editModal.addEventListener("click", (e) => { if (e.target === editModal) closeEditModal(); });
-
-  editSaveBtn.addEventListener("click", async () => {
-    if (!activeEditClientId) return;
-    editError.innerHTML = "";
-    const companyName = document.getElementById("ec_companyName").value.trim();
-    const status = document.getElementById("ec_status").value;
-    if (!companyName) {
-      editError.innerHTML = `<div class="banner error">Company name is required.</div>`;
-      return;
-    }
-    editSaveBtn.disabled = true;
-    editSaveBtn.textContent = "Saving…";
-    try {
-      await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeEditClientId)}/update`, {
-        method: "POST",
-        body: { companyName, status },
+    document.getElementById("assignSelectAllBtn").addEventListener("click", () => {
+      document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
+        chk.checked = true;
+        chk.closest(".employee-select-row")?.classList.add("selected");
       });
-      closeEditModal();
-      document.getElementById("banner").innerHTML = `<div class="banner success">Client updated successfully.</div>`;
-      await load();
-    } catch (err) {
-      editError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      editSaveBtn.disabled = false;
-      editSaveBtn.textContent = "Save Changes";
-    }
-  });
-
-  // ---- Remove Client Modal -------------------------------------------------
-  const removeModal = document.getElementById("removeModalOverlay");
-  const removeError = document.getElementById("removeModalError");
-  const removeConfirmBtn = document.getElementById("removeModalConfirm");
-
-  function openRemoveModal(clientId, clientName) {
-    activeRemoveClientId = clientId;
-    removeError.innerHTML = "";
-    document.getElementById("removeModalText").textContent = `Are you sure you want to remove "${clientName}"? This client will be disconnected from your agency.`;
-    removeModal.style.display = "flex";
-  }
-  function closeRemoveModal() { removeModal.style.display = "none"; activeRemoveClientId = null; }
-
-  document.getElementById("removeModalClose").addEventListener("click", closeRemoveModal);
-  document.getElementById("removeModalCancel").addEventListener("click", closeRemoveModal);
-  removeModal.addEventListener("click", (e) => { if (e.target === removeModal) closeRemoveModal(); });
-
-  removeConfirmBtn.addEventListener("click", async () => {
-    if (!activeRemoveClientId) return;
-    removeError.innerHTML = "";
-    removeConfirmBtn.disabled = true;
-    removeConfirmBtn.textContent = "Removing…";
-    try {
-      await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeRemoveClientId)}/status`, {
-        method: "POST",
-        body: { status: "removed" },
+    });
+    document.getElementById("assignDeselectAllBtn").addEventListener("click", () => {
+      document.querySelectorAll("#assignEmployeeList input[type='checkbox']").forEach((chk) => {
+        chk.checked = false;
+        chk.closest(".employee-select-row")?.classList.remove("selected");
       });
-      closeRemoveModal();
-      document.getElementById("banner").innerHTML = `<div class="banner success">Client removed successfully.</div>`;
-      await load();
-    } catch (err) {
-      removeError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      removeConfirmBtn.disabled = false;
-      removeConfirmBtn.textContent = "Remove Client";
+    });
+
+    assignSaveBtn.addEventListener("click", async () => {
+      if (!activeAssignClientId) return;
+      assignError.innerHTML = "";
+      const selected = Array.from(document.querySelectorAll("#assignEmployeeList input[type='checkbox']:checked")).map((chk) => chk.value);
+      const shouldEnter = document.getElementById("assignEnterContext").checked;
+
+      assignSaveBtn.disabled = true;
+      assignSaveBtn.textContent = "Saving…";
+      try {
+        await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeAssignClientId)}/assignments`, {
+          method: "POST",
+          body: { userIds: selected },
+        });
+        const targetId = activeAssignClientId;
+        closeAssignModal();
+        document.getElementById("banner").innerHTML = `<div class="banner success">Assigned ${selected.length} employee${selected.length === 1 ? "" : "s"} to start work.</div>`;
+
+        if (shouldEnter) {
+          await App.enterClient(targetId);
+        } else {
+          await load();
+        }
+      } catch (err) {
+        assignError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        assignSaveBtn.disabled = false;
+        assignSaveBtn.textContent = "Save Assignments";
+      }
+    });
+
+    // ---- Edit Client Modal ---------------------------------------------------
+    const editModal = document.getElementById("editClientModalOverlay");
+    const editError = document.getElementById("editClientError");
+    const editSaveBtn = document.getElementById("editClientSave");
+
+    function openEditModal(clientId, clientName, clientStatus) {
+      activeEditClientId = clientId;
+      editError.innerHTML = "";
+      document.getElementById("ec_companyName").value = clientName;
+      document.getElementById("ec_status").value = clientStatus === "suspended" ? "suspended" : "active";
+      editModal.style.display = "flex";
+      document.getElementById("ec_companyName").focus();
     }
-  });
+    function closeEditModal() { editModal.style.display = "none"; activeEditClientId = null; }
 
-  // ---- Status Filter buttons ----------------------------------------------
-  document.getElementById("statusFilterToggle").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-status]");
-    if (!btn || btn.dataset.status === statusFilter) return;
-    statusFilter = btn.dataset.status;
-    document.querySelectorAll("#statusFilterToggle button").forEach((b) => b.classList.toggle("active", b.dataset.status === statusFilter));
-    clientsPage = 1;
-    renderClients();
-  });
+    document.getElementById("editClientModalClose").addEventListener("click", closeEditModal);
+    document.getElementById("editClientCancel").addEventListener("click", closeEditModal);
+    editModal.addEventListener("click", (e) => { if (e.target === editModal) closeEditModal(); });
 
-  document.getElementById("searchInput").addEventListener("input", () => { clientsPage = 1; renderClients(); });
+    editSaveBtn.addEventListener("click", async () => {
+      if (!activeEditClientId) return;
+      editError.innerHTML = "";
+      const companyName = document.getElementById("ec_companyName").value.trim();
+      const status = document.getElementById("ec_status").value;
+      if (!companyName) {
+        editError.innerHTML = `<div class="banner error">Company name is required.</div>`;
+        return;
+      }
+      editSaveBtn.disabled = true;
+      editSaveBtn.textContent = "Saving…";
+      try {
+        await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeEditClientId)}/update`, {
+          method: "POST",
+          body: { companyName, status },
+        });
+        closeEditModal();
+        document.getElementById("banner").innerHTML = `<div class="banner success">Client updated successfully.</div>`;
+        await load();
+      } catch (err) {
+        editError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        editSaveBtn.disabled = false;
+        editSaveBtn.textContent = "Save Changes";
+      }
+    });
 
-  // ---- Onboarding Links rendering -----------------------------------------
-  function onboardingStatusPillClass(status) {
-    if (status === "ACCEPTED") return "active";
-    if (status === "PENDING") return "pending";
-    return "paused";
-  }
-  function onboardingStatusLabel(status) {
-    return status.charAt(0) + status.slice(1).toLowerCase();
-  }
+    // ---- Remove Client Modal -------------------------------------------------
+    const removeModal = document.getElementById("removeModalOverlay");
+    const removeError = document.getElementById("removeModalError");
+    const removeConfirmBtn = document.getElementById("removeModalConfirm");
 
-  function renderOnboardingLinks(links) {
-    const section = document.getElementById("onboardingLinksSection");
-    if (!links.length) { section.style.display = "none"; return; }
-    section.style.display = "";
-    document.getElementById("onboardingLinksBody").innerHTML = links.map((l) => `
+    function openRemoveModal(clientId, clientName) {
+      activeRemoveClientId = clientId;
+      removeError.innerHTML = "";
+      document.getElementById("removeModalText").textContent = `Are you sure you want to remove "${clientName}"? This client will be disconnected from your agency.`;
+      removeModal.style.display = "flex";
+    }
+    function closeRemoveModal() { removeModal.style.display = "none"; activeRemoveClientId = null; }
+
+    document.getElementById("removeModalClose").addEventListener("click", closeRemoveModal);
+    document.getElementById("removeModalCancel").addEventListener("click", closeRemoveModal);
+    removeModal.addEventListener("click", (e) => { if (e.target === removeModal) closeRemoveModal(); });
+
+    removeConfirmBtn.addEventListener("click", async () => {
+      if (!activeRemoveClientId) return;
+      removeError.innerHTML = "";
+      removeConfirmBtn.disabled = true;
+      removeConfirmBtn.textContent = "Removing…";
+      try {
+        await App.apiJson(`/api/agency/clients/${encodeURIComponent(activeRemoveClientId)}/status`, {
+          method: "POST",
+          body: { status: "removed" },
+        });
+        closeRemoveModal();
+        document.getElementById("banner").innerHTML = `<div class="banner success">Client removed successfully.</div>`;
+        await load();
+      } catch (err) {
+        removeError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        removeConfirmBtn.disabled = false;
+        removeConfirmBtn.textContent = "Remove Client";
+      }
+    });
+
+    // ---- Status Filter buttons ----------------------------------------------
+    document.getElementById("statusFilterToggle").addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-status]");
+      if (!btn || btn.dataset.status === statusFilter) return;
+      statusFilter = btn.dataset.status;
+      document.querySelectorAll("#statusFilterToggle button").forEach((b) => b.classList.toggle("active", b.dataset.status === statusFilter));
+      clientsPage = 1;
+      renderClients();
+    });
+
+    document.getElementById("searchInput").addEventListener("input", () => { clientsPage = 1; renderClients(); });
+
+    // ---- Onboarding Links rendering -----------------------------------------
+    function onboardingStatusPillClass(status) {
+      if (status === "ACCEPTED") return "active";
+      if (status === "PENDING") return "pending";
+      return "paused";
+    }
+    function onboardingStatusLabel(status) {
+      return status.charAt(0) + status.slice(1).toLowerCase();
+    }
+
+    function renderOnboardingLinks(links) {
+      const section = document.getElementById("onboardingLinksSection");
+      if (!links.length) { section.style.display = "none"; return; }
+      section.style.display = "";
+      document.getElementById("onboardingLinksBody").innerHTML = links.map((l) => `
       <tr>
         <td>${App.escapeHtml(l.clientName)}</td>
         <td>${App.escapeHtml(l.contactEmail)}</td>
@@ -684,270 +899,271 @@
         <td>${l.status === "PENDING" ? `<button class="btn secondary sm" type="button" data-revoke="${l.id}">Revoke</button>` : ""}</td>
       </tr>`).join("");
 
-    document.getElementById("onboardingLinksBody").querySelectorAll("[data-revoke]").forEach((btn) => {
-      btn.addEventListener("click", () => openRevokeLinkModal(btn.dataset.revoke));
+      document.getElementById("onboardingLinksBody").querySelectorAll("[data-revoke]").forEach((btn) => {
+        btn.addEventListener("click", () => openRevokeLinkModal(btn.dataset.revoke));
+      });
+    }
+
+    async function loadOnboardingLinks() {
+      try {
+        const { links } = await App.apiJson("/api/agency/onboarding-links");
+        renderOnboardingLinks(links || []);
+      } catch { }
+    }
+
+    // ---- Load all data -------------------------------------------------------
+    async function load() {
+      document.getElementById("banner").innerHTML = "";
+      me = await App.requireAuth();
+      if (!me) return;
+
+      document.getElementById("topnav").style.display = "flex";
+      App.renderNav(me, "/clients.html");
+
+      const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
+      document.getElementById("headActions").style.display = isOwner ? "flex" : "none";
+
+      if (isOwner) await loadAgencyEmployees();
+
+      try {
+        const summary = await App.apiJson("/api/agency/dashboard");
+        allClients = [...summary.clients].sort((a, b) => a.name.localeCompare(b.name));
+        renderClients();
+      } catch (err) {
+        document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+        document.getElementById("clientCards").innerHTML = "";
+      }
+
+      if (isOwner) {
+        await loadOnboardingLinks();
+      } else {
+        document.getElementById("onboardingLinksSection").style.display = "none";
+      }
+
+      if (new URLSearchParams(window.location.search).get("tab") === "invitations" && isOwner) {
+        openGenerateLinkModal();
+      }
+    }
+
+    // ---- Add Client modal wiring ---------------------------------------------
+    const addModal = document.getElementById("addClientModalOverlay");
+    const addForm = document.getElementById("addClientForm");
+    const addError = document.getElementById("addClientError");
+    const addSaveBtn = document.getElementById("addClientSave");
+
+    async function openAddClientModal() {
+      addForm.reset();
+      addError.innerHTML = "";
+      addModal.style.display = "flex";
+      document.getElementById("ac_companyName").focus();
+      if (!agencyEmployees.length) await loadAgencyEmployees();
+      renderEmployeeCheckboxes(document.getElementById("addClientEmployeeList"), []);
+    }
+    function closeAddClientModal() { addModal.style.display = "none"; }
+
+    document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
+    document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
+    document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
+    addModal.addEventListener("click", (e) => { if (e.target === addModal) closeAddClientModal(); });
+
+    addSaveBtn.addEventListener("click", async () => {
+      addError.innerHTML = "";
+      const companyName = document.getElementById("ac_companyName").value.trim();
+      const ownerName = document.getElementById("ac_ownerName").value.trim();
+      const ownerEmail = document.getElementById("ac_ownerEmail").value.trim();
+      const assignedUserIds = Array.from(document.querySelectorAll("#addClientEmployeeList input[type='checkbox']:checked")).map((c) => c.value);
+
+      if (!companyName || !ownerName || !ownerEmail) {
+        addError.innerHTML = `<div class="banner error">Client name, owner name, and owner email are all required.</div>`;
+        return;
+      }
+
+      addSaveBtn.disabled = true;
+      addSaveBtn.textContent = "Adding…";
+      try {
+        const result = await App.apiJson("/api/agency/clients", {
+          method: "POST",
+          body: { companyName, ownerName, ownerEmail, assignedUserIds },
+        });
+        closeAddClientModal();
+        showCredentialModal(result);
+        await load();
+      } catch (err) {
+        if (err.status === 402) {
+          window.location.href = "/subscription.html";
+          return;
+        }
+        addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        addSaveBtn.disabled = false;
+        addSaveBtn.textContent = "Add Client & Assign";
+      }
     });
-  }
 
-  async function loadOnboardingLinks() {
-    try {
-      const { links } = await App.apiJson("/api/agency/onboarding-links");
-      renderOnboardingLinks(links || []);
-    } catch {}
-  }
-
-  // ---- Load all data -------------------------------------------------------
-  async function load() {
-    document.getElementById("banner").innerHTML = "";
-    me = await App.requireAuth();
-    if (!me) return;
-
-    document.getElementById("topnav").style.display = "flex";
-    App.renderNav(me, "/clients.html");
-
-    const isOwner = Boolean(App.hasPermission(me, "company.manage") || me?.role?.name === "AGENCY_OWNER" || me?.role?.name === "Owner");
-    document.getElementById("headActions").style.display = isOwner ? "flex" : "none";
-
-    if (isOwner) await loadAgencyEmployees();
-
-    try {
-      const summary = await App.apiJson("/api/agency/dashboard");
-      allClients = [...summary.clients].sort((a, b) => a.name.localeCompare(b.name));
-      renderClients();
-    } catch (err) {
-      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-      document.getElementById("clientCards").innerHTML = "";
+    const credentialModal = document.getElementById("credentialModalOverlay");
+    function showCredentialModal(result) {
+      document.getElementById("credentialSub").textContent = `${result.company.name} is ready.`;
+      document.getElementById("credentialEmail").textContent = result.owner.email;
+      document.getElementById("credentialPassword").textContent = result.temporaryPassword;
+      credentialModal.style.display = "flex";
     }
+    function closeCredentialModal() { credentialModal.style.display = "none"; }
+    document.getElementById("credentialModalClose").addEventListener("click", closeCredentialModal);
+    document.getElementById("credentialDone").addEventListener("click", closeCredentialModal);
+    credentialModal.addEventListener("click", (e) => { if (e.target === credentialModal) closeCredentialModal(); });
 
-    if (isOwner) {
-      await loadOnboardingLinks();
-    } else {
-      document.getElementById("onboardingLinksSection").style.display = "none";
+    // ---- Invite Client modal wiring ------------------------------------------
+    const inviteModal = document.getElementById("inviteClientModalOverlay");
+    const inviteForm = document.getElementById("inviteClientForm");
+    const inviteError = document.getElementById("inviteClientError");
+    const inviteSuccess = document.getElementById("inviteClientSuccess");
+    const inviteSendBtn = document.getElementById("inviteClientSend");
+
+    function openInviteClientModal() {
+      inviteForm.reset();
+      inviteError.innerHTML = "";
+      inviteSuccess.innerHTML = "";
+      inviteForm.style.display = "";
+      inviteSendBtn.style.display = "";
+      inviteModal.style.display = "flex";
+      document.getElementById("ic_ownerEmail").focus();
     }
+    function closeInviteClientModal() { inviteModal.style.display = "none"; }
 
-    if (new URLSearchParams(window.location.search).get("tab") === "invitations" && isOwner) {
-      openGenerateLinkModal();
-    }
-  }
+    document.getElementById("inviteClientBtn").addEventListener("click", openInviteClientModal);
+    document.getElementById("inviteClientModalClose").addEventListener("click", closeInviteClientModal);
+    document.getElementById("inviteClientCancel").addEventListener("click", closeInviteClientModal);
+    inviteModal.addEventListener("click", (e) => { if (e.target === inviteModal) closeInviteClientModal(); });
 
-  // ---- Add Client modal wiring ---------------------------------------------
-  const addModal = document.getElementById("addClientModalOverlay");
-  const addForm = document.getElementById("addClientForm");
-  const addError = document.getElementById("addClientError");
-  const addSaveBtn = document.getElementById("addClientSave");
-
-  async function openAddClientModal() {
-    addForm.reset();
-    addError.innerHTML = "";
-    addModal.style.display = "flex";
-    document.getElementById("ac_companyName").focus();
-    if (!agencyEmployees.length) await loadAgencyEmployees();
-    renderEmployeeCheckboxes(document.getElementById("addClientEmployeeList"), []);
-  }
-  function closeAddClientModal() { addModal.style.display = "none"; }
-
-  document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
-  document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
-  document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
-  addModal.addEventListener("click", (e) => { if (e.target === addModal) closeAddClientModal(); });
-
-  addSaveBtn.addEventListener("click", async () => {
-    addError.innerHTML = "";
-    const companyName = document.getElementById("ac_companyName").value.trim();
-    const ownerName = document.getElementById("ac_ownerName").value.trim();
-    const ownerEmail = document.getElementById("ac_ownerEmail").value.trim();
-    const assignedUserIds = Array.from(document.querySelectorAll("#addClientEmployeeList input[type='checkbox']:checked")).map((c) => c.value);
-
-    if (!companyName || !ownerName || !ownerEmail) {
-      addError.innerHTML = `<div class="banner error">Client name, owner name, and owner email are all required.</div>`;
-      return;
-    }
-
-    addSaveBtn.disabled = true;
-    addSaveBtn.textContent = "Adding…";
-    try {
-      const result = await App.apiJson("/api/agency/clients", {
-        method: "POST",
-        body: { companyName, ownerName, ownerEmail, assignedUserIds },
-      });
-      closeAddClientModal();
-      showCredentialModal(result);
-      await load();
-    } catch (err) {
-      if (err.status === 402) {
-        window.location.href = "/subscription.html";
+    inviteSendBtn.addEventListener("click", async () => {
+      inviteError.innerHTML = "";
+      const ownerEmail = document.getElementById("ic_ownerEmail").value.trim();
+      if (!ownerEmail) {
+        inviteError.innerHTML = `<div class="banner error">An email address is required.</div>`;
         return;
       }
-      addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      addSaveBtn.disabled = false;
-      addSaveBtn.textContent = "Add Client & Assign";
+      inviteSendBtn.disabled = true;
+      inviteSendBtn.textContent = "Sending…";
+      try {
+        const result = await App.apiJson("/api/agency/clients/invite", {
+          method: "POST",
+          body: { ownerEmail },
+        });
+        inviteForm.style.display = "none";
+        inviteSendBtn.style.display = "none";
+        inviteSuccess.innerHTML = `<div class="banner success">Invitation sent to ${App.escapeHtml(result.ownerEmail)}. ${App.escapeHtml(result.company.name)} will show up here once they accept.</div>`;
+        await load();
+      } catch (err) {
+        if (err.status === 402) {
+          window.location.href = "/subscription.html";
+          return;
+        }
+        inviteError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        inviteSendBtn.disabled = false;
+        inviteSendBtn.textContent = "Send Invitation";
+      }
+    });
+
+    // ---- Generate Onboarding Link modal wiring -------------------------------
+    const generateLinkModal = document.getElementById("generateLinkModalOverlay");
+    const generateLinkForm = document.getElementById("generateLinkForm");
+    const generateLinkError = document.getElementById("generateLinkError");
+    const generateLinkResult = document.getElementById("generateLinkResult");
+    const generateLinkSubmitBtn = document.getElementById("generateLinkSubmit");
+    const generateLinkCopyBtn = document.getElementById("generateLinkCopy");
+
+    function openGenerateLinkModal() {
+      generateLinkForm.reset();
+      generateLinkError.innerHTML = "";
+      generateLinkForm.style.display = "";
+      generateLinkResult.style.display = "none";
+      generateLinkSubmitBtn.style.display = "";
+      generateLinkCopyBtn.style.display = "none";
+      generateLinkModal.style.display = "flex";
+      document.getElementById("gl_clientName").focus();
     }
-  });
+    function closeGenerateLinkModal() { generateLinkModal.style.display = "none"; }
 
-  const credentialModal = document.getElementById("credentialModalOverlay");
-  function showCredentialModal(result) {
-    document.getElementById("credentialSub").textContent = `${result.company.name} is ready.`;
-    document.getElementById("credentialEmail").textContent = result.owner.email;
-    document.getElementById("credentialPassword").textContent = result.temporaryPassword;
-    credentialModal.style.display = "flex";
-  }
-  function closeCredentialModal() { credentialModal.style.display = "none"; }
-  document.getElementById("credentialModalClose").addEventListener("click", closeCredentialModal);
-  document.getElementById("credentialDone").addEventListener("click", closeCredentialModal);
-  credentialModal.addEventListener("click", (e) => { if (e.target === credentialModal) closeCredentialModal(); });
+    document.getElementById("generateLinkBtn").addEventListener("click", openGenerateLinkModal);
+    document.getElementById("generateLinkModalClose").addEventListener("click", closeGenerateLinkModal);
+    document.getElementById("generateLinkCancel").addEventListener("click", closeGenerateLinkModal);
+    generateLinkModal.addEventListener("click", (e) => { if (e.target === generateLinkModal) closeGenerateLinkModal(); });
 
-  // ---- Invite Client modal wiring ------------------------------------------
-  const inviteModal = document.getElementById("inviteClientModalOverlay");
-  const inviteForm = document.getElementById("inviteClientForm");
-  const inviteError = document.getElementById("inviteClientError");
-  const inviteSuccess = document.getElementById("inviteClientSuccess");
-  const inviteSendBtn = document.getElementById("inviteClientSend");
-
-  function openInviteClientModal() {
-    inviteForm.reset();
-    inviteError.innerHTML = "";
-    inviteSuccess.innerHTML = "";
-    inviteForm.style.display = "";
-    inviteSendBtn.style.display = "";
-    inviteModal.style.display = "flex";
-    document.getElementById("ic_ownerEmail").focus();
-  }
-  function closeInviteClientModal() { inviteModal.style.display = "none"; }
-
-  document.getElementById("inviteClientBtn").addEventListener("click", openInviteClientModal);
-  document.getElementById("inviteClientModalClose").addEventListener("click", closeInviteClientModal);
-  document.getElementById("inviteClientCancel").addEventListener("click", closeInviteClientModal);
-  inviteModal.addEventListener("click", (e) => { if (e.target === inviteModal) closeInviteClientModal(); });
-
-  inviteSendBtn.addEventListener("click", async () => {
-    inviteError.innerHTML = "";
-    const ownerEmail = document.getElementById("ic_ownerEmail").value.trim();
-    if (!ownerEmail) {
-      inviteError.innerHTML = `<div class="banner error">An email address is required.</div>`;
-      return;
-    }
-    inviteSendBtn.disabled = true;
-    inviteSendBtn.textContent = "Sending…";
-    try {
-      const result = await App.apiJson("/api/agency/clients/invite", {
-        method: "POST",
-        body: { ownerEmail },
-      });
-      inviteForm.style.display = "none";
-      inviteSendBtn.style.display = "none";
-      inviteSuccess.innerHTML = `<div class="banner success">Invitation sent to ${App.escapeHtml(result.ownerEmail)}. ${App.escapeHtml(result.company.name)} will show up here once they accept.</div>`;
-      await load();
-    } catch (err) {
-      if (err.status === 402) {
-        window.location.href = "/subscription.html";
+    generateLinkSubmitBtn.addEventListener("click", async () => {
+      generateLinkError.innerHTML = "";
+      const clientName = document.getElementById("gl_clientName").value.trim();
+      const contactEmail = document.getElementById("gl_contactEmail").value.trim();
+      if (!clientName || !contactEmail) {
+        generateLinkError.innerHTML = `<div class="banner error">Client name and contact email are both required.</div>`;
         return;
       }
-      inviteError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      inviteSendBtn.disabled = false;
-      inviteSendBtn.textContent = "Send Invitation";
+      generateLinkSubmitBtn.disabled = true;
+      generateLinkSubmitBtn.textContent = "Generating…";
+      try {
+        const result = await App.apiJson("/api/agency/onboarding-links/generate", {
+          method: "POST",
+          body: { clientName, contactEmail },
+        });
+        const url = `${window.location.origin}/onboarding/agency/${encodeURIComponent(result.token)}`;
+        document.getElementById("gl_resultUrl").value = url;
+        document.getElementById("generateLinkExpiry").textContent = `Expires ${new Date(result.expiresAt).toLocaleString()}.`;
+        generateLinkForm.style.display = "none";
+        generateLinkResult.style.display = "";
+        generateLinkSubmitBtn.style.display = "none";
+        generateLinkCopyBtn.style.display = "";
+        await loadOnboardingLinks();
+      } catch (err) {
+        generateLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        generateLinkSubmitBtn.disabled = false;
+        generateLinkSubmitBtn.textContent = "Generate Onboarding Link";
+      }
+    });
+
+    generateLinkCopyBtn.addEventListener("click", async () => {
+      const input = document.getElementById("gl_resultUrl");
+      input.select();
+      try {
+        await navigator.clipboard.writeText(input.value);
+        generateLinkCopyBtn.textContent = "Copied!";
+        setTimeout(() => { generateLinkCopyBtn.textContent = "Copy Link"; }, 1500);
+      } catch { }
+    });
+
+    // ---- Revoke Onboarding Link modal wiring ---------------------------------
+    const revokeLinkModal = document.getElementById("revokeLinkModalOverlay");
+    const revokeLinkError = document.getElementById("revokeLinkError");
+    let revokeLinkTargetId = null;
+
+    function openRevokeLinkModal(tokenId) {
+      revokeLinkTargetId = tokenId;
+      revokeLinkError.innerHTML = "";
+      revokeLinkModal.style.display = "flex";
     }
-  });
+    function closeRevokeLinkModal() { revokeLinkModal.style.display = "none"; revokeLinkTargetId = null; }
 
-  // ---- Generate Onboarding Link modal wiring -------------------------------
-  const generateLinkModal = document.getElementById("generateLinkModalOverlay");
-  const generateLinkForm = document.getElementById("generateLinkForm");
-  const generateLinkError = document.getElementById("generateLinkError");
-  const generateLinkResult = document.getElementById("generateLinkResult");
-  const generateLinkSubmitBtn = document.getElementById("generateLinkSubmit");
-  const generateLinkCopyBtn = document.getElementById("generateLinkCopy");
+    document.getElementById("revokeLinkModalClose").addEventListener("click", closeRevokeLinkModal);
+    document.getElementById("revokeLinkCancel").addEventListener("click", closeRevokeLinkModal);
+    revokeLinkModal.addEventListener("click", (e) => { if (e.target === revokeLinkModal) closeRevokeLinkModal(); });
 
-  function openGenerateLinkModal() {
-    generateLinkForm.reset();
-    generateLinkError.innerHTML = "";
-    generateLinkForm.style.display = "";
-    generateLinkResult.style.display = "none";
-    generateLinkSubmitBtn.style.display = "";
-    generateLinkCopyBtn.style.display = "none";
-    generateLinkModal.style.display = "flex";
-    document.getElementById("gl_clientName").focus();
-  }
-  function closeGenerateLinkModal() { generateLinkModal.style.display = "none"; }
+    document.getElementById("revokeLinkConfirm").addEventListener("click", async () => {
+      if (!revokeLinkTargetId) return;
+      const btn = document.getElementById("revokeLinkConfirm");
+      btn.disabled = true;
+      try {
+        await App.apiJson(`/api/agency/onboarding-links/${encodeURIComponent(revokeLinkTargetId)}/revoke`, { method: "POST" });
+        closeRevokeLinkModal();
+        await loadOnboardingLinks();
+      } catch (err) {
+        revokeLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
 
-  document.getElementById("generateLinkBtn").addEventListener("click", openGenerateLinkModal);
-  document.getElementById("generateLinkModalClose").addEventListener("click", closeGenerateLinkModal);
-  document.getElementById("generateLinkCancel").addEventListener("click", closeGenerateLinkModal);
-  generateLinkModal.addEventListener("click", (e) => { if (e.target === generateLinkModal) closeGenerateLinkModal(); });
-
-  generateLinkSubmitBtn.addEventListener("click", async () => {
-    generateLinkError.innerHTML = "";
-    const clientName = document.getElementById("gl_clientName").value.trim();
-    const contactEmail = document.getElementById("gl_contactEmail").value.trim();
-    if (!clientName || !contactEmail) {
-      generateLinkError.innerHTML = `<div class="banner error">Client name and contact email are both required.</div>`;
-      return;
-    }
-    generateLinkSubmitBtn.disabled = true;
-    generateLinkSubmitBtn.textContent = "Generating…";
-    try {
-      const result = await App.apiJson("/api/agency/onboarding-links/generate", {
-        method: "POST",
-        body: { clientName, contactEmail },
-      });
-      const url = `${window.location.origin}/onboarding/agency/${encodeURIComponent(result.token)}`;
-      document.getElementById("gl_resultUrl").value = url;
-      document.getElementById("generateLinkExpiry").textContent = `Expires ${new Date(result.expiresAt).toLocaleString()}.`;
-      generateLinkForm.style.display = "none";
-      generateLinkResult.style.display = "";
-      generateLinkSubmitBtn.style.display = "none";
-      generateLinkCopyBtn.style.display = "";
-      await loadOnboardingLinks();
-    } catch (err) {
-      generateLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      generateLinkSubmitBtn.disabled = false;
-      generateLinkSubmitBtn.textContent = "Generate Onboarding Link";
-    }
-  });
-
-  generateLinkCopyBtn.addEventListener("click", async () => {
-    const input = document.getElementById("gl_resultUrl");
-    input.select();
-    try {
-      await navigator.clipboard.writeText(input.value);
-      generateLinkCopyBtn.textContent = "Copied!";
-      setTimeout(() => { generateLinkCopyBtn.textContent = "Copy Link"; }, 1500);
-    } catch {}
-  });
-
-  // ---- Revoke Onboarding Link modal wiring ---------------------------------
-  const revokeLinkModal = document.getElementById("revokeLinkModalOverlay");
-  const revokeLinkError = document.getElementById("revokeLinkError");
-  let revokeLinkTargetId = null;
-
-  function openRevokeLinkModal(tokenId) {
-    revokeLinkTargetId = tokenId;
-    revokeLinkError.innerHTML = "";
-    revokeLinkModal.style.display = "flex";
-  }
-  function closeRevokeLinkModal() { revokeLinkModal.style.display = "none"; revokeLinkTargetId = null; }
-
-  document.getElementById("revokeLinkModalClose").addEventListener("click", closeRevokeLinkModal);
-  document.getElementById("revokeLinkCancel").addEventListener("click", closeRevokeLinkModal);
-  revokeLinkModal.addEventListener("click", (e) => { if (e.target === revokeLinkModal) closeRevokeLinkModal(); });
-
-  document.getElementById("revokeLinkConfirm").addEventListener("click", async () => {
-    if (!revokeLinkTargetId) return;
-    const btn = document.getElementById("revokeLinkConfirm");
-    btn.disabled = true;
-    try {
-      await App.apiJson(`/api/agency/onboarding-links/${encodeURIComponent(revokeLinkTargetId)}/revoke`, { method: "POST" });
-      closeRevokeLinkModal();
-      await loadOnboardingLinks();
-    } catch (err) {
-      revokeLinkError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  load();
-</script>
+    load();
+  </script>
 </body>
+
 </html>

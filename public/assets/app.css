@@ -328,6 +328,65 @@ button.btn.danger:hover, a.btn.danger:hover{ background:#9A3333; }
 button.btn.full, a.btn.full{ width:100%; justify-content:center; margin-top:18px; }
 button.btn.sm, a.btn.sm{ padding:6px 11px; font-size:12.5px; }
 
+/* =============================================================================
+   Icon Buttons & Tooltips
+============================================================================= */
+button.icon-btn, a.icon-btn{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:36px; height:36px; padding:0;
+  border-radius:var(--radius-sm); border:1px solid var(--border);
+  background:var(--surface); color:var(--text-secondary);
+  cursor:pointer; transition:all .15s ease; position:relative; flex-shrink:0;
+  text-decoration:none;
+}
+button.icon-btn:hover, a.icon-btn:hover{
+  background:var(--surface-sunken); color:var(--text-primary);
+  border-color:var(--border-strong);
+  text-decoration:none;
+}
+button.icon-btn:active, a.icon-btn:active{ background:var(--surface-sunken); }
+button.icon-btn:disabled, a.icon-btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+button.icon-btn.primary, a.icon-btn.primary{
+  background:var(--brand-primary); color:#fff; border-color:var(--brand-primary);
+}
+button.icon-btn.primary:hover, a.icon-btn.primary:hover{
+  background:var(--brand-primary-hover); border-color:var(--brand-primary-hover); color:#fff;
+}
+button.icon-btn.danger, a.icon-btn.danger{
+  color:var(--text-muted); border-color:var(--border);
+}
+button.icon-btn.danger:hover, a.icon-btn.danger:hover{
+  background:var(--danger-soft); color:var(--danger); border-color:var(--danger);
+}
+button.icon-btn.sm, a.icon-btn.sm{ width:30px; height:30px; }
+
+/* -- Tooltips: sleek hover bubble with arrow -- */
+.has-tooltip{ position:relative; }
+.has-tooltip::after{
+  content:attr(data-tooltip);
+  position:absolute; bottom:calc(100% + 7px); left:50%;
+  transform:translateX(-50%) translateY(4px);
+  background:var(--brand-dark); color:#fff;
+  padding:5px 9px; border-radius:var(--radius-sm);
+  font-size:11.5px; font-weight:600; line-height:1.2;
+  white-space:nowrap; opacity:0; pointer-events:none;
+  transition:opacity .15s ease, transform .15s ease;
+  box-shadow:var(--shadow-sm); z-index:100;
+}
+.has-tooltip::before{
+  content:"";
+  position:absolute; bottom:calc(100% + 2px); left:50%;
+  transform:translateX(-50%) translateY(4px);
+  border:5px solid transparent; border-top-color:var(--brand-dark);
+  opacity:0; pointer-events:none;
+  transition:opacity .15s ease, transform .15s ease;
+  z-index:100;
+}
+.has-tooltip:hover::after, .has-tooltip:hover::before{
+  opacity:1; transform:translateX(-50%) translateY(0);
+}
+
 /* -- Button row — a "Back" (or other secondary) button beside a primary
    full-width action, e.g. register.html step 2. Without this, a bare
    .btn.full sibling fights the secondary button for space (its width:100%
