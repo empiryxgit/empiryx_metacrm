@@ -167,7 +167,8 @@ const App = (() => {
   }
 
   function hasPermission(me, code) {
-    return me?.role?.permissions?.includes(code);
+    if (!code) return true;
+    return Boolean(me?.role?.permissions?.includes(code));
   }
 
   async function logout() {
@@ -416,20 +417,24 @@ const App = (() => {
     const rawClientLabel = me?.clientContext?.name || "Current Client";
     const clientLabel = rawClientLabel.length > 24 ? rawClientLabel.slice(0, 23) + "…" : rawClientLabel;
 
-    const primaryHtml = primaryLinks.map((l) => navLinkHtml(l, activeHref)).join("");
+    const navItems = [];
+    if (primaryLinks.length) {
+      navItems.push(primaryLinks.map((l) => navLinkHtml(l, activeHref)).join(""));
+    }
+    if (admin.length) {
+      navItems.push(admin.map((l) => navLinkHtml(l, activeHref)).join(""));
+    }
+    if (agencyLinks.length) {
+      navItems.push(agencyLinks.map((l) => navLinkHtml(l, activeHref)).join(""));
+    }
+    if (clientLinks.length) {
+      navItems.push(dropdownNavMenuHtml({ id: "clientNav", label: clientLabel, icon: NAV_ICONS.branches, links: clientLinks, activeHref }));
+    }
+    if (settingsLinks.length) {
+      navItems.push(settingsMenuHtml(settingsLinks, activeHref));
+    }
     const sep = `<span class="nav-sep" aria-hidden="true"></span>`;
-    const adminHtml = admin.length ? sep + admin.map((l) => navLinkHtml(l, activeHref)).join("") : "";
-    // Flat links, not a dropdown - matches PRIMARY_LINKS' own treatment for
-    // individual accounts. Only two items now (Dashboard + Clients), so a
-    // dropdown wrapper (and the click-outside/menu-close plumbing that comes
-    // with one) is unnecessary ceremony.
-    const agencyHtml = agencyLinks.length ? sep + agencyLinks.map((l) => navLinkHtml(l, activeHref)).join("") : "";
-    const clientHtml = clientLinks.length
-      ? sep + dropdownNavMenuHtml({ id: "clientNav", label: clientLabel, icon: NAV_ICONS.branches, links: clientLinks, activeHref })
-      : "";
-    const settingsHtml = settingsLinks.length
-      ? `${admin.length || agencyHtml || clientHtml ? "" : sep}` + settingsMenuHtml(settingsLinks, activeHref)
-      : "";
+    const centerHtml = navItems.join(sep);
 
     const displayName = me?.user?.fullName ?? "";
     const roleName = me?.role?.name ?? "";
@@ -457,7 +462,7 @@ const App = (() => {
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M2.5 5h15M2.5 10h15M2.5 15h15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
 
-        <div class="shell-center">${primaryHtml}${adminHtml}${agencyHtml}${clientHtml}${settingsHtml}</div>
+        <div class="shell-center">${centerHtml}</div>
 
         <div class="shell-right">
           <div class="agency-context-switch" id="agencyContextSlot" style="display:none"></div>
@@ -719,23 +724,6 @@ const App = (() => {
     window.location.href = "/agency-dashboard.html";
   }
 
-  function clientOptionsHtml(clients, selectedId) {
-    if (!clients.length) return `<option value="">No clients assigned</option>`;
-    const placeholder = `<option value="">Select a client…</option>`;
-    const opts = clients
-      .map((c) => `<option value="${c.id}"${c.id === selectedId ? " selected" : ""}>${escapeHtml(c.name)}</option>`)
-      .join("");
-    return placeholder + opts;
-  }
-
-  function wireAgencyContextSelect(sel) {
-    if (!sel) return;
-    sel.addEventListener("change", () => {
-      if (!sel.value) return;
-      enterClientContext(sel.value);
-    });
-  }
-
   function renderAgencyContextSwitcher() {
     const info = agencyContextInfo;
     const desktopSlot = document.getElementById("agencyContextSlot");
@@ -748,46 +736,40 @@ const App = (() => {
     }
 
     const inContext = Boolean(info.clientContextId);
-    const optionsHtml = clientOptionsHtml(info.clients, info.clientContextId);
 
     if (desktopSlot) {
-      desktopSlot.style.display = "";
-      desktopSlot.classList.toggle("in-context", inContext);
-      desktopSlot.innerHTML = `
-        <span class="agency-context-badge">${inContext ? "Managing" : escapeHtml(info.agencyName)}</span>
-        <select class="agency-context-select" aria-label="Client">${optionsHtml}</select>
-        <button type="button" class="agency-context-exit"${inContext ? "" : ' style="display:none"'}>Exit</button>
-      `;
-      wireAgencyContextSelect(desktopSlot.querySelector(".agency-context-select"));
-      if (inContext) desktopSlot.querySelector(".agency-context-exit")?.addEventListener("click", exitClientContext);
+      if (!inContext) {
+        desktopSlot.style.display = "none";
+        desktopSlot.innerHTML = "";
+      } else {
+        desktopSlot.style.display = "";
+        desktopSlot.classList.add("in-context");
+        desktopSlot.innerHTML = `
+          <span class="agency-context-badge">Managing: <strong>${escapeHtml(info.clientContextName || "")}</strong></span>
+          <button type="button" class="agency-context-exit" id="agencyContextExitBtn">Exit to Agency</button>
+        `;
+        desktopSlot.querySelector("#agencyContextExitBtn")?.addEventListener("click", exitClientContext);
+      }
     }
 
     if (mobileSlot) {
-      mobileSlot.style.display = "";
-      mobileSlot.classList.toggle("in-context", inContext);
-      mobileSlot.innerHTML = `
-        <div class="agency-context-mobile-agency">${escapeHtml(info.agencyName)}</div>
-        <div class="agency-context-mobile-status">${
-          inContext ? `Managing:<strong>${escapeHtml(info.clientContextName || "")}</strong>` : "Current Client"
-        }</div>
-        <select class="agency-context-select" aria-label="Client">${optionsHtml}</select>
-        ${inContext ? `<button type="button" class="agency-context-exit">Exit to Agency</button>` : ""}
-      `;
-      wireAgencyContextSelect(mobileSlot.querySelector(".agency-context-select"));
-      if (inContext) mobileSlot.querySelector(".agency-context-exit")?.addEventListener("click", exitClientContext);
+      if (!inContext) {
+        mobileSlot.style.display = "none";
+        mobileSlot.innerHTML = "";
+      } else {
+        mobileSlot.style.display = "";
+        mobileSlot.classList.add("in-context");
+        mobileSlot.innerHTML = `
+          <div class="agency-context-mobile-agency">${escapeHtml(info.agencyName)}</div>
+          <div class="agency-context-mobile-status">Managing: <strong>${escapeHtml(info.clientContextName || "")}</strong></div>
+          <button type="button" class="agency-context-exit" id="agencyContextExitBtnMobile">Exit to Agency</button>
+        `;
+        mobileSlot.querySelector("#agencyContextExitBtnMobile")?.addEventListener("click", exitClientContext);
+      }
     }
   }
 
-  /** Called from renderNav with the same `me` (GET /api/auth/me result)
-   * every page already fetches - reads `me.agency`/`me.clientContext`
-   * (see api/auth/handler.ts's handleMe) rather than making its own probe
-   * request, then fetches the actual client list separately since /api/me
-   * intentionally stays a cheap, no-extra-DB-fanout endpoint. Renders
-   * immediately with just the agency name/current state so the switcher
-   * shell never waits on the clients fetch to appear, then re-renders once
-   * the list resolves (or hides gracefully on failure - never blocks the
-   * rest of the shell). */
-  async function loadAgencyContextSwitcher(me) {
+  function loadAgencyContextSwitcher(me) {
     if (!me?.agency) {
       agencyContextInfo = null;
       renderAgencyContextSwitcher();
@@ -799,13 +781,6 @@ const App = (() => {
       clientContextName: me.clientContext?.name || null,
       clients: [],
     };
-    renderAgencyContextSwitcher();
-    try {
-      const data = await apiJson("/api/agency/dashboard");
-      agencyContextInfo.clients = (data.clients || []).map((c) => ({ id: c.id, name: c.name }));
-    } catch {
-      agencyContextInfo.clients = [];
-    }
     renderAgencyContextSwitcher();
   }
 
