@@ -14,7 +14,7 @@
   <div class="wrap">
     <div class="page-head">
       <div class="page-head-text">
-        <h1 class="page-title">Users</h1>
+        <h1 class="page-title" id="pageTitle">Users</h1>
         <p class="page-sub">Create a user and assign a role — a temporary password is shown once, for you to relay to them.</p>
       </div>
       <div class="page-head-actions">
@@ -324,6 +324,18 @@
     me = await App.requireAuth();
     if (!me) return;
     App.renderNav(me, "/admin/users.html");
+    // For an agency's own identity, this page is reached via Settings ->
+    // "Employee" now (see AGENCY_LINKS/SETTINGS_LINKS in app.js) - the page
+    // itself is unchanged (still the same team/roles/onboarding flow), only
+    // its own heading/title follow the nav's relabeling so what the user
+    // clicked matches what they land on. Individual companies keep "Users"
+    // - see me.agency's own doc comment in app.js for why this is the
+    // right agency-identity check (never flips for a claimed client's own
+    // company, unlike me.company.accountType).
+    if (me.agency) {
+      document.getElementById("pageTitle").textContent = "Employee";
+      document.title = "Employee — RUTA Lead Management System";
+    }
     if (!App.hasPermission(me, "users.manage")) {
       document.body.innerHTML = '<div class="wrap"><div class="banner error">You do not have access to this page.</div></div>';
       return;

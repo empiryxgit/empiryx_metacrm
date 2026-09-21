@@ -9,15 +9,66 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/assets/app.css" />
 <style>
-  /* This page always shows exactly 8 KPI tiles (Total Clients, Active
-     Clients, Pending Invitations, Total Leads, Leads Today, Leads This
-     Month, Active Campaigns, Conversion Rate) - overriding just the
-     widest breakpoint's column count so they sit evenly in two rows of
-     four instead of app.css's default 6-column grid (sized for the
-     regular CRM dashboard's 6 KPIs) leaving a ragged last row. The
-     narrower responsive breakpoints (3-col, 2-col) are inherited
-     unchanged from app.css. */
-  .kpi-grid{ grid-template-columns:repeat(4, 1fr); }
+  /* Page-scoped additions only - everything else this page uses (kpi-grid,
+     kpi-card/kpi-card-link, dash-card/dash-section/dash-two-col, donut-row/
+     donut/donut-center/donut-legend, pill, table/th.sortable, avatar,
+     pagination-bar, segmented, chart-svg-wrap/chart-empty, empty) reuses
+     app.css's existing, already-adopted components unchanged - see each
+     usage below for which real component the approved mockup design maps
+     onto. Nothing here duplicates an app.css rule. */
+  #chartWrap{ position:relative; }
+  .chart-controls{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 5px 4px 10px; border-radius:999px; font-size:11.5px; font-weight:600; color:var(--text-secondary); background:var(--surface); border:1px solid var(--border-strong); }
+  .chip .dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .chip-remove{ width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:none; border:none; cursor:pointer; color:var(--text-muted); flex-shrink:0; }
+  .chip-remove:hover{ background:var(--surface-sunken); color:var(--text-primary); }
+  .compare-add{ position:relative; }
+  .compare-add-btn{ font-size:11.5px; font-weight:600; color:var(--brand-primary-hover); background:none; border:1px dashed var(--border-strong); border-radius:999px; padding:5px 12px; cursor:pointer; font-family:inherit; }
+  .compare-add-btn:hover{ background:var(--brand-primary-soft); border-color:var(--brand-primary); }
+  .compare-dropdown{ position:absolute; top:calc(100% + 6px); left:0; width:250px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); box-shadow:var(--shadow-sm); z-index:30; padding:9px; }
+  .compare-dropdown input{ width:100%; margin-bottom:7px; }
+  .compare-list{ max-height:230px; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
+  .compare-option{ display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:var(--radius-sm); font-size:12.5px; cursor:pointer; border:none; background:none; width:100%; text-align:left; color:var(--text-primary); font-family:inherit; }
+  .compare-option:hover:not(:disabled){ background:var(--surface-sunken); }
+  .compare-option:disabled{ opacity:.35; cursor:default; }
+  .compare-option .dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .compare-note{ font-size:10.5px; color:var(--text-muted); margin-top:6px; padding-top:6px; border-top:1px solid var(--border); }
+
+  .chart-tooltip{ position:absolute; pointer-events:none; background:var(--brand-dark); color:#fff; border-radius:var(--radius-sm); padding:9px 11px; font-size:11.5px; line-height:1.55; box-shadow:var(--shadow-sm); z-index:5; opacity:0; transition:opacity .08s ease; min-width:150px; }
+  .chart-tooltip .tt-date{ font-weight:700; margin-bottom:4px; }
+  .chart-tooltip .tt-row{ display:flex; align-items:center; gap:6px; }
+  .chart-tooltip .tt-dot{ width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .chart-tooltip .tt-name{ flex:1; color:#D8DCE6; }
+  .chart-tooltip .tt-val{ font-weight:700; font-variant-numeric:tabular-nums; }
+
+  .rank-search{ margin-bottom:10px; width:100%; }
+  .rank-list-scroll{ max-height:372px; overflow-y:auto; padding-right:6px; margin-right:-6px; }
+  .rank-list{ display:flex; flex-direction:column; gap:10px; }
+  .rank-row{ display:grid; grid-template-columns:22px 1fr 58px; align-items:center; gap:10px; padding:5px 6px; border-radius:var(--radius-sm); cursor:pointer; }
+  .rank-row:hover{ background:var(--surface-sunken); }
+  .rank-num{ font-size:11.5px; font-weight:700; color:var(--text-muted); text-align:center; }
+  .rank-main{ min-width:0; }
+  .rank-top-row{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:5px; }
+  .rank-name{ font-size:12.5px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rank-count{ font-size:12.5px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .rank-bar-track{ background:var(--surface-sunken); border-radius:999px; height:8px; overflow:hidden; }
+  .rank-bar-fill{ height:100%; border-radius:999px; background:var(--brand-primary); }
+  .rank-conv{ font-size:11px; color:var(--text-muted); text-align:right; white-space:nowrap; }
+
+  .client-tag{ display:inline-block; font-size:11px; font-weight:600; color:var(--text-secondary); background:var(--surface-sunken); border-radius:999px; padding:3px 9px; white-space:nowrap; }
+  .table-toolbar{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .table-toolbar-left{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .result-count{ font-size:12px; color:var(--text-muted); }
+  .field-search{ width:220px; max-width:100%; }
+  .field-select{ min-width:180px; }
+  .cell-person{ display:flex; align-items:center; gap:9px; }
+  .cell-name{ font-weight:600; }
+  tbody tr.flash{ animation:rowflash 1.6s ease; }
+  @keyframes rowflash{ 0%,100%{ background:var(--surface); } 20%,60%{ background:var(--warning-soft); } }
+
+  .plan-pill{ display:inline-flex; align-items:center; padding:2px 10px; border-radius:999px; background:var(--brand-primary-soft); color:var(--brand-primary-hover); font-size:15px; font-weight:700; letter-spacing:-0.01em; }
+
+  @media (max-width:600px){ .field-search{ width:100%; } }
 </style>
 </head>
 <body>
@@ -29,215 +80,609 @@
         <p class="page-sub" id="pageSub">Welcome.</p>
       </div>
       <div class="page-head-actions" id="headActions" style="display:none">
-        <button class="btn secondary" type="button" id="viewClientsBtn">View Clients</button>
-        <button class="btn" type="button" id="addClientBtn">+ Add Client</button>
+        <div class="segmented" id="rangeToggle">
+          <button type="button" data-range="7d" class="active">7 Days</button>
+          <button type="button" data-range="30d">30 Days</button>
+        </div>
       </div>
     </div>
 
     <div id="banner"></div>
 
-    <!-- A real agency-level view, not the per-tenant CRM dashboard - see
-         src/application/agency.ts's own header comment for the exact scope:
-         aggregate counts across every claimed client (leads/campaigns
-         totals here, per-client lead counts + relationship status in the
-         table below), never a client's row-level data. Clicking into a
-         client's own leads/pipeline/campaigns is still the deferred
-         "next phase" that comment documents - this page only ever shows
-         numbers. "+ Add Client" only ever creates a brand-new client this
-         agency owns outright (see the modal below), never links to an
-         existing, unrelated tenant - see the AskUserQuestion decision this
-         was built from. -->
+    <!-- Real, cross-client aggregate view - see src/application/agency.ts's
+         getAgencyDashboardSummary for exactly what's covered: KPI totals,
+         a fixed 14-day per-client lead trend, a Leads Mix donut, per-client
+         performance (incl. Top Rep), and (via a separate, server-paginated
+         endpoint) an agency-wide Employee Performance leaderboard. Never a
+         client's row-level lead data - same aggregate-only posture the rest
+         of the Agency module already follows. The Clients table itself
+         (add/invite/manage) lives on clients.html now that Clients is its
+         own top-level nav item - this page only ever shows numbers. -->
     <div class="kpi-grid" id="kpiGrid"></div>
 
     <div class="dash-section">
       <div class="dash-card">
         <div class="dash-card-head">
           <div>
-            <p class="dash-card-title">Clients</p>
-            <p class="dash-card-sub" id="clientsSub"></p>
+            <p class="dash-card-title">Lead Volume by Client</p>
+            <p class="dash-card-sub">Daily leads for pinned clients, last 14 days</p>
+          </div>
+          <div class="chart-controls" id="chartControls"></div>
+        </div>
+        <div class="chart-svg-wrap" id="chartWrap"></div>
+      </div>
+    </div>
+
+    <div class="dash-two-col">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Leads by Client</p>
+            <p class="dash-card-sub" id="rankSub"></p>
           </div>
         </div>
-        <div class="table-wrap" id="clientsTableWrap">
+        <input type="search" class="field-search rank-search" id="rankSearch" placeholder="Search clients…" />
+        <div class="rank-list-scroll"><div class="rank-list" id="rankList"></div></div>
+      </div>
+
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Leads Mix by Client</p>
+            <p class="dash-card-sub" id="donutSub"></p>
+          </div>
+        </div>
+        <div class="donut-row" id="donutBody"></div>
+        <a href="#employeeSection" class="dash-card-link" style="display:inline-block; margin-top:14px;">View full team performance ›</a>
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Client Performance</p>
+            <p class="dash-card-sub">Every client you manage, ranked by lead volume</p>
+          </div>
+        </div>
+        <div class="table-toolbar">
+          <div class="table-toolbar-left">
+            <input type="search" class="field-search" id="clientSearch" placeholder="Search clients…" />
+          </div>
+          <span class="result-count" id="clientResultCount"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Client</th><th>Status</th><th>Leads</th><th>Conversion</th><th>Reps</th><th>Top Rep</th><th>Last Activity</th></tr>
+            </thead>
+            <tbody id="clientBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pagination-bar" id="clientPaginationBar" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="dash-section" id="employeeSection">
+      <div class="dash-card">
+        <div class="dash-card-head">
+          <div>
+            <p class="dash-card-title">Employee Performance</p>
+            <p class="dash-card-sub">Every client's team, in one leaderboard</p>
+          </div>
+        </div>
+        <div class="table-toolbar">
+          <div class="table-toolbar-left">
+            <input type="search" class="field-search" id="employeeSearch" placeholder="Search employees…" />
+            <select class="field-select" id="employeeClientFilter"><option value="">All Clients</option></select>
+          </div>
+          <span class="result-count" id="employeeResultCount"></span>
+        </div>
+        <div class="table-wrap">
           <table>
             <thead>
               <tr>
+                <th>Employee</th>
                 <th>Client</th>
-                <th>Status</th>
-                <th>Users</th>
-                <th>Leads</th>
-                <th>Campaigns</th>
-                <th>Last Activity</th>
-                <th></th>
+                <th class="sortable active" data-sort="leads">Leads <span class="sort-arrow">↓</span></th>
+                <th class="sortable" data-sort="won">Won <span class="sort-arrow">↓</span></th>
+                <th class="sortable" data-sort="conversionRate">Conversion <span class="sort-arrow">↓</span></th>
+                <th class="sortable" data-sort="followUps">Follow-ups <span class="sort-arrow">↓</span></th>
               </tr>
             </thead>
-            <tbody id="clientsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+            <tbody id="employeeBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
           </table>
         </div>
-        <div class="pagination-bar" id="clientsPaginationBar" style="display:none"></div>
+        <div class="pagination-bar" id="employeePaginationBar" style="display:none"></div>
       </div>
     </div>
 
-  </div>
-
-  <!-- Add Client modal - see addClientOrganization() in src/application/
-       agency.ts for exactly what submitting this does: creates a brand-new
-       client company + Owner user (system-generated temporary password,
-       shown once below), links it as an active client immediately. No
-       invite/accept step - the agency originates the whole thing. -->
-  <div class="modal-overlay" id="addClientModalOverlay" style="display:none">
-    <div class="modal modal-sm">
-      <div class="modal-header">
-        <div>
-          <h2>Add Client</h2>
-          <p>Creates a brand-new client company this agency manages.</p>
-        </div>
-        <button class="modal-close" type="button" id="addClientModalClose" aria-label="Close">✕</button>
-      </div>
-      <div class="modal-body">
-        <div id="addClientError"></div>
-        <form id="addClientForm">
-          <label for="ac_companyName">Client Company Name</label>
-          <input id="ac_companyName" required autocomplete="off" />
-          <label for="ac_ownerName">Owner Name</label>
-          <input id="ac_ownerName" required autocomplete="off" />
-          <label for="ac_ownerEmail">Owner Email</label>
-          <input id="ac_ownerEmail" type="email" required autocomplete="off" />
-          <p class="hint">A temporary password is generated automatically - you'll see it once, right after this client is created, to pass along to them.</p>
-        </form>
-      </div>
-      <div class="modal-footer">
-        <button class="btn secondary" type="button" id="addClientCancel">Cancel</button>
-        <button class="btn" type="button" id="addClientSave">Add Client</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- One-time credential reveal - see temporaryPassword's own comment on
-       AddClientOrganizationResult in src/application/agency.ts: shown
-       exactly once, never retrievable again, never emailed. -->
-  <div class="modal-overlay" id="credentialModalOverlay" style="display:none">
-    <div class="modal modal-sm">
-      <div class="modal-header">
-        <div>
-          <h2>Client Created</h2>
-          <p id="credentialSub"></p>
-        </div>
-        <button class="modal-close" type="button" id="credentialModalClose" aria-label="Close">✕</button>
-      </div>
-      <div class="modal-body">
-        <p class="hint" style="margin:0 0 10px">Share these sign-in details with the client - this password won't be shown again.</p>
-        <div class="detail-row"><span class="detail-label">Email</span><span class="detail-value" id="credentialEmail"></span></div>
-        <div class="detail-row"><span class="detail-label">Temporary password</span><span class="detail-value" id="credentialPassword"></span></div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn" type="button" id="credentialDone">Done</button>
-      </div>
-    </div>
   </div>
 
 <script src="/assets/app.js"></script>
 <script>
   let me = null;
+  let dashboardData = null;
+  let billingStatus = null;
+  let rangeKey = "7d";
 
   function fmt(n) { return (n ?? 0).toLocaleString(); }
-
-  function statusPillClass(status) {
-    if (status === "active") return "active";
-    if (status === "suspended") return "paused";
-    return "pending"; // invited | pending
-  }
-  function statusLabel(status) {
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
   function fmtPct(n) { return `${(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`; }
   function fmtLastActivity(iso) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   }
+  function statusPillClass(status) {
+    if (status === "active") return "active";
+    if (status === "suspended") return "paused";
+    return "pending"; // invited | pending
+  }
+  function statusLabel(status) { return status.charAt(0).toUpperCase() + status.slice(1); }
+  function norm(s) { return (s || "").toLowerCase(); }
+  function debounce(fn, wait) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+  }
 
-  function renderKpis(kpis) {
+  // ---- KPIs -----------------------------------------------------------
+  // Real subscribe/trial state has no tiered "plan name" (Individual and
+  // Agency each have one flat plan - see src/application/billing.ts's
+  // EntitlementState) - so unlike the mockup's fictional "Enterprise"
+  // label, this shows the caller's actual entitlement state plus their
+  // real client-capacity usage, both already surfaced on subscription.html.
+  function planLabel(entitlement) {
+    switch (entitlement?.kind) {
+      case "trialing": return "Trial";
+      case "trial_expired": return "Trial Expired";
+      case "subscribed": return "Subscribed";
+      case "subscription_expired": return "Expired";
+      default: return "—";
+    }
+  }
+  function planNote(entitlement, clients) {
+    const parts = [];
+    if (clients) parts.push(`${fmt(clients.used)} of ${fmt(clients.limit)} clients`);
+    if (entitlement?.kind === "trialing") parts.push(`${entitlement.daysRemaining} day${entitlement.daysRemaining === 1 ? "" : "s"} left in trial`);
+    else if (entitlement?.kind === "trial_expired") parts.push("Subscribe to continue");
+    else if (entitlement?.kind === "subscription_expired") parts.push("Renew to continue");
+    return parts.join(" · ") || "—";
+  }
+
+  function renderKpis() {
+    const k = dashboardData.kpis;
+    const rangeLabel = dashboardData.range === "30d" ? "30D" : "7D";
     const cards = [
-      { label: "Total Clients", value: fmt(kpis.clients) },
-      { label: "Active Clients", value: fmt(kpis.activeClients) },
-      { label: "Pending Invitations", value: fmt(kpis.pendingInvitations) },
-      { label: "Total Leads", value: fmt(kpis.totalLeads) },
-      { label: "Leads Today", value: fmt(kpis.leadsToday) },
-      { label: "Leads This Month", value: fmt(kpis.leadsThisMonth) },
-      { label: "Active Campaigns", value: fmt(kpis.activeCampaigns) },
-      { label: "Conversion Rate", value: fmtPct(kpis.conversionRate) },
+      {
+        label: "Total Clients", value: fmt(k.clients),
+        note: `${fmt(k.activeClients)} active${k.pendingInvitations ? ` · ${fmt(k.pendingInvitations)} pending` : ""}`,
+      },
+      { label: `Leads (${rangeLabel})`, value: fmt(k.leadsInRange), note: dashboardData.range === "30d" ? "Last 30 days" : "Last 7 days" },
+      { label: "Blended Conversion", value: fmtPct(k.conversionRate), note: "Across all clients" },
+      { label: "Active Campaigns", value: fmt(k.activeCampaigns), note: "Across all clients" },
+      { label: "Team Members", value: fmt(k.teamMembers), note: `Across ${fmt(k.clients)} client${k.clients === 1 ? "" : "s"}` },
     ];
+    const planCard = `
+      <a class="kpi-card kpi-card-link" href="/subscription.html">
+        <div class="kpi-label">Subscription Plan</div>
+        <div class="kpi-value"><span class="plan-pill">${App.escapeHtml(planLabel(billingStatus?.entitlement))}</span></div>
+        <div class="kpi-note">${App.escapeHtml(planNote(billingStatus?.entitlement, billingStatus?.clients))}</div>
+      </a>`;
     document.getElementById("kpiGrid").innerHTML = cards.map(c => `
       <div class="kpi-card">
         <div class="kpi-label">${App.escapeHtml(c.label)}</div>
         <div class="kpi-value">${c.value}</div>
-      </div>`).join("");
+        <div class="kpi-note">${App.escapeHtml(c.note)}</div>
+      </div>`).join("") + planCard;
   }
 
-  let allDashboardClients = [];
-  let dashboardClientsPage = 1;
-  let dashboardClientsPageSize = 25;
+  // ---- Lead Volume chart: pin up to 5 clients, search to compare --------
+  // Only 5 slots are dataviz-validated colorblind-safe for a line chart
+  // (this exact palette was run through the dataviz skill's
+  // validate_palette.js during the approved mockup phase) - 5 is a hard
+  // cap regardless of roster size, not a display convenience. The donut
+  // below reuses this same palette's first 3 slots plus a fixed gray
+  // "Other" - its own validated set, per getAgencyDashboardSummary's own
+  // doc comment on why a slot-per-client donut isn't safe past ~3-4 series.
+  const CHART_COLORS = ["#2A78D6", "#EB6834", "#1BAF7A", "#EDA100", "#E87BA4"];
+  const DONUT_TOP_COLORS = [CHART_COLORS[0], CHART_COLORS[1], CHART_COLORS[2]];
+  const DONUT_OTHER_COLOR = "#9CA3AF";
+  const MAX_PINNED = 5;
 
-  function renderClients(clients) {
-    allDashboardClients = clients;
-    document.getElementById("clientsSub").textContent =
-      clients.length === 0 ? "No clients yet" : `${clients.length} client${clients.length === 1 ? "" : "s"}`;
-    const body = document.getElementById("clientsBody");
-    const paginationBar = document.getElementById("clientsPaginationBar");
-    if (clients.length === 0) {
-      paginationBar.style.display = "none";
-      body.innerHTML = `<tr><td colspan="7" class="empty">No clients yet. Click “+ Add Client” to create one.</td></tr>`;
+  let pinned = [];
+  let compareOpen = false;
+  let compareQuery = "";
+  let chartDays = [];
+  let chartSeriesByClientId = new Map();
+
+  function resetPinsToTop() {
+    // dashboardData.clients is already sorted by all-time lead volume
+    // (see buildAgencyClientRoster in src/application/agency.ts).
+    pinned = dashboardData.clients.slice(0, MAX_PINNED).map(c => c.id);
+  }
+  function clientNameById(id) { return dashboardData.clients.find(c => c.id === id)?.name ?? "—"; }
+
+  function renderChartControls() {
+    const chips = pinned.map((id, i) => `
+      <span class="chip" data-pin="${id}">
+        <span class="dot" style="background:${CHART_COLORS[i]}"></span>${App.escapeHtml(clientNameById(id))}
+        <button type="button" class="chip-remove" data-remove="${id}" aria-label="Remove ${App.escapeHtml(clientNameById(id))}">
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </span>`).join("");
+
+    const dropdown = compareOpen ? `
+      <div class="compare-dropdown" id="compareDropdown">
+        <input type="text" id="compareSearch" placeholder="Search clients to compare…" value="${App.escapeHtml(compareQuery)}" />
+        <div class="compare-list" id="compareList"></div>
+        <div class="compare-note">${pinned.length} of ${MAX_PINNED} slots used — remove one to add another</div>
+      </div>` : "";
+
+    document.getElementById("chartControls").innerHTML = `
+      ${chips}
+      <div class="compare-add">
+        <button type="button" class="compare-add-btn" id="compareAddBtn">+ Compare a client</button>
+        ${dropdown}
+      </div>`;
+
+    document.querySelectorAll(".chip-remove").forEach(btn => btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pinned = pinned.filter(id => id !== btn.dataset.remove);
+      renderChartControls(); renderChart();
+    }));
+    document.getElementById("compareAddBtn").addEventListener("click", () => {
+      compareOpen = !compareOpen; compareQuery = "";
+      renderChartControls();
+      if (compareOpen) document.getElementById("compareSearch")?.focus();
+    });
+    if (compareOpen) {
+      const input = document.getElementById("compareSearch");
+      input.addEventListener("input", () => { compareQuery = input.value; renderCompareList(); });
+      renderCompareList();
+      // Deferred to the next task so the click that just opened this menu
+      // (still bubbling to `document` when this line runs) isn't also the
+      // click that immediately closes it - see this exact fix from the
+      // mockup phase's own dropdown-closes-itself bug.
+      setTimeout(() => document.addEventListener("click", closeCompareOnOutsideClick, { once: true }), 0);
+    }
+  }
+
+  function closeCompareOnOutsideClick(e) {
+    const wrap = document.querySelector(".compare-add");
+    if (wrap && !wrap.contains(e.target)) { compareOpen = false; renderChartControls(); }
+    else if (compareOpen) document.addEventListener("click", closeCompareOnOutsideClick, { once: true });
+  }
+
+  function renderCompareList() {
+    const list = document.getElementById("compareList");
+    if (!list) return;
+    const q = norm(compareQuery);
+    const matches = dashboardData.clients.filter(c => norm(c.name).includes(q));
+    if (!matches.length) { list.innerHTML = `<div class="empty">No clients match "${App.escapeHtml(compareQuery)}"</div>`; return; }
+    list.innerHTML = matches.map(c => {
+      const isPinned = pinned.includes(c.id);
+      const disabled = !isPinned && pinned.length >= MAX_PINNED;
+      const slotIdx = pinned.indexOf(c.id);
+      const dot = isPinned ? CHART_COLORS[slotIdx] : "var(--border-strong)";
+      return `<button type="button" class="compare-option" data-toggle="${c.id}" ${disabled ? "disabled" : ""}>
+        <span class="dot" style="background:${dot}"></span>${App.escapeHtml(c.name)}${isPinned ? " ✓" : ""}
+      </button>`;
+    }).join("");
+    list.querySelectorAll(".compare-option").forEach(btn => btn.addEventListener("click", () => {
+      const id = btn.dataset.toggle;
+      if (pinned.includes(id)) pinned = pinned.filter(p => p !== id);
+      else if (pinned.length < MAX_PINNED) pinned.push(id);
+      renderChartControls(); renderChart();
+      compareOpen = true; renderCompareList();
+      setTimeout(() => document.getElementById("compareSearch")?.focus(), 0);
+    }));
+  }
+
+  function renderChart() {
+    const wrap = document.getElementById("chartWrap");
+    if (!pinned.length) {
+      wrap.innerHTML = `<div class="chart-empty">No clients pinned — use "Compare a client" above to add one.</div>`;
       return;
     }
 
-    // Client-side pagination - see clients.html's own comment on
-    // renderClients for why this roster isn't server-paginated (it's
-    // built by joining every claimed client with a live per-client
-    // lead-count aggregate and sorting by lead volume before anything is
-    // paginated).
-    const totalPages = Math.max(1, Math.ceil(clients.length / dashboardClientsPageSize));
-    dashboardClientsPage = Math.min(Math.max(1, dashboardClientsPage), totalPages);
-    const pageItems = clients.slice((dashboardClientsPage - 1) * dashboardClientsPageSize, dashboardClientsPage * dashboardClientsPageSize);
+    const height = 240;
+    const padding = { top: 16, right: 16, bottom: 28, left: 32 };
+    const buckets = chartDays.length;
+    const pxPerPoint = 56;
+    const minWidth = buckets * pxPerPoint;
+    const containerWidth = wrap.clientWidth || minWidth;
+    const width = Math.max(containerWidth, minWidth);
+    const innerW = width - padding.left - padding.right;
+    const innerH = height - padding.top - padding.bottom;
 
-    // "Open Client" - the same fast path into a client's own, completely
-    // unchanged CRM that clients.html's "Open CRM" button and
-    // client-detail.html's "Open CRM Dashboard" button already use (see
-    // App.enterClient's own doc comment in app.js) - only enabled once the
-    // relationship has actually moved to active/suspended, same gating
-    // clients.html already applies, since an "invited"/"pending"
-    // relationship has no CRM to open yet.
-    const canOpen = (status) => status === "active" || status === "suspended";
-    body.innerHTML = pageItems.map(c => `
-      <tr>
-        <td>${App.escapeHtml(c.name)}</td>
-        <td><span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></td>
-        <td>${fmt(c.users)}</td>
-        <td>${fmt(c.leads)}</td>
-        <td>${fmt(c.campaigns)}</td>
-        <td>${fmtLastActivity(c.lastActivityAt)}</td>
-        <td><button class="btn secondary sm" type="button" data-enter="${c.id}"${canOpen(c.status) ? "" : " disabled title=\"Available once the client accepts\""}>Open Client</button></td>
-      </tr>`).join("");
+    const maxVal = Math.max(1, ...pinned.flatMap(id => chartSeriesByClientId.get(id) ?? []));
+    const niceMax = Math.ceil(maxVal / 2) * 2 || 2;
 
-    body.querySelectorAll("[data-enter]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        document.getElementById("banner").innerHTML = "";
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Opening…";
-        try {
-          await App.enterClient(btn.dataset.enter);
-        } catch (err) {
-          document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message || "Could not open that client's LMS.")}</div>`;
-          btn.disabled = false;
-          btn.textContent = original;
-        }
-      });
+    const xAt = (i) => padding.left + (i / (buckets - 1)) * innerW;
+    const yAt = (v) => padding.top + innerH - (v / niceMax) * innerH;
+
+    const gridLines = [0, 0.25, 0.5, 0.75, 1].map(f => {
+      const y = padding.top + innerH * (1 - f);
+      const val = Math.round(niceMax * f);
+      return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="var(--border)" stroke-width="1" />
+              <text x="${padding.left - 8}" y="${y + 3}" font-size="10" fill="var(--text-muted)" text-anchor="end">${val}</text>`;
+    }).join("");
+
+    const labelEvery = 2;
+    const xLabels = chartDays.map((d, i) => {
+      if (i % labelEvery !== 0 && i !== buckets - 1) return "";
+      const label = new Date(`${d}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+      const anchor = i === 0 ? "start" : i === buckets - 1 ? "end" : "middle";
+      return `<text x="${xAt(i)}" y="${height - 8}" font-size="10" fill="var(--text-muted)" text-anchor="${anchor}">${label}</text>`;
+    }).join("");
+
+    const seriesSvg = pinned.map((id, si) => {
+      const color = CHART_COLORS[si];
+      const vals = chartSeriesByClientId.get(id) ?? chartDays.map(() => 0);
+      const points = vals.map((v, i) => [xAt(i), yAt(v)]);
+      const linePath = points.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+      const areaPath = linePath + ` L${xAt(buckets - 1).toFixed(1)},${(padding.top + innerH).toFixed(1)} L${xAt(0).toFixed(1)},${(padding.top + innerH).toFixed(1)} Z`;
+      const endDot = `<circle cx="${points[points.length-1][0].toFixed(1)}" cy="${points[points.length-1][1].toFixed(1)}" r="3.5" fill="${color}" stroke="var(--surface)" stroke-width="1.5" />`;
+      return `<path d="${areaPath}" fill="${color}" opacity="0.06" />
+              <path d="${linePath}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+              ${endDot}`;
+    }).join("");
+
+    const hoverLine = `<line id="hoverLine" x1="0" y1="${padding.top}" x2="0" y2="${padding.top + innerH}" stroke="var(--border-strong)" stroke-width="1" style="display:none" />`;
+
+    wrap.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily leads for pinned clients">
+        ${gridLines}${xLabels}${seriesSvg}${hoverLine}
+        <rect id="hoverCapture" x="${padding.left}" y="${padding.top}" width="${innerW}" height="${innerH}" fill="transparent" />
+      </svg>
+      <div class="chart-tooltip" id="chartTooltip"></div>`;
+
+    const svgEl = wrap.querySelector("svg");
+    const captureEl = wrap.querySelector("#hoverCapture");
+    const hoverLineEl = wrap.querySelector("#hoverLine");
+    const tooltip = wrap.querySelector("#chartTooltip");
+
+    captureEl.addEventListener("mousemove", (e) => {
+      const rect = svgEl.getBoundingClientRect();
+      const scaleX = width / rect.width;
+      const localX = (e.clientX - rect.left) * scaleX;
+      const idx = Math.max(0, Math.min(buckets - 1, Math.round(((localX - padding.left) / innerW) * (buckets - 1))));
+      const x = xAt(idx);
+      hoverLineEl.setAttribute("x1", x); hoverLineEl.setAttribute("x2", x); hoverLineEl.style.display = "";
+
+      const dateLabel = new Date(`${chartDays[idx]}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+      const rows = pinned.map((id, si) => `
+        <div class="tt-row"><span class="tt-dot" style="background:${CHART_COLORS[si]}"></span>
+          <span class="tt-name">${App.escapeHtml(clientNameById(id))}</span><span class="tt-val">${(chartSeriesByClientId.get(id) ?? [])[idx] ?? 0}</span></div>`).join("");
+      tooltip.innerHTML = `<div class="tt-date">${dateLabel}</div>${rows}`;
+      tooltip.style.opacity = "1";
+      const wrapRect = wrap.getBoundingClientRect();
+      let left = (e.clientX - wrapRect.left) + 14;
+      if (left + 170 > wrapRect.width) left = (e.clientX - wrapRect.left) - 184;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = "6px";
     });
+    captureEl.addEventListener("mouseleave", () => { hoverLineEl.style.display = "none"; tooltip.style.opacity = "0"; });
+  }
 
-    App.renderPagination(paginationBar, { page: dashboardClientsPage, pageSize: dashboardClientsPageSize, total: clients.length, totalPages }, {
-      onPageChange: (p) => { dashboardClientsPage = p; renderClients(allDashboardClients); },
-      onPageSizeChange: (s) => { dashboardClientsPageSize = s; dashboardClientsPage = 1; renderClients(allDashboardClients); },
+  let chartResizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(chartResizeTimer);
+    chartResizeTimer = setTimeout(() => { if (dashboardData) renderChart(); }, 150);
+  });
+
+  // ---- Leads by Client - scrollable + searchable at any roster size -----
+  let rankSearch = "";
+  function renderRankList() {
+    const n = dashboardData.clients.length;
+    document.getElementById("rankSub").textContent = `All-time total · ${n} client${n === 1 ? "" : "s"}`;
+    const q = norm(rankSearch);
+    const rows = dashboardData.clients.filter(c => norm(c.name).includes(q)); // already sorted by leads desc
+    const max = Math.max(1, ...dashboardData.clients.map(c => c.leads));
+    const list = document.getElementById("rankList");
+    if (!rows.length) { list.innerHTML = `<div class="empty">No clients match "${App.escapeHtml(rankSearch)}"</div>`; return; }
+    list.innerHTML = rows.map((c) => {
+      const rank = dashboardData.clients.findIndex(x => x.id === c.id) + 1;
+      return `
+      <div class="rank-row" data-client="${c.id}">
+        <div class="rank-num">${rank}</div>
+        <div class="rank-main">
+          <div class="rank-top-row">
+            <span class="rank-name">${App.escapeHtml(c.name)}</span>
+            <span class="rank-count">${fmt(c.leads)}</span>
+          </div>
+          <div class="rank-bar-track"><div class="rank-bar-fill" style="width:${Math.max(4, Math.round((c.leads / max) * 100))}%"></div></div>
+        </div>
+        <div class="rank-conv">${fmtPct(c.conversionRate)}</div>
+      </div>`;
+    }).join("");
+    document.querySelectorAll(".rank-row").forEach(row => row.addEventListener("click", () => jumpToClient(row.dataset.client)));
+  }
+  document.getElementById("rankSearch").addEventListener("input", (e) => { rankSearch = e.target.value; renderRankList(); });
+
+  // ---- Leads Mix donut - reuses app.css's real conic-gradient .donut
+  // component (not SVG arc math) for visual consistency with the regular
+  // CRM dashboard's own "How leads reach you" donut. -------------------
+  function renderDonut() {
+    const top = dashboardData.donut.top;
+    const other = dashboardData.donut.otherLeads;
+    const total = top.reduce((s, c) => s + c.leads, 0) + other;
+    document.getElementById("donutSub").textContent = "All-time · top clients by volume";
+
+    if (total === 0) {
+      document.getElementById("donutBody").innerHTML = `<div class="chart-empty">No leads yet.</div>`;
+      return;
+    }
+
+    const otherCount = Math.max(0, dashboardData.clients.length - top.length);
+    const segments = [
+      ...top.map((c, i) => ({ name: c.clientName, value: c.leads, color: DONUT_TOP_COLORS[i] })),
+      ...(other > 0 ? [{ name: `Other clients (${otherCount})`, value: other, color: DONUT_OTHER_COLOR }] : []),
+    ];
+
+    let cumulative = 0;
+    const stops = segments.map(s => {
+      const start = (cumulative / total) * 360;
+      cumulative += s.value;
+      const end = (cumulative / total) * 360;
+      return `${s.color} ${start.toFixed(2)}deg ${end.toFixed(2)}deg`;
+    }).join(", ");
+
+    document.getElementById("donutBody").innerHTML = `
+      <div class="donut" style="background:conic-gradient(${stops})">
+        <div class="donut-center"><span class="n">${fmt(total)}</span><span class="l">total</span></div>
+      </div>
+      <div class="donut-legend">
+        ${segments.map(s => {
+          const pct = Math.round((s.value / total) * 100);
+          return `
+          <div class="donut-legend-item">
+            <span class="dot" style="background:${s.color}"></span>
+            <span class="label">${App.escapeHtml(s.name)}</span>
+            <span class="cnt">${fmt(s.value)}</span>
+            <span class="pct">${pct}%</span>
+          </div>`;
+        }).join("")}
+      </div>`;
+  }
+
+  // ---- Client Performance table: full roster fetched once (agencies
+  // realistically have dozens of clients, not thousands - same reasoning
+  // buildAgencyClientRoster already documents), searched/paginated
+  // client-side. -----------------------------------------------------
+  let clientSearch = "";
+  let clientsPage = 1;
+  let clientsPageSize = 25;
+
+  function renderClientTable() {
+    const q = norm(clientSearch);
+    const filtered = dashboardData.clients.filter(c => norm(c.name).includes(q)); // already sorted by leads desc
+    document.getElementById("clientResultCount").textContent = `${filtered.length} of ${dashboardData.clients.length} clients`;
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / clientsPageSize));
+    clientsPage = Math.min(Math.max(1, clientsPage), totalPages);
+    const pageRows = filtered.slice((clientsPage - 1) * clientsPageSize, clientsPage * clientsPageSize);
+
+    const body = document.getElementById("clientBody");
+    body.innerHTML = pageRows.length ? pageRows.map(c => `
+      <tr data-client="${c.id}">
+        <td><span class="cell-name">${App.escapeHtml(c.name)}</span></td>
+        <td><span class="pill ${statusPillClass(c.status)}">${App.escapeHtml(statusLabel(c.status))}</span></td>
+        <td>${fmt(c.leads)}</td>
+        <td>${fmtPct(c.conversionRate)}</td>
+        <td>${fmt(c.users)}</td>
+        <td>${c.topRep ? App.escapeHtml(c.topRep) : "—"}</td>
+        <td>${fmtLastActivity(c.lastActivityAt)}</td>
+      </tr>`).join("") : `<tr><td colspan="7" class="empty">No clients match "${App.escapeHtml(clientSearch)}"</td></tr>`;
+
+    App.renderPagination(document.getElementById("clientPaginationBar"), { page: clientsPage, pageSize: clientsPageSize, total: filtered.length, totalPages }, {
+      onPageChange: (p) => { clientsPage = p; renderClientTable(); },
+      onPageSizeChange: (s) => { clientsPageSize = s; clientsPage = 1; renderClientTable(); },
     });
   }
+  document.getElementById("clientSearch").addEventListener("input", (e) => { clientSearch = e.target.value; clientsPage = 1; renderClientTable(); });
+
+  function jumpToClient(id) {
+    clientSearch = ""; document.getElementById("clientSearch").value = "";
+    clientsPage = 1; renderClientTable();
+    const row = document.querySelector(`#clientBody tr[data-client="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+  }
+
+  // ---- Employee Performance table: server-side search/filter/sort/page,
+  // hitting the new action=employee-performance endpoint (see
+  // getAgencyEmployeePerformance in src/application/agency.ts). ---------
+  let empSearch = "";
+  let empClientFilter = "";
+  let empSort = { field: "leads", dir: "desc" };
+  let empPage = 1;
+  let empPageSize = 25;
+
+  function renderEmployeeFilterOptions() {
+    const sel = document.getElementById("employeeClientFilter");
+    sel.innerHTML = `<option value="">All Clients</option>` + dashboardData.clients.map(c => `<option value="${c.id}">${App.escapeHtml(c.name)}</option>`).join("");
+  }
+
+  async function loadEmployeeTable() {
+    const body = document.getElementById("employeeBody");
+    const params = new URLSearchParams({ page: empPage, pageSize: empPageSize, sortBy: empSort.field, sortDir: empSort.dir });
+    if (empClientFilter) params.set("clientId", empClientFilter);
+    if (empSearch) params.set("search", empSearch);
+    let data;
+    try {
+      data = await App.apiJson(`/api/agency/employee-performance?${params}`);
+    } catch (err) {
+      body.innerHTML = `<tr><td colspan="6" class="empty">${App.escapeHtml(err.message || "Couldn't load employee performance.")}</td></tr>`;
+      document.getElementById("employeePaginationBar").style.display = "none";
+      return;
+    }
+    document.getElementById("employeeResultCount").textContent = `${fmt(data.pagination.total)} employee${data.pagination.total === 1 ? "" : "s"}`;
+    body.innerHTML = data.rows.length ? data.rows.map(r => `
+      <tr>
+        <td><div class="cell-person"><span class="avatar">${App.escapeHtml(App.initials(r.name))}</span><span class="cell-name">${App.escapeHtml(r.name)}</span></div></td>
+        <td><span class="client-tag">${App.escapeHtml(r.clientName)}</span></td>
+        <td>${fmt(r.leadCount)}</td>
+        <td>${fmt(r.wonCount)}</td>
+        <td>${fmtPct(r.conversionRate)}</td>
+        <td>${fmt(r.followUpsLogged)}</td>
+      </tr>`).join("") : `<tr><td colspan="6" class="empty">No employees match your filters.</td></tr>`;
+
+    document.querySelectorAll("#employeeSection th.sortable").forEach(th => {
+      th.classList.toggle("active", th.dataset.sort === empSort.field);
+      th.querySelector(".sort-arrow").textContent = empSort.field === th.dataset.sort ? (empSort.dir === "asc" ? "↑" : "↓") : "↓";
+    });
+
+    App.renderPagination(document.getElementById("employeePaginationBar"), data.pagination, {
+      onPageChange: (p) => { empPage = p; loadEmployeeTable(); },
+      onPageSizeChange: (s) => { empPageSize = s; empPage = 1; loadEmployeeTable(); },
+    });
+  }
+  document.querySelectorAll("#employeeSection th.sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const field = th.dataset.sort;
+      empSort = { field, dir: empSort.field === field && empSort.dir === "desc" ? "asc" : "desc" };
+      empPage = 1;
+      loadEmployeeTable();
+    });
+  });
+  document.getElementById("employeeSearch").addEventListener("input", debounce((e) => { empSearch = e.target.value; empPage = 1; loadEmployeeTable(); }, 300));
+  document.getElementById("employeeClientFilter").addEventListener("change", (e) => { empClientFilter = e.target.value; empPage = 1; loadEmployeeTable(); });
+
+  // ---- Bootstrap ----------------------------------------------------
+  async function loadDashboard() {
+    try {
+      const [summary, billing] = await Promise.all([
+        App.apiJson(`/api/agency/dashboard?range=${encodeURIComponent(rangeKey)}`),
+        // Best-effort - the Subscription Plan tile degrades gracefully
+        // (shows "—") rather than blocking the whole dashboard if billing
+        // status fails to load.
+        App.apiJson("/api/billing/status").catch(() => null),
+      ]);
+      dashboardData = summary;
+      billingStatus = billing;
+      chartDays = dashboardData.chart.days;
+      chartSeriesByClientId = new Map(dashboardData.chart.series.map(s => [s.clientId, s.counts]));
+      resetPinsToTop();
+      compareOpen = false; compareQuery = "";
+
+      renderKpis();
+      renderChartControls();
+      renderChart();
+      renderRankList();
+      renderDonut();
+      clientsPage = 1; renderClientTable();
+    } catch (err) {
+      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  document.getElementById("rangeToggle").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-range]");
+    if (!btn || btn.dataset.range === rangeKey) return;
+    rangeKey = btn.dataset.range;
+    document.querySelectorAll("#rangeToggle button").forEach(b => b.classList.toggle("active", b.dataset.range === rangeKey));
+    loadDashboard();
+  });
 
   async function load() {
     document.getElementById("banner").innerHTML = "";
@@ -249,82 +694,12 @@
     document.getElementById("pageSub").textContent = `Welcome, ${me.company.name}`;
     document.getElementById("headActions").style.display = "flex";
 
-    try {
-      const summary = await App.apiJson("/api/agency/dashboard");
-      renderKpis(summary.kpis);
-      renderClients(summary.clients);
-    } catch (err) {
-      document.getElementById("banner").innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
+    await loadDashboard();
+    if (dashboardData) {
+      renderEmployeeFilterOptions();
+      loadEmployeeTable();
     }
   }
-
-  // ---- Add Client modal ---------------------------------------------------
-  const addModal = document.getElementById("addClientModalOverlay");
-  const addForm = document.getElementById("addClientForm");
-  const addError = document.getElementById("addClientError");
-  const addSaveBtn = document.getElementById("addClientSave");
-
-  function openAddClientModal() {
-    addForm.reset();
-    addError.innerHTML = "";
-    addModal.style.display = "flex";
-    document.getElementById("ac_companyName").focus();
-  }
-  function closeAddClientModal() { addModal.style.display = "none"; }
-
-  document.getElementById("viewClientsBtn").addEventListener("click", () => { window.location.href = "/clients.html"; });
-  document.getElementById("addClientBtn").addEventListener("click", openAddClientModal);
-  document.getElementById("addClientModalClose").addEventListener("click", closeAddClientModal);
-  document.getElementById("addClientCancel").addEventListener("click", closeAddClientModal);
-  addModal.addEventListener("click", (e) => { if (e.target === addModal) closeAddClientModal(); });
-
-  addSaveBtn.addEventListener("click", async () => {
-    addError.innerHTML = "";
-    const companyName = document.getElementById("ac_companyName").value.trim();
-    const ownerName = document.getElementById("ac_ownerName").value.trim();
-    const ownerEmail = document.getElementById("ac_ownerEmail").value.trim();
-    if (!companyName || !ownerName || !ownerEmail) {
-      addError.innerHTML = `<div class="banner error">Client name, owner name, and owner email are all required.</div>`;
-      return;
-    }
-
-    addSaveBtn.disabled = true;
-    addSaveBtn.textContent = "Adding…";
-    try {
-      const result = await App.apiJson("/api/agency/clients", {
-        method: "POST",
-        body: { companyName, ownerName, ownerEmail },
-      });
-      closeAddClientModal();
-      showCredentialModal(result);
-      await load();
-    } catch (err) {
-      // 402 = plan's client limit reached (see assertClientLimitNotReached
-      // in src/application/billing.ts) - send to the subscription page to
-      // buy extra capacity instead of just showing an error in the modal.
-      if (err.status === 402) {
-        window.location.href = "/subscription.html";
-        return;
-      }
-      addError.innerHTML = `<div class="banner error">${App.escapeHtml(err.message)}</div>`;
-    } finally {
-      addSaveBtn.disabled = false;
-      addSaveBtn.textContent = "Add Client";
-    }
-  });
-
-  // ---- One-time credential modal ------------------------------------------
-  const credentialModal = document.getElementById("credentialModalOverlay");
-  function showCredentialModal(result) {
-    document.getElementById("credentialSub").textContent = `${result.company.name} is ready.`;
-    document.getElementById("credentialEmail").textContent = result.owner.email;
-    document.getElementById("credentialPassword").textContent = result.temporaryPassword;
-    credentialModal.style.display = "flex";
-  }
-  function closeCredentialModal() { credentialModal.style.display = "none"; }
-  document.getElementById("credentialModalClose").addEventListener("click", closeCredentialModal);
-  document.getElementById("credentialDone").addEventListener("click", closeCredentialModal);
-  credentialModal.addEventListener("click", (e) => { if (e.target === credentialModal) closeCredentialModal(); });
 
   load();
 </script>

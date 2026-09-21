@@ -16,7 +16,7 @@
 
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { getDb } from "../client";
-import { agencyClients, campaigns, companies, leads } from "../schema";
+import { agencyClients, campaigns, companies, leadFollowUps, leads, users } from "../schema";
 import { firstOrThrow } from "../util";
 import { CLAIMED_AGENCY_CLIENT_STATUSES, type AgencyClientStatus } from "../../../domain/agencyClientStatus";
 
@@ -311,4 +311,159 @@ export async function getAgencyLeadCounts(filters: AgencyLeadCountFilters): Prom
     totalLeads += row.count;
   }
   return { totalLeads, byClient };
+}
+
+export interface AgencyEmployeeMetricsFilters {
+  // Same "pure aggregate over exactly the ids it's given, zero auth of its
+  // own" contract as AgencyLeadCountFilters above - the caller (
+  // getAgencyEmployeePerformance in src/application/agency.ts) has already
+  // resolved this to the agency's own authorized client set (or a single
+  // further-narrowed client within it) before this is ever called.
+  clientCompanyIds: string[];
+  // Deliberately leads.createdAt, NOT leads.metaCreatedAt - matching this
+  // file's own getAgencyLeadCounts above (the Agency Leads report), not
+  // get_team_performance's single-tenant precedent in
+  // src/application/metaSync/analyticsTools.ts, which filters on
+  // metaCreatedAt for a different reason (RUTA's WhatsApp bot cares about
+  // when Meta says the lead arrived). Everything else agency-dashboard-
+  // facing in this file already keys off createdAt, so this stays
+  // consistent with its own siblings rather than its distant cousin.
+  from?: Date;
+  to?: Date;
+}
+
+/** One row per (clientCompanyId, ownerId) pair actually seen in the lead/
+ * follow-up data for this range - i.e. one row per real employee, since a
+ * user/employee belongs to exactly one client company (see users.companyId)
+ * and never spans clients. Multi-client generalization of
+ * get_team_performance's query shape (analyticsTools.ts) - same per-owner
+ * stage-count + per-creator follow-up-count pair of GROUP BY queries, just
+ * split by company too since an agency spans many at once.
+ *
+ * `stageCounts` is deliberately left raw here, same reasoning as
+ * ClientMetrics.stageCounts above: which stage key means "won" is a
+ * per-client industry-template fact this repository layer has no business
+ * resolving - see getAgencyEmployeePerformance in src/application/agency.ts,
+ * which reduces each row down to a won count via that owner's own client's
+ * effective template (the same wonLeadsForClient/
+ * resolveEffectiveIndustryTemplate call buildAgencyClientRoster already
+ * makes). Naming a null/unmatched ownerId (e.g. "Unassigned") is also left
+ * to that application-layer caller, not decided here. */
+export interface AgencyEmployeeMetricRow {
+  clientCompanyId: string;
+  ownerId: string | null;
+  ownerName: string | null;
+  stageCounts: Map<string, number>;
+  followUpsLogged: number;
+}
+
+export async function getAgencyEmployeeMetrics(filters: AgencyEmployeeMetricsFilters): Promise<AgencyEmployeeMetricRow[]> {
+  if (filters.clientCompanyIds.length === 0) return [];
+
+  const leadConditions = [inArray(leads.companyId, filters.clientCompanyIds)];
+  if (filters.from) leadConditions.push(gte(leads.createdAt, filters.from));
+  if (filters.to) leadConditions.push(lt(leads.createdAt, filters.to));
+
+  const followUpConditions = [inArray(leadFollowUps.companyId, filters.clientCompanyIds)];
+  if (filters.from) followUpConditions.push(gte(leadFollowUps.createdAt, filters.from));
+  if (filters.to) followUpConditions.push(lt(leadFollowUps.createdAt, filters.to));
+
+  const db = await getDb();
+  const [leadRows, followUpRows] = await Promise.all([
+    db
+      .select({
+        companyId: leads.companyId,
+        ownerId: leads.ownerId,
+        ownerName: users.fullName,
+        pipelineStage: leads.pipelineStage,
+        n: sql<number>`count(*)::int`,
+      })
+      .from(leads)
+      .leftJoin(users, eq(leads.ownerId, users.id))
+      .where(and(...leadConditions))
+      .groupBy(leads.companyId, leads.ownerId, users.fullName, leads.pipelineStage),
+    db
+      .select({ companyId: leadFollowUps.companyId, createdBy: leadFollowUps.createdBy, n: sql<number>`count(*)::int` })
+      .from(leadFollowUps)
+      .where(and(...followUpConditions))
+      .groupBy(leadFollowUps.companyId, leadFollowUps.createdBy),
+  ]);
+
+  const followUpsByKey = new Map<string, number>();
+  for (const row of followUpRows) {
+    // leadFollowUps.companyId/createdBy are both non-nullable on the row
+    // itself (createdBy's FK is ON DELETE SET NULL, but that only means a
+    // *future* deletion can null it out - see schema.ts - so this key is
+    // safe to build without a null check here).
+    if (!row.createdBy) continue;
+    followUpsByKey.set(`${row.companyId}|${row.createdBy}`, Number(row.n));
+  }
+
+  const byKey = new Map<string, AgencyEmployeeMetricRow>();
+  for (const row of leadRows) {
+    // leads.companyId is nullable in the schema - see getClientMetrics'
+    // own comment above; can never match a real filter id anyway.
+    if (!row.companyId) continue;
+    const key = `${row.companyId}|${row.ownerId ?? ""}`;
+    let entry = byKey.get(key);
+    if (!entry) {
+      entry = {
+        clientCompanyId: row.companyId,
+        ownerId: row.ownerId,
+        ownerName: row.ownerName ?? null,
+        stageCounts: new Map(),
+        followUpsLogged: row.ownerId ? (followUpsByKey.get(`${row.companyId}|${row.ownerId}`) ?? 0) : 0,
+      };
+      byKey.set(key, entry);
+    }
+    entry.stageCounts.set(row.pipelineStage, (entry.stageCounts.get(row.pipelineStage) ?? 0) + Number(row.n));
+  }
+  return [...byKey.values()];
+}
+
+export interface AgencyDailyLeadCountFilters {
+  clientCompanyIds: string[];
+  // Both required (unlike the optional from/to elsewhere in this file) -
+  // this always backs a fixed-width trend chart (the Agency Dashboard's
+  // Lead Volume chart - see src/application/agency.ts), never an
+  // open-ended report, so there is no "all time" case to support.
+  from: Date;
+  to: Date;
+}
+
+/** Day-bucketed (UTC calendar day) lead counts per client, for the Agency
+ * Dashboard's Lead Volume chart. Deliberately NOT a SQL `date_trunc` GROUP
+ * BY - see api/dashboard/index.ts's own "Lead performance chart" section,
+ * which buckets its single-tenant chart the same simple way (fetch the
+ * range, slice into day-wide windows in JS) rather than using the WhatsApp
+ * bot's timezone-aware dayBuckets helper (src/application/metaSync/
+ * rutaDateRange.ts) - that helper's per-company-timezone precision doesn't
+ * fit a chart spanning many client companies at once anyway. Aggregates in
+ * JS over one fetched row set - same "fetch what's needed, aggregate here"
+ * style as getClientMetrics/getAgencyEmployeeMetrics above, appropriate at
+ * a 14-day, dozens-of-clients scale.
+ *
+ * Returns a Map<clientCompanyId, Map<yyyy-mm-dd, count>> - every requested
+ * client id gets an entry (possibly an empty inner Map for a client with no
+ * leads in range), so callers never need an `?? default` fallback. */
+export async function getAgencyDailyLeadCounts(filters: AgencyDailyLeadCountFilters): Promise<Map<string, Map<string, number>>> {
+  const result = new Map<string, Map<string, number>>(filters.clientCompanyIds.map((id) => [id, new Map()]));
+  if (filters.clientCompanyIds.length === 0) return result;
+
+  const db = await getDb();
+  const rows = await db
+    .select({ companyId: leads.companyId, createdAt: leads.createdAt })
+    .from(leads)
+    .where(and(inArray(leads.companyId, filters.clientCompanyIds), gte(leads.createdAt, filters.from), lt(leads.createdAt, filters.to)));
+
+  for (const row of rows) {
+    // leads.companyId is nullable in the schema - see getClientMetrics'
+    // own comment above; can never match a requested id anyway.
+    if (!row.companyId) continue;
+    const byDay = result.get(row.companyId);
+    if (!byDay) continue;
+    const dayKey = row.createdAt.toISOString().slice(0, 10);
+    byDay.set(dayKey, (byDay.get(dayKey) ?? 0) + 1);
+  }
+  return result;
 }

@@ -44,12 +44,15 @@ import {
 } from "../infrastructure/db/repositories/tenancy";
 import { listOnboardingLinks } from "./agencyOnboarding";
 import {
+  getAgencyDailyLeadCounts,
+  getAgencyEmployeeMetrics,
   getAgencyLeadCounts,
   getClaimingAgencyForClient,
   getClientMetrics,
   linkOrReactivateClientOrganization,
   listClaimedClientOrganizations,
   setAgencyClientStatus,
+  type AgencyEmployeeMetricRow,
 } from "../infrastructure/db/repositories/organizations";
 import { assignClientToUser } from "../infrastructure/db/repositories/agencyClientAssignments";
 import { listCampaigns, listCampaignsForCompanies } from "../infrastructure/db/repositories/campaigns";
@@ -86,6 +89,46 @@ export interface AgencyDashboardClientRow {
   // src/infrastructure/db/repositories/organizations.ts for exactly what
   // this does and (deliberately) does not cover.
   lastActivityAt: string | null;
+  // All-time top performer on THIS client's own team, by won-lead count
+  // (ties broken by total lead count) - null for a client with no leads
+  // attributed to any owner yet. Only ever populated by
+  // getAgencyDashboardSummary (see its own doc comment) - listAgencyClients'
+  // plain roster (public/clients.html's data source) has no use for a
+  // per-client leaderboard figure and leaves this undefined rather than
+  // paying for the extra getAgencyEmployeeMetrics query on every call.
+  topRep?: string | null;
+}
+
+// Fixed 7-day/30-day window the Agency Dashboard's KPI row can be scoped to
+// (see public/dashboard.html's own "Today/7 Days/30 Days/Custom" tabs for
+// the sibling convention this borrows from - "Custom" isn't offered here,
+// there being no dedicated date-picker on the Agency Dashboard mockup this
+// was built from). Deliberately NOT what drives the Lead Volume chart below
+// - that stays a fixed 14-day trend regardless of this selector, matching
+// the approved mockup's own chart design.
+export type AgencyDashboardRangeKey = "7d" | "30d";
+
+function resolveDashboardRange(range: string | undefined): { from: Date; to: Date; key: AgencyDashboardRangeKey } {
+  const key: AgencyDashboardRangeKey = range === "30d" ? "30d" : "7d"; // unrecognized/missing falls back to 7d
+  const to = new Date();
+  const from = new Date(to.getTime() - (key === "30d" ? 30 : 7) * 24 * 60 * 60 * 1000);
+  return { from, to, key };
+}
+
+// Always the last 14 calendar days (UTC), ending today - see
+// getAgencyDailyLeadCounts's own doc comment in organizations.ts for why
+// this is a fixed window rather than driven by the `range` KPI selector.
+const CHART_WINDOW_DAYS = 14;
+
+function resolveChartWindow(): { from: Date; to: Date; days: string[] } {
+  const to = new Date();
+  const todayKey = to.toISOString().slice(0, 10);
+  const from = new Date(new Date(`${todayKey}T00:00:00.000Z`).getTime() - (CHART_WINDOW_DAYS - 1) * 24 * 60 * 60 * 1000);
+  const days: string[] = [];
+  for (let i = 0; i < CHART_WINDOW_DAYS; i++) {
+    days.push(new Date(from.getTime() + i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  }
+  return { from, to, days };
 }
 
 export interface AgencyDashboardSummary {
@@ -106,14 +149,50 @@ export interface AgencyDashboardSummary {
     totalLeads: number;
     leadsToday: number;
     leadsThisMonth: number;
+    // NEW - leads created within `range` below (7d default, or 30d) across
+    // every authorized client. Additive alongside totalLeads/leadsToday/
+    // leadsThisMonth (none of those change meaning) - the redesigned
+    // dashboard's own "Leads" KPI tile shows this, not totalLeads, since an
+    // all-time figure never moves day to day for an established agency.
+    leadsInRange: number;
     activeCampaigns: number;
     // Agency-wide: total won leads / total leads across every authorized
     // client, 0-100 (0 when there are no leads at all, never NaN) - NOT an
     // average of each client's own conversionRate, which would silently
     // weight a 1-lead client the same as a 10,000-lead one.
     conversionRate: number;
+    // Headcount across every authorized client's own team - sum of each
+    // AgencyDashboardClientRow.users below, surfaced as its own KPI ("Team
+    // Members") rather than making the caller re-sum the roster itself.
+    teamMembers: number;
   };
+  // Which 7d/30d window kpis.leadsInRange actually used - echoed back so
+  // the UI's range tabs can reflect what was actually applied if the query
+  // param was missing/invalid and silently fell back (see
+  // resolveDashboardRange's own comment).
+  range: AgencyDashboardRangeKey;
   clients: AgencyDashboardClientRow[];
+  // Lead Volume chart data - always the fixed last-14-days window (see
+  // resolveChartWindow above), for every authorized client (not just the
+  // top 3) so the mockup's "pin up to 5, search to compare" control has a
+  // full roster to pick from client-side; nothing here forces the chart to
+  // render every series at once.
+  chart: {
+    days: string[]; // 14 entries, ascending, "yyyy-mm-dd"
+    series: Array<{ clientId: string; clientName: string; counts: number[] }>; // counts.length === days.length, aligned by index
+  };
+  // Leads Mix donut - top 3 clients by all-time lead volume (clients is
+  // already sorted that way, see buildAgencyClientRoster) plus everything
+  // else folded into a single "Other" bucket, matching the dataviz-
+  // validated "3 categorical slots + Other" ceiling this codebase already
+  // applies to the regular CRM dashboard's own donut (see
+  // public/dashboard.html's DONUT_COLORS) rather than a slot per client,
+  // which fails colorblind-safety validation well before an agency's
+  // roster gets anywhere near 20+ clients.
+  donut: {
+    top: Array<{ clientId: string; clientName: string; leads: number }>;
+    otherLeads: number;
+  };
 }
 
 // Shared by getAgencyDashboardSummary and listAgencyClients below - both
@@ -201,8 +280,13 @@ export async function listAgencyClients(agencyCompanyId: string, access: AgencyC
 export async function getAgencyDashboardSummary(
   agencyCompanyId: string,
   access: AgencyClientAccess,
+  rangeParam?: string,
 ): Promise<AgencyDashboardSummary> {
   const { claimed, metrics, clients } = await buildAgencyClientRoster(agencyCompanyId, access);
+  const clientIds = claimed.map((c) => c.clientCompanyId);
+
+  const { from: rangeFrom, to: rangeTo, key: rangeKey } = resolveDashboardRange(rangeParam);
+  const { from: chartFrom, to: chartTo, days: chartDays } = resolveChartWindow();
 
   // Onboarding-link invitations are NOT scoped by `access` - see this
   // function's own AgencyDashboardSummary.kpis.pendingInvitations doc
@@ -210,7 +294,14 @@ export async function getAgencyDashboardSummary(
   // prospect has no company yet), and handleAgencyListOnboardingLinks
   // itself imposes no assignedClientIds restriction either, so this KPI
   // matches what that same list already shows any signed-in agency user.
-  const onboardingLinks = await listOnboardingLinks(agencyCompanyId);
+  const [onboardingLinks, leadsInRangeResult, employeeMetrics, dailyCounts] = await Promise.all([
+    listOnboardingLinks(agencyCompanyId),
+    getAgencyLeadCounts({ clientCompanyIds: clientIds, from: rangeFrom, to: rangeTo }),
+    // All-time (no from/to) - Top Rep is a leaderboard fact about a
+    // client's team, not scoped to the KPI row's own range selector.
+    getAgencyEmployeeMetrics({ clientCompanyIds: clientIds }),
+    getAgencyDailyLeadCounts({ clientCompanyIds: clientIds, from: chartFrom, to: chartTo }),
+  ]);
   const pendingInvitations =
     claimed.filter((c) => c.relationshipStatus === "invited").length +
     onboardingLinks.filter((l) => l.status === "PENDING").length;
@@ -228,11 +319,56 @@ export async function getAgencyDashboardSummary(
     totalLeads,
     leadsToday: [...metrics.values()].reduce((sum, m) => sum + m.leadsToday, 0),
     leadsThisMonth: [...metrics.values()].reduce((sum, m) => sum + m.leadsThisMonth, 0),
+    leadsInRange: leadsInRangeResult.totalLeads,
     activeCampaigns: clients.reduce((sum, c) => sum + c.activeCampaigns, 0),
     conversionRate: conversionRate(totalWonLeads, totalLeads),
+    teamMembers: clients.reduce((sum, c) => sum + c.users, 0),
   };
 
-  return { kpis, clients };
+  // Top Rep per client - highest won-count owner on THAT client's own team
+  // (ties broken by lead count, then alphabetically by name for a fully
+  // deterministic order). Grouped from the flat employeeMetrics rows since
+  // one row is already exactly one (client, owner) pair - see
+  // getAgencyEmployeeMetrics's own doc comment in organizations.ts.
+  const claimedByClientId = new Map(claimed.map((c) => [c.clientCompanyId, c]));
+  const bestByClient = new Map<string, { won: number; leads: number; name: string }>();
+  for (const row of employeeMetrics) {
+    if (!row.ownerId) continue; // "Unassigned" is never anyone's Top Rep
+    const client = claimedByClientId.get(row.clientCompanyId);
+    if (!client) continue;
+    const won = wonLeadsForClient(client, row.stageCounts);
+    const leads = [...row.stageCounts.values()].reduce((sum, n) => sum + n, 0);
+    const name = row.ownerName ?? "Unknown teammate";
+    const current = bestByClient.get(row.clientCompanyId);
+    if (
+      !current ||
+      won > current.won ||
+      (won === current.won && leads > current.leads) ||
+      (won === current.won && leads === current.leads && name.localeCompare(current.name) < 0)
+    ) {
+      bestByClient.set(row.clientCompanyId, { won, leads, name });
+    }
+  }
+  const topRepByClient = new Map([...bestByClient.entries()].map(([clientId, best]) => [clientId, best.name]));
+
+  const clientsWithTopRep: AgencyDashboardClientRow[] = clients.map((c) => ({ ...c, topRep: topRepByClient.get(c.id) ?? null }));
+
+  const clientNameById = new Map(claimed.map((c) => [c.clientCompanyId, c.clientName]));
+  const chartSeries = clientIds.map((id) => {
+    const byDay = dailyCounts.get(id) ?? new Map<string, number>();
+    return { clientId: id, clientName: clientNameById.get(id) ?? "—", counts: chartDays.map((d) => byDay.get(d) ?? 0) };
+  });
+
+  const donutTop = clientsWithTopRep.slice(0, 3).map((c) => ({ clientId: c.id, clientName: c.name, leads: c.leads }));
+  const donutOtherLeads = clientsWithTopRep.slice(3).reduce((sum, c) => sum + c.leads, 0);
+
+  return {
+    kpis,
+    range: rangeKey,
+    clients: clientsWithTopRep,
+    chart: { days: chartDays, series: chartSeries },
+    donut: { top: donutTop, otherLeads: donutOtherLeads },
+  };
 }
 
 export interface AgencyLeadsReportRawFilters {
@@ -519,6 +655,152 @@ export async function getAgencyCampaignsReport(
       platforms: CAMPAIGN_PLATFORMS,
     },
   };
+}
+
+// ---- Employee Performance (Agency Dashboard's leaderboard table) ---------
+
+export interface AgencyEmployeePerformanceRawFilters {
+  // Same raw/untrusted-string-off-the-query-string contract as
+  // AgencyLeadsReportRawFilters above.
+  clientId?: string;
+  from?: string;
+  to?: string;
+  search?: string;
+  // "leads" | "won" | "conversionRate" | "followUps" | "name" - anything
+  // else silently falls back to "leads" (this is a display-sort
+  // convenience, not a security-relevant filter, so an unrecognized value
+  // degrades rather than 400s, same forgiving posture parseFilterDate
+  // already takes).
+  sortBy?: string;
+  sortDir?: string; // "asc" | "desc" (default "desc")
+  page?: string;
+  pageSize?: string;
+}
+
+export interface AgencyEmployeePerformanceRow {
+  ownerId: string;
+  name: string;
+  clientId: string;
+  clientName: string;
+  leadCount: number;
+  wonCount: number;
+  conversionRate: number;
+  followUpsLogged: number;
+}
+
+export interface AgencyEmployeePerformance {
+  rows: AgencyEmployeePerformanceRow[];
+  // Same { page, pageSize, total, totalPages } shape App.renderPagination
+  // (public/assets/app.js) already expects everywhere else in this app.
+  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+}
+
+// Mirrors this codebase's other paginated-list conventions (25/50/100,
+// clamped) - see the PARKED pagination-rollout plan this session's plan
+// file also carries for where that convention originates.
+const EMPLOYEE_PERFORMANCE_PAGE_SIZES = [25, 50, 100];
+
+function clampPageSize(raw: string | undefined): number {
+  const n = Number(raw);
+  return EMPLOYEE_PERFORMANCE_PAGE_SIZES.includes(n) ? n : 25;
+}
+
+function clampPage(raw: string | undefined): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Per-employee leaderboard across every client this caller can see - the
+ * Employee Performance table's data source. Same authorization discipline
+ * as getAgencyLeadsReport/getAgencyCampaignsReport above: `clientId`, if
+ * given, is re-validated against the caller's own resolved access before it
+ * ever reaches a query, never trusted at face value. Search/sort/pagination
+ * all happen server-side over the full (possibly multi-hundred-row, once an
+ * agency has many clients each with their own team) result set, not just
+ * the current page - see AgencyEmployeePerformance.pagination's own
+ * App.renderPagination-shaped contract.
+ *
+ * Each row is one real employee (a user belongs to exactly one client
+ * company - see getAgencyEmployeeMetrics's own doc comment in
+ * organizations.ts) - the "Unassigned" bucket that function's raw rows can
+ * include for ownerless leads is deliberately dropped here; an employee
+ * leaderboard has nothing meaningful to say about leads nobody owns.
+ */
+export async function getAgencyEmployeePerformance(
+  agencyCompanyId: string,
+  access: AgencyClientAccess,
+  raw: AgencyEmployeePerformanceRawFilters,
+): Promise<AgencyEmployeePerformance> {
+  const allClaimed = await listClaimedClientOrganizations(agencyCompanyId);
+  const authorizedClients = allClaimed.filter((c) => canAccessClient(access, c.clientCompanyId));
+  const authorizedClientIds = authorizedClients.map((c) => c.clientCompanyId);
+  const clientById = new Map(authorizedClients.map((c) => [c.clientCompanyId, c]));
+
+  // "Client" filter - same discipline as getAgencyLeadsReport's own
+  // clientId filter: narrows to exactly one client, but only one already
+  // inside this caller's authorized set.
+  let scopedClientIds = authorizedClientIds;
+  if (raw.clientId) {
+    if (!authorizedClientIds.includes(raw.clientId)) {
+      throw new AuthError("You don't have access to that client.", 403);
+    }
+    scopedClientIds = [raw.clientId];
+  }
+
+  const employeeRows = await getAgencyEmployeeMetrics({
+    clientCompanyIds: scopedClientIds,
+    from: parseFilterDate(raw.from),
+    to: parseFilterDate(raw.to, { endOfDay: true }),
+  });
+
+  let rows: AgencyEmployeePerformanceRow[] = employeeRows
+    .filter((r): r is AgencyEmployeeMetricRow & { ownerId: string } => Boolean(r.ownerId))
+    .map((r) => {
+      const client = clientById.get(r.clientCompanyId);
+      const leadCount = [...r.stageCounts.values()].reduce((sum, n) => sum + n, 0);
+      const wonCount = client ? wonLeadsForClient(client, r.stageCounts) : 0;
+      return {
+        ownerId: r.ownerId,
+        name: r.ownerName ?? "Unknown teammate",
+        clientId: r.clientCompanyId,
+        clientName: client?.clientName ?? "—",
+        leadCount,
+        wonCount,
+        conversionRate: conversionRate(wonCount, leadCount),
+        followUpsLogged: r.followUpsLogged,
+      };
+    });
+
+  if (raw.search?.trim()) {
+    const q = raw.search.trim().toLowerCase();
+    rows = rows.filter((r) => r.name.toLowerCase().includes(q) || r.clientName.toLowerCase().includes(q));
+  }
+
+  const sortDir = raw.sortDir === "asc" ? 1 : -1; // default "desc" - a leaderboard reads top-down by default
+  const sortKey: (r: AgencyEmployeePerformanceRow) => number | string =
+    {
+      leads: (r: AgencyEmployeePerformanceRow) => r.leadCount,
+      won: (r: AgencyEmployeePerformanceRow) => r.wonCount,
+      conversionRate: (r: AgencyEmployeePerformanceRow) => r.conversionRate,
+      followUps: (r: AgencyEmployeePerformanceRow) => r.followUpsLogged,
+      name: (r: AgencyEmployeePerformanceRow) => r.name.toLowerCase(),
+    }[raw.sortBy ?? "leads"] ?? ((r: AgencyEmployeePerformanceRow) => r.leadCount);
+  rows.sort((a, b) => {
+    const av = sortKey(a);
+    const bv = sortKey(b);
+    if (av < bv) return -1 * sortDir;
+    if (av > bv) return 1 * sortDir;
+    return a.name.localeCompare(b.name); // stable, deterministic tiebreak
+  });
+
+  const total = rows.length;
+  const pageSize = clampPageSize(raw.pageSize);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(clampPage(raw.page), totalPages);
+  const start = (page - 1) * pageSize;
+
+  return { rows: rows.slice(start, start + pageSize), pagination: { page, pageSize, total, totalPages } };
 }
 
 export interface AddClientOrganizationInput {

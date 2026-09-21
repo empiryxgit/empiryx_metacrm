@@ -258,30 +258,24 @@ const App = (() => {
   // available to an agency identity regardless of whether a client context
   // is currently active (see me.agency in api/auth/handler.ts's handleMe -
   // unlike me.company, this never flips to a client's record). Rendered as
-  // a dropdown (see dropdownNavMenuHtml below), not flat top-level links -
-  // with the "Current Client" group potentially showing at the same time
-  // (see renderNav), a flat list here would crowd/wrap the header.
+  // two flat top-level links (see renderNav's agencyHtml), the same
+  // navLinkHtml treatment PRIMARY_LINKS gets for individual accounts - not
+  // a dropdown - now that this list is down to just two items.
   //
-  // "Leads"/"Campaigns" here are the aggregate cross-client reports (see
-  // getAgencyLeadsReport/getAgencyCampaignsReport in src/application/
-  // agency.ts), NOT a single client's own leads/campaigns - deliberately
-  // named the same as the Individual/"Current Client" nav items they sit
-  // alongside, since from an agency owner's perspective both answer "show
-  // me leads/campaigns," just at a different scope.
-  //
-  // "Invitations" reuses clients.html - see that page's own load(): a
-  // `?tab=invitations` query param auto-opens the existing "Generate
-  // Onboarding Link" modal, so this is a real, distinct landing action, not
-  // just a second link to an identical screen. "Users" is gated the same
-  // "users.manage" permission SETTINGS_LINKS used to gate it under -
-  // relocated here, not duplicated (see renderNav's settingsSource).
+  // Deliberately just Dashboard + Clients now: the redesigned Agency
+  // Dashboard's own charts/tables (see getAgencyDashboardSummary/
+  // getAgencyEmployeePerformance in src/application/agency.ts) already
+  // cover the cross-client leads/campaigns visibility the old standalone
+  // "Leads"/"Campaigns" report links existed for, so those two - and
+  // "Invitations" (clients.html already has "Invite Client"/"Generate
+  // Onboarding Link" as first-class page actions, not nav-gated - see that
+  // page's own load()) and "Users" (moved into SETTINGS_LINKS below,
+  // relabeled "Employee" for this identity) - are no longer separate nav
+  // entries. agency-leads-report.html/agency-campaigns-report.html
+  // themselves are untouched on disk, just unlinked from the nav.
   const AGENCY_LINKS = [
-    { href: "/agency-dashboard.html", label: "Agency Dashboard", icon: NAV_ICONS.dashboard },
+    { href: "/agency-dashboard.html", label: "Dashboard", icon: NAV_ICONS.dashboard },
     { href: "/clients.html", label: "Clients", icon: NAV_ICONS.branches },
-    { href: "/agency-leads-report.html", label: "Leads", icon: NAV_ICONS.pipeline },
-    { href: "/agency-campaigns-report.html", label: "Campaigns", icon: NAV_ICONS.campaigns },
-    { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
-    { href: "/clients.html?tab=invitations", label: "Invitations", icon: NAV_ICONS.invitations },
   ];
 
   // Flat, top-level admin nav items - kept separate from the "Settings"
@@ -298,21 +292,23 @@ const App = (() => {
   // the same /settings.html page the old flat "Settings" link used to -
   // that page's content (Meta connection management) is unchanged, only
   // where it's reached from and its label have changed. For an agency's
-  // OWN identity this list is shown with "Users" filtered out (see
-  // renderNav's settingsSource) since Users already lives in AGENCY_LINKS
-  // above - Individual companies keep the full list unchanged.
+  // OWN identity this same list is shown with its "Users" entry relabeled
+  // "Employee" instead (see renderNav's settingsSource) - same page
+  // (admin/users.html), same href/perm, just the word an agency owner
+  // actually uses for their own team. Individual companies keep the
+  // "Users" label and the full list unchanged.
   const SETTINGS_LINKS = [
     { href: "/admin/users.html", label: "Users", perm: "users.manage", icon: NAV_ICONS.users },
     { href: "/admin/roles.html", label: "Roles", perm: "roles.manage", icon: NAV_ICONS.roles },
     { href: "/settings.html", label: "Meta Integration", perm: "integrations.manage", icon: NAV_ICONS.metaIntegration },
     // Direct entry point for public/subscription.html - same "company.manage"
-    // gate as the "Subscription & Capacity" card on settings.html itself
+    // gate as the "Subscription & Capacity Plan" card on settings.html itself
     // (see that page's own load()). Without its own nav link here, this
     // page was only reachable by clicking into "Meta Integration" above and
     // noticing the card - unreachable at all for anyone who has
     // company.manage but not integrations.manage, since that's the only
     // other link in this list that lands on settings.html.
-    { href: "/subscription.html", label: "Subscription & Capacity", perm: "company.manage", icon: NAV_ICONS.billing },
+    { href: "/subscription.html", label: "Subscription & Capacity Plan", perm: "company.manage", icon: NAV_ICONS.billing },
   ];
 
   function navLinkHtml(link, activeHref, extraClass) {
@@ -378,24 +374,31 @@ const App = (() => {
     const primaryLinks = isAgencyIdentity ? [] : PRIMARY_LINKS;
     const admin = isAgencyIdentity ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
 
-    // Settings (Users/Roles/Meta Integration) is deliberately
-    // hidden entirely while an agency user is "managing" a client (see
-    // src/application/agencyClientContext.ts's header comment): those
-    // endpoints always act on the caller's OWN real company, never the
-    // client's, regardless of any active client context - showing them here
-    // would let a user believe the "Current Client" group below also scopes
-    // team/role administration for that client, which it never does. For an
-    // agency's own identity (not in client context), "Users" is additionally
-    // filtered out of this list since it already lives in the "Agency"
-    // group - showing it in both places would be redundant.
-    const settingsSource = isAgencyIdentity ? SETTINGS_LINKS.filter((l) => l.label !== "Users") : SETTINGS_LINKS;
+    // Settings (Employee/Roles/Meta Integration/Subscription & Capacity
+    // Plan) is deliberately hidden entirely while an agency user is
+    // "managing" a client (see src/application/agencyClientContext.ts's
+    // header comment): those endpoints always act on the caller's OWN real
+    // company, never the client's, regardless of any active client context
+    // - showing them here would let a user believe the "Current Client"
+    // group below also scopes team/role administration for that client,
+    // which it never does. For an agency's own identity (not in client
+    // context), the "Users" entry is relabeled "Employee" rather than
+    // filtered out - it now lives ONLY here (see AGENCY_LINKS above, which
+    // no longer duplicates it).
+    const settingsSource = isAgencyIdentity
+      ? SETTINGS_LINKS.map((l) => (l.label === "Users" ? { ...l, label: "Employee" } : l))
+      : SETTINGS_LINKS;
     const settingsLinks = inClientContext ? [] : settingsSource.filter((l) => hasPermission(me, l.perm));
 
-    // "Agency" group - the caller's own agency-level pages. Safe to gate
-    // with hasPermission() here even mid client-context: me.role always
-    // reflects the caller's OWN real role (handleMe derives it from the
-    // JWT's auth.companyId/auth.roleId, never the client-context cookie),
-    // exactly like ADMIN_LINKS above already relies on.
+    // "Agency" group - the caller's own agency-level pages (just Dashboard +
+    // Clients now - see AGENCY_LINKS above). Safe to gate with
+    // hasPermission() here even mid client-context: me.role always reflects
+    // the caller's OWN real role (handleMe derives it from the JWT's
+    // auth.companyId/auth.roleId, never the client-context cookie), exactly
+    // like ADMIN_LINKS above already relies on - though neither current
+    // link carries a perm, so this is a no-op filter today, kept for
+    // symmetry with how every other group here is built and in case a
+    // future addition to AGENCY_LINKS ever needs gating.
     const agencyLinks = isAgencyIdentity ? AGENCY_LINKS.filter((l) => hasPermission(me, l.perm)) : [];
 
     // "Current Client" group - shown only while actually managing a client,
@@ -416,9 +419,11 @@ const App = (() => {
     const primaryHtml = primaryLinks.map((l) => navLinkHtml(l, activeHref)).join("");
     const sep = `<span class="nav-sep" aria-hidden="true"></span>`;
     const adminHtml = admin.length ? sep + admin.map((l) => navLinkHtml(l, activeHref)).join("") : "";
-    const agencyHtml = agencyLinks.length
-      ? sep + dropdownNavMenuHtml({ id: "agencyNav", label: "Agency", icon: NAV_ICONS.agency, links: agencyLinks, activeHref })
-      : "";
+    // Flat links, not a dropdown - matches PRIMARY_LINKS' own treatment for
+    // individual accounts. Only two items now (Dashboard + Clients), so a
+    // dropdown wrapper (and the click-outside/menu-close plumbing that comes
+    // with one) is unnecessary ceremony.
+    const agencyHtml = agencyLinks.length ? sep + agencyLinks.map((l) => navLinkHtml(l, activeHref)).join("") : "";
     const clientHtml = clientLinks.length
       ? sep + dropdownNavMenuHtml({ id: "clientNav", label: clientLabel, icon: NAV_ICONS.branches, links: clientLinks, activeHref })
       : "";
@@ -524,9 +529,11 @@ const App = (() => {
 
   /** Mirrors the desktop nav's groups exactly (see renderNav above), just
    * rendered as labeled, stacked sections instead of a horizontal bar +
-   * dropdowns - a drawer has no header-width constraint, so "Agency" and
-   * "Current Client" can each get a plain section label rather than a
-   * dropdown trigger. */
+   * dropdowns - a drawer has no header-width constraint, so every group
+   * (including "Current Client" and "Settings", each still a dropdown on
+   * desktop) can get a plain section label instead. "Agency" is a labeled
+   * section here purely for drawer-grouping consistency - on desktop it's
+   * flat links, never a dropdown, per agencyHtml above. */
   function renderMobileDrawer(me, activeHref, groups) {
     const { primaryLinks, admin, agencyLinks, clientLinks, clientLabel, settingsLinks } = groups;
     let drawer = document.getElementById("mobileDrawer");
@@ -576,8 +583,6 @@ const App = (() => {
     document.getElementById("userTrigger")?.setAttribute("aria-expanded", "false");
     document.getElementById("settingsNavMenu")?.setAttribute("hidden", "");
     document.getElementById("settingsNavBtn")?.setAttribute("aria-expanded", "false");
-    document.getElementById("agencyNavMenu")?.setAttribute("hidden", "");
-    document.getElementById("agencyNavBtn")?.setAttribute("aria-expanded", "false");
     document.getElementById("clientNavMenu")?.setAttribute("hidden", "");
     document.getElementById("clientNavBtn")?.setAttribute("aria-expanded", "false");
   }
@@ -608,10 +613,6 @@ const App = (() => {
     document.getElementById("settingsNavBtn")?.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleMenu("settingsNavBtn", "settingsNavMenu");
-    });
-    document.getElementById("agencyNavBtn")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleMenu("agencyNavBtn", "agencyNavMenu");
     });
     document.getElementById("clientNavBtn")?.addEventListener("click", (e) => {
       e.stopPropagation();

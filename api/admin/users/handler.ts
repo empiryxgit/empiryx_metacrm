@@ -45,6 +45,7 @@ import {
   addClientOrganization,
   getAgencyCampaignsReport,
   getAgencyDashboardSummary,
+  getAgencyEmployeePerformance,
   getAgencyLeadsReport,
   getClientDetail,
   getPendingInviteForCompany,
@@ -529,6 +530,7 @@ async function handleAgencyResource(req: VercelRequest, res: VercelResponse) {
   if (action === "dashboard") return handleAgencyDashboard(req, res, auth);
   if (action === "leads-report") return handleAgencyLeadsReport(req, res, auth);
   if (action === "campaigns-report") return handleAgencyCampaignsReport(req, res, auth);
+  if (action === "employee-performance") return handleAgencyEmployeePerformance(req, res, auth);
   if (action === "clients") return handleAgencyClientsCollection(req, res, auth);
   if (action === "invite-client") return handleAgencyInviteClient(req, res, auth.companyId, auth.userId);
   if (action === "client-detail") return handleAgencyClientDetail(req, res, auth);
@@ -608,8 +610,45 @@ async function handleAgencyDashboard(req: VercelRequest, res: VercelResponse, au
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
-  const summary = await getAgencyDashboardSummary(auth.companyId, resolveAgencyClientAccess(auth));
+  // "range" (7d|30d) scopes the KPI row's own leadsInRange figure only -
+  // see getAgencyDashboardSummary's own doc comment for why the Lead Volume
+  // chart stays a fixed 14-day window regardless of this param. Same
+  // forgiving posture as every other raw filter in this feature - an
+  // unrecognized/missing value falls back rather than 400ing.
+  const summary = await getAgencyDashboardSummary(auth.companyId, resolveAgencyClientAccess(auth), getQueryString(req, "range"));
   res.status(200).json(summary);
+}
+
+// "Employee Performance" - the per-teammate leaderboard sibling of
+// handleAgencyLeadsReport/handleAgencyCampaignsReport above. Same
+// no-extra-permission-gate posture: any authenticated member of an agency
+// company can call this, narrowed entirely by their own resolved client
+// access (getAgencyEmployeePerformance re-validates clientId itself).
+async function handleAgencyEmployeePerformance(req: VercelRequest, res: VercelResponse, auth: AuthContext) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  try {
+    const result = await getAgencyEmployeePerformance(auth.companyId, resolveAgencyClientAccess(auth), {
+      clientId: getQueryString(req, "clientId"),
+      from: getQueryString(req, "from"),
+      to: getQueryString(req, "to"),
+      search: getQueryString(req, "search"),
+      sortBy: getQueryString(req, "sortBy"),
+      sortDir: getQueryString(req, "sortDir"),
+      page: getQueryString(req, "page"),
+      pageSize: getQueryString(req, "pageSize"),
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[agency/employee-performance] Failed:", err);
+    res.status(500).json({ error: "Failed to load employee performance." });
+  }
 }
 
 // "Agency Leads" - aggregate lead reporting across every client this
