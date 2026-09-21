@@ -121,24 +121,76 @@ export interface ScheduleReconciliationInput {
   cron: string; // e.g. "*/15 * * * *" - every 15 minutes, unlike Vercel Hobby's 1x/day cron cap
 }
 
+/**
+ * Helper to ensure a single, active schedule exists for an internal endpoint path.
+ * Idempotently creates the schedule if needed, and prunes any stale schedules
+ * pointing to previous preview/deployment URLs for the same endpoint to stay well
+ * below QStash's maxSchedules quota limit (10 on free tier).
+ */
+async function ensureUniqueEndpointSchedule(
+  client: Client,
+  path: string,
+  cron: string,
+  retries = 3
+): Promise<string> {
+  const currentDestination = `${getBaseUrl()}${path}`;
+  const existing = await client.schedules.list();
+
+  // Identify matching or stale schedules for this specific endpoint path
+  const staleOrMatching = existing.filter((s) => {
+    try {
+      const url = new URL(s.destination);
+      return url.pathname === path;
+    } catch {
+      return s.destination.endsWith(path);
+    }
+  });
+
+  const exactMatch = staleOrMatching.find((s) => s.destination === currentDestination);
+
+  // Prune any stale schedules pointing to old domains / previous preview branches for this endpoint
+  for (const item of staleOrMatching) {
+    if (item.scheduleId !== exactMatch?.scheduleId) {
+      try {
+        console.log(`Pruning stale QStash schedule: ${item.scheduleId} (${item.destination})`);
+        await client.schedules.delete(item.scheduleId);
+      } catch (err) {
+        console.warn(`Failed to delete stale schedule ${item.scheduleId}:`, err);
+      }
+    }
+  }
+
+  if (exactMatch) {
+    return exactMatch.scheduleId;
+  }
+
+  // If total schedules are still at or near the 10 limit, prune non-current domain schedules
+  const remaining = await client.schedules.list();
+  if (remaining.length >= 10) {
+    const nonCurrent = remaining.filter((s) => !s.destination.startsWith(getBaseUrl()));
+    for (const stale of nonCurrent) {
+      try {
+        console.log(`Pruning non-current QStash schedule to free quota: ${stale.scheduleId} (${stale.destination})`);
+        await client.schedules.delete(stale.scheduleId);
+      } catch (err) {
+        console.warn(`Failed to delete schedule ${stale.scheduleId}:`, err);
+      }
+    }
+  }
+
+  const created = await client.schedules.create({
+    destination: currentDestination,
+    cron,
+    retries,
+  });
+  return created.scheduleId;
+}
+
 /** Idempotent: creates the recurring reconciliation schedule if it does not already exist.
  * Run once via `npm run setup:schedules` (see scripts/setup-schedules.ts), not on every request. */
 export async function ensureReconciliationSchedule({ cron }: ScheduleReconciliationInput): Promise<string> {
   const client = getClient();
-  const destination = `${getBaseUrl()}/api/internal/reconciliation`;
-
-  const existing = await client.schedules.list();
-  const already = existing.find((s) => s.destination === destination);
-  if (already) {
-    return already.scheduleId;
-  }
-
-  const created = await client.schedules.create({
-    destination,
-    cron,
-    retries: 3,
-  });
-  return created.scheduleId;
+  return ensureUniqueEndpointSchedule(client, "/api/internal/reconciliation", cron, 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,20 +218,27 @@ export interface ScheduleInsightScanInput {
  * ensureReconciliationSchedule exactly. */
 export async function ensureInsightScanSchedule({ cron }: ScheduleInsightScanInput): Promise<string> {
   const client = getClient();
-  const destination = `${getBaseUrl()}/api/internal/insights-scan`;
+  return ensureUniqueEndpointSchedule(client, "/api/internal/insights-scan", cron, 3);
+}
 
+/** Cleans up all stale QStash schedules that do not match the current PUBLIC_BASE_URL. */
+export async function cleanupStaleSchedules(): Promise<{ deleted: number }> {
+  const client = getClient();
+  const currentBase = getBaseUrl();
   const existing = await client.schedules.list();
-  const already = existing.find((s) => s.destination === destination);
-  if (already) {
-    return already.scheduleId;
+  let deleted = 0;
+  for (const s of existing) {
+    if (!s.destination.startsWith(currentBase)) {
+      try {
+        console.log(`Deleting stale schedule: ${s.scheduleId} (${s.destination})`);
+        await client.schedules.delete(s.scheduleId);
+        deleted++;
+      } catch (err) {
+        console.warn(`Failed to delete ${s.scheduleId}:`, err);
+      }
+    }
   }
-
-  const created = await client.schedules.create({
-    destination,
-    cron,
-    retries: 3,
-  });
-  return created.scheduleId;
+  return { deleted };
 }
 
 export interface PublishInsightNotificationInput {
