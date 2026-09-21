@@ -192,7 +192,13 @@
         return;
       }
       const next = params.get("next");
-      window.location.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard.html");
+      // Agencies land on their own Agency Dashboard by default -
+      // /dashboard.html is the per-tenant CRM view, which an agency's own
+      // company never populates (it manages clients, not leads directly).
+      // Same me.agency check app.js's renderNav uses to decide the nav
+      // shape - see api/auth/handler.ts's handleMe for the field.
+      const fallback = me.agency ? "/agency-dashboard.html" : "/dashboard.html";
+      window.location.replace(next && next.startsWith("/") && !next.startsWith("//") ? next : fallback);
     }
 
     async function checkExistingSession() {
@@ -339,7 +345,23 @@
           window.location.href = "/change-password.html";
           return;
         }
-        window.location.href = params.get("next") || "/dashboard.html";
+        // POST /api/auth/login only ever returns {id,email,fullName,
+        // companyId,mustChangePassword} (see AuthTokens in
+        // src/application/auth.ts) - it doesn't carry account type, so a
+        // quick GET /api/auth/me is needed to know whether this is an
+        // agency identity before picking a fallback landing page. Same
+        // me.agency check as redirectAuthenticated() above and app.js's
+        // renderNav. A failed /me here just falls back to /dashboard.html -
+        // the normal per-page requireAuth() will catch it and bounce to
+        // login if the session is somehow already bad.
+        let fallback = "/dashboard.html";
+        try {
+          const me = await App.apiJson("/api/auth/me");
+          if (me.agency) fallback = "/agency-dashboard.html";
+        } catch {
+          // fall through to /dashboard.html
+        }
+        window.location.href = params.get("next") || fallback;
         // Intentionally leave the button disabled - a redirect is already in flight.
       } catch (err) {
         // Never surface the raw API/technical error - a generic message avoids

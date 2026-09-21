@@ -839,6 +839,19 @@
     // point. A fetch failure here gets a real error state, not fabricated
     // numbers.
     currentMe = me;
+
+    // Defensive redirect: this is the per-tenant CRM dashboard, which an
+    // agency's own company never populates (it manages clients, not leads
+    // directly) - anyone landing here as an agency identity outside an
+    // active client context (a stale bookmark, an old ?next=, a lingering
+    // link) belongs on the Agency Dashboard instead. Same me.agency/
+    // me.clientContext check app.js's renderNav and login.html's own
+    // redirects use.
+    if (me.agency && !me.clientContext) {
+      window.location.href = "/agency-dashboard.html";
+      return;
+    }
+
     document.getElementById("topnav").style.display = "flex";
     App.renderNav(me, "/dashboard.html");
     checkPendingAgencyInvite();

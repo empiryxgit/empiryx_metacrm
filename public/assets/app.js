@@ -435,11 +435,17 @@ const App = (() => {
     const roleName = me?.role?.name ?? "";
     const companyName = me?.company?.name ?? "RUTA";
     const avatarInitials = initials(displayName);
+    // Brand/logo "home" link - an agency identity outside client context
+    // has no /dashboard.html of its own (that's the per-tenant CRM view,
+    // and the agency's own company never populates it), so it goes home to
+    // /agency-dashboard.html instead. While managing a client, "home" is
+    // that client's own dashboard, same as clientLinks above.
+    const brandHref = isAgencyIdentity && !inClientContext ? "/agency-dashboard.html" : "/dashboard.html";
 
     nav.innerHTML = `
       <div class="shell-inner">
         <div class="shell-brand">
-          <a href="/dashboard.html" class="brand-link" aria-label="${escapeHtml(companyName)} home">
+          <a href="${brandHref}" class="brand-link" aria-label="${escapeHtml(companyName)} home">
             ${BRAND_MARK_SVG}
             <span class="brand-word">RUTA</span>
             <span class="brand-tag">Lead Management</span>
