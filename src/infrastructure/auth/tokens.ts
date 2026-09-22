@@ -127,6 +127,33 @@ export function hashOnboardingToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+// How long a "Forgot password" link (login.html -> /forgot-password.html ->
+// emailed link -> /reset-password.html) stays redeemable - see
+// passwordResetTokens.expiresAt in schema.ts. Short and security-sensitive,
+// unlike ONBOARDING_TOKEN_TTL_SECONDS above (a week, handed to someone with
+// no existing account to protect): this token grants control over an
+// EXISTING account's password, so it gets the same "short-lived, sensitive"
+// treatment as ACCESS_TOKEN_TTL_SECONDS rather than a long email-friendly
+// window - one hour is enough to actually open the email and click
+// through, without leaving a live password-reset credential sitting in
+// someone's inbox indefinitely.
+export const PASSWORD_RESET_TOKEN_TTL_SECONDS = 60 * 60; // 1 hour
+
+/** Same opaque-random-value + SHA-256-hash shape as generateRefreshToken /
+ * generateOnboardingToken above - see passwordResetTokens' own doc comment
+ * in schema.ts for why this shape (not a session, not an onboarding
+ * invitation) is the right primitive here too. The raw `token` goes into
+ * the emailed link (/reset-password.html?token=...) and is returned to the
+ * caller exactly once; only `hash` is ever persisted. */
+export function generatePasswordResetToken(): { token: string; hash: string } {
+  const token = randomBytes(32).toString("base64url");
+  return { token, hash: hashPasswordResetToken(token) };
+}
+
+export function hashPasswordResetToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export const ACCESS_COOKIE_NAME = "mla_access";
 export const REFRESH_COOKIE_NAME = "mla_refresh";
 export const PLATFORM_ADMIN_COOKIE_NAME = "mla_platform_admin";

@@ -500,6 +500,62 @@ export const organizationInvitations = crm.table(
 );
 
 /**
+ * Password-reset tokens - the model backing "Forgot password?" (login.html)
+ * -> /forgot-password.html -> emailed link -> /reset-password.html. Shaped
+ * after organizationInvitations above (opaque-random-value + SHA-256 hash,
+ * single-use via an atomic UPDATE ... WHERE ... RETURNING, never the raw
+ * token persisted), NOT after sessions: a reset token authenticates one
+ * specific action (setting a new password), never an ongoing request, so
+ * it has no business being a long-lived bearer credential the way a
+ * refresh token is.
+ *
+ * This is the FIRST place this codebase sends real outbound email - see
+ * src/infrastructure/email/resend.ts. Every other "share this" flow
+ * (Generate Onboarding Link above, an admin-created user's temp password)
+ * instead hands an ADMIN a link/password to relay manually, specifically
+ * to avoid a transactional-email dependency (see users' PII-adjacent
+ * comments elsewhere and api/admin/users/handler.ts's own "no
+ * transactional-email dependency" note). A password reset can't reuse
+ * that pattern - there is no admin in the loop, a stranger types an email
+ * address into a public unauthenticated form, and the response can never
+ * reveal whether that address has an account (see requestPasswordReset in
+ * src/application/passwordReset.ts) - so this one flow alone gets a real
+ * email instead.
+ */
+export const passwordResetTokens = crm.table(
+  "password_reset_tokens",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // SHA-256 hex digest of the raw token - never the token itself, same
+    // principle as sessions.refreshTokenHash / organizationInvitations.
+    // tokenHash. See hashPasswordResetToken in
+    // src/infrastructure/auth/tokens.ts.
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // Set the moment this token is consumed (resetPassword succeeds) OR
+    // superseded (requesting a fresh reset invalidates every still-
+    // outstanding token for that user - see
+    // invalidateOutstandingPasswordResetTokens) - either way, "usedAt is
+    // set" means "never accept this again," exactly like
+    // sessions.revokedAt. No separate status column the way
+    // organizationInvitations has one (PENDING/ACCEPTED/EXPIRED/REVOKED):
+    // this table only ever has two real outcomes (still good, or not), so
+    // one nullable timestamp says everything a status enum would here.
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("ix_password_reset_tokens_user_id").on(t.userId),
+    // The one lookup the reset-password page actually does - unique so
+    // two tokens can never collide (same reasoning as
+    // ux_organization_invitations_token_hash above).
+    tokenHashIdx: uniqueIndex("ux_password_reset_tokens_token_hash").on(t.tokenHash),
+    createdAtIdx: index("ix_password_reset_tokens_created_at").on(t.createdAt),
+  }),
+);
+
+/**
  * Which specific client organization(s) a given AGENCY user is allowed to
  * see - the "Agency User -> Assigned Clients -> Client A, Client C" model
  * (see src/domain/fixedRoles.ts and src/application/agencyClientAccess.ts).

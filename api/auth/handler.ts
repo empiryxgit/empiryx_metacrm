@@ -15,6 +15,7 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { AuthError, login, logout, refresh, registerCompanyAndOwner } from "../../src/application/auth";
+import { requestPasswordReset, resetPassword } from "../../src/application/passwordReset";
 import {
   ACCESS_COOKIE_NAME,
   REFRESH_COOKIE_NAME,
@@ -87,6 +88,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return handleMe(req, res);
     case "change-password":
       return handleChangePassword(req, res);
+    case "forgot-password":
+      return handleForgotPassword(req, res);
+    case "reset-password":
+      return handleResetPassword(req, res);
     default:
       res.status(404).json({ error: "Not found" });
   }
@@ -405,4 +410,76 @@ async function handleChangePassword(req: VercelRequest, res: VercelResponse) {
   await revokeAllSessionsForUser(user.id);
 
   res.status(200).json({ changed: true });
+}
+
+async function handleForgotPassword(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const { email } = (req.body ?? {}) as { email?: string };
+  if (!email) {
+    res.status(400).json({ error: "email is required." });
+    return;
+  }
+
+  const ip = getClientIp(req);
+  const normalizedEmail = email.trim().toLowerCase();
+  // Same two-layer shape as handleLogin's own rate limiting above: a tight
+  // per (ip, email) limit plus a looser per-IP limit, both returning the
+  // exact same generic response either way - neither layer tripping (nor
+  // requestPasswordReset itself) ever reveals whether the email has an
+  // account.
+  if (!(await enforceRateLimit(res, `forgot-password:${ip}:${normalizedEmail}`, 5, 15 * 60))) return;
+  if (!(await enforceRateLimit(res, `forgot-password-ip:${ip}`, 20, 15 * 60))) return;
+
+  try {
+    await requestPasswordReset(normalizedEmail);
+  } catch (err) {
+    // Never surfaced to the caller - see requestPasswordReset's own
+    // enumeration-safety comment in src/application/passwordReset.ts. A
+    // real failure here (Resend unreachable, a bad RESEND_API_KEY,
+    // PUBLIC_BASE_URL unset, ...) is still worth knowing about server-side.
+    console.error("[auth/forgot-password] Failed:", err);
+  }
+
+  // Always the exact same response, whether or not the email matched an
+  // account and whether or not the send itself actually succeeded - see
+  // requestPasswordReset's own comment for why.
+  res.status(200).json({
+    message: "If that email is associated with a RUTA account, a password reset link has been sent.",
+  });
+}
+
+async function handleResetPassword(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const { token, newPassword } = (req.body ?? {}) as { token?: string; newPassword?: string };
+  if (!token || !newPassword || newPassword.length < 10) {
+    res.status(400).json({ error: "token and a newPassword of at least 10 characters are required." });
+    return;
+  }
+
+  // Keyed on IP alone - there's no authenticated user and no email in this
+  // request. A reset token is 256 bits of random data, so brute-forcing
+  // one directly isn't a realistic threat (same reasoning as handleRefresh
+  // above) - this is defense in depth against a scripted client hammering
+  // the endpoint, not against guessing.
+  if (!(await enforceRateLimit(res, `reset-password:${getClientIp(req)}`, 10, 15 * 60))) return;
+
+  try {
+    await resetPassword(token, newPassword);
+    res.status(200).json({ reset: true });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    console.error("[auth/reset-password] Failed:", err);
+    res.status(500).json({ error: "Failed to reset password." });
+  }
 }

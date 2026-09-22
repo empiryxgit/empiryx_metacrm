@@ -38,6 +38,8 @@
     { "source": "/api/auth/logout", "destination": "/api/auth/handler?action=logout" },
     { "source": "/api/auth/me", "destination": "/api/auth/handler?action=me" },
     { "source": "/api/auth/change-password", "destination": "/api/auth/handler?action=change-password" },
+    { "source": "/api/auth/forgot-password", "destination": "/api/auth/handler?action=forgot-password" },
+    { "source": "/api/auth/reset-password", "destination": "/api/auth/handler?action=reset-password" },
 
     { "source": "/api/onboarding/company", "destination": "/api/onboarding/handler?action=company" },
     { "source": "/api/onboarding/complete", "destination": "/api/onboarding/handler?action=complete" },
