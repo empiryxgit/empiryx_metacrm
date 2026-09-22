@@ -179,24 +179,21 @@ h2.section-title:first-of-type{ margin-top:0; }
 .shell-right{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
 .agency-context-switch{
   display:flex; align-items:center; gap:6px; flex-shrink:0;
-  padding:4px 8px; border-radius:var(--radius-sm);
+  padding:2px; border-radius:var(--radius-sm);
   border:1px solid transparent;
 }
 .agency-context-switch.in-context{
   border-color:var(--brand-primary-hover, #6d5ef7);
   background:var(--brand-primary-soft, rgba(109,94,247,.08));
 }
-.agency-context-badge{
-  font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
-  color:var(--text-secondary); white-space:nowrap;
-}
-.agency-context-switch.in-context .agency-context-badge{ color:var(--brand-primary-hover, #6d5ef7); }
-.agency-context-select{
-  width:auto; max-width:160px; padding:6px 26px 6px 10px; margin:0;
-  font-size:12.5px; font-weight:600; border-radius:var(--radius-sm);
-  border:1px solid var(--border-strong); background:var(--surface-sunken); color:var(--text-primary);
-}
-.agency-context-select:focus{ background:#fff; }
+/* Compact "Back to Clients" icon button while managing a client - replaces
+   the old "Managing: <name> / Exit to Agency" badge+button pair, which was
+   wide enough to push the header into horizontal scroll at normal window
+   widths. The client's own name is still shown by the "Current Client" nav
+   dropdown right next to this slot, so nothing is lost - see
+   renderAgencyContextSwitcher's own comment in app.js. */
+.agency-context-back{ color:var(--brand-primary-hover, #6d5ef7); }
+.agency-context-back:hover{ background:var(--brand-primary-soft, rgba(109,94,247,.14)); }
 .agency-context-exit{
   font-size:12px; font-weight:600; color:var(--text-secondary);
   background:none; border:1px solid var(--border-strong); border-radius:var(--radius-sm);

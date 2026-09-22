@@ -392,12 +392,18 @@ const App = (() => {
     const isAgencyIdentity = Boolean(me?.agency);
     const inClientContext = Boolean(me?.clientContext);
 
-    // Individual (never-agency) companies keep the original flat nav
-    // unchanged: primary CRM pages + Forms/Submissions + Settings. An
-    // agency identity never shows these directly - its own equivalents
-    // live in the "Agency" and "Current Client" groups below instead.
+    // Individual (never-agency) companies keep the original flat nav:
+    // primary CRM pages + Settings. An agency identity never shows these
+    // directly - its own equivalents live in the "Agency" and "Current
+    // Client" groups below instead.
     const primaryLinks = isAgencyIdentity ? [] : PRIMARY_LINKS;
-    const admin = isAgencyIdentity ? [] : ADMIN_LINKS.filter((l) => hasPermission(me, l.perm));
+    // Forms/Submissions removed from the Individual user's nav entirely
+    // (explicit request) - ADMIN_LINKS itself is left defined above
+    // (forms.html/submissions.html are untouched on disk, just unlinked
+    // from the nav, same "delist, don't delete" treatment AGENCY_LINKS'
+    // own header comment already documents for its own dropped items), so
+    // this is always empty now, not filtered by identity.
+    const admin = [];
 
     // Settings (Employee/Roles/Meta Integration/Subscription & Capacity
     // Plan) is deliberately hidden entirely while an agency user is
@@ -758,19 +764,32 @@ const App = (() => {
     }
   }
 
+  /** Ends the active client context and returns to the Clients page - the
+   * header's "Back" button while an agency user is managing a client (see
+   * renderAgencyContextSwitcher below). Used to land on /agency-dashboard.html
+   * under the old "Exit to Agency" label/badge; now goes straight back to
+   * /clients.html instead, since that's the page a "Back" action from a
+   * client's workspace is actually expected to return to (the Clients page
+   * is where a client gets picked to work on in the first place - see
+   * clients.html's own "Start Work" action). */
   async function exitClientContext() {
     try {
       await apiJson("/api/agency/context/exit", { method: "POST" });
     } catch {
       // Best-effort - even if this particular request fails, navigating to
-      // the agency dashboard is harmless: that page's own auth guard talks
-      // to a real agency company either way, and the next protected page's
-      // own live re-validation (resolveActiveClientContext) is what
-      // actually decides whether any lingering cookie still counts, not
-      // this client-side call succeeding.
+      // clients.html is harmless: that page's own auth guard talks to the
+      // agency's own real company either way (never swapped by client
+      // context - see api/admin/users/handler.ts's handleAgencyResource),
+      // and the next protected page's own live re-validation
+      // (resolveActiveClientContext) is what actually decides whether any
+      // lingering cookie still counts, not this client-side call succeeding.
     }
-    window.location.href = "/agency-dashboard.html";
+    window.location.href = "/clients.html";
   }
+
+  // Left-arrow "Back" icon - same 16x16 stroke-based visual language as
+  // NAV_ICONS, used only here so it doesn't need a place in that shared map.
+  const BACK_ICON_SVG = `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M12.5 4.5 6 10l6.5 5.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
   function renderAgencyContextSwitcher() {
     const info = agencyContextInfo;
@@ -785,6 +804,13 @@ const App = (() => {
 
     const inContext = Boolean(info.clientContextId);
 
+    // Desktop: no "Managing: <client name>" badge any more - the client's
+    // own name is already shown by the "Current Client" nav dropdown right
+    // next to this slot (see renderNav's clientLinks/clientLabel), so the
+    // badge was pure duplication. A single compact icon button ("Back",
+    // same footprint as the bell/notifications icon-btn) is what's left,
+    // which is what actually fixes the header overflowing into horizontal
+    // scroll at normal widths.
     if (desktopSlot) {
       if (!inContext) {
         desktopSlot.style.display = "none";
@@ -793,13 +819,17 @@ const App = (() => {
         desktopSlot.style.display = "";
         desktopSlot.classList.add("in-context");
         desktopSlot.innerHTML = `
-          <span class="agency-context-badge">Managing: <strong>${escapeHtml(info.clientContextName || "")}</strong></span>
-          <button type="button" class="agency-context-exit" id="agencyContextExitBtn">Exit to Agency</button>
+          <button type="button" class="icon-btn agency-context-back" id="agencyContextExitBtn" title="Back to Clients" aria-label="Back to Clients">
+            ${BACK_ICON_SVG}
+          </button>
         `;
         desktopSlot.querySelector("#agencyContextExitBtn")?.addEventListener("click", exitClientContext);
       }
     }
 
+    // Mobile drawer has no width constraint, so it keeps the descriptive
+    // "Managing: <client>" status line - only the action button's label/
+    // destination changes, matching the desktop button above.
     if (mobileSlot) {
       if (!inContext) {
         mobileSlot.style.display = "none";
@@ -810,7 +840,7 @@ const App = (() => {
         mobileSlot.innerHTML = `
           <div class="agency-context-mobile-agency">${escapeHtml(info.agencyName)}</div>
           <div class="agency-context-mobile-status">Managing: <strong>${escapeHtml(info.clientContextName || "")}</strong></div>
-          <button type="button" class="agency-context-exit" id="agencyContextExitBtnMobile">Exit to Agency</button>
+          <button type="button" class="agency-context-exit" id="agencyContextExitBtnMobile">← Back to Clients</button>
         `;
         mobileSlot.querySelector("#agencyContextExitBtnMobile")?.addEventListener("click", exitClientContext);
       }
